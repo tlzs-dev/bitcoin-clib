@@ -108,7 +108,7 @@ static void Transform(uint64_t* s, const unsigned char* chunk)
     Round(g, h, a, &b, c, d, e, &f, 0x0fc19dc68b8cd5b5ull, w2 += sigma1(w0) + w11 + sigma0(w3));
     Round(f, g, h, &a, b, c, d, &e, 0x240ca1cc77ac9c65ull, w3 += sigma1(w1) + w12 + sigma0(w4));
     Round(e, f, g, &h, a, b, c, &d, 0x2de92c6f592b0275ull, w4 += sigma1(w2) + w13 + sigma0(w5));
-    Round(d, e, f, &g, h, a, b, &c, 0x4a748(9dcbd41fbd4ull, w6 += sigma1(w4) + w15 + sigma0(w7));
+    Round(d, e, f, &g, h, a, b, &c, 0x4a7489dcbd41fbd4ull, w6 += sigma1(w4) + w15 + sigma0(w7));
     Round(b, c, d, &e, f, g, h, &a, 0x76f988da831153b5ull, w7 += sigma1(w5) + w0 + sigma0(w8));
     Round(a, b, c, &d, e, f, g, &h, 0x983e5152ee66dfabull, w8 += sigma1(w6) + w1 + sigma0(w9));
     Round(h, a, b, &c, d, e, f, &g, 0xa831c66d2db43210ull, w9 += sigma1(w7) + w2 + sigma0(w10));
