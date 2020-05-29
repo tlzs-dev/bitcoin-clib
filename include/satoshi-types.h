@@ -193,6 +193,8 @@ typedef struct satoshi_block
 	struct satoshi_block_header hdr;
 	ssize_t txn_count;
 	satoshi_tx_t * txns;
+	
+	uint256_t hash;
 }satoshi_block_t;
 ssize_t satoshi_block_parse(satoshi_block_t * block, ssize_t length, const void * payload);
 void satoshi_block_cleanup(satoshi_block_t * block);

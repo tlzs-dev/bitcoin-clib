@@ -22,6 +22,8 @@
 #include <limits.h>
 #include <stdbool.h>
 
+#include "satoshi-types.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -87,11 +89,11 @@ extern const int64_t BIP9_DEPLOYMENT_ALWAYS_ACTIVE;		// -1
 #if _BITCOIN_CORE_VERSION <= 20191230
 typedef struct bitcoin_params
 {
-	uint256 genesis_block_hash;
+	uint256_t genesis_block_hash;
 	int subsidy_halving_interval;
-	uint256 bip16_exception;	///< Block hash that is excepted from BIP16 enforcement 
+	uint256_t bip16_exception;	///< Block hash that is excepted from BIP16 enforcement 
 	int bip34_height;			///< Block height and hash at which BIP34 becomes active 
-	uint256 bip34_hash;
+	uint256_t bip34_hash;
 	int bip65_height;			/** Block height at which BIP65 becomes active */
 	int bip66_height;			/** Block height at which BIP66 becomes active */
 	int csv_height;				/** Block height at which CSV (BIP68, BIP112 and BIP113) becomes active */

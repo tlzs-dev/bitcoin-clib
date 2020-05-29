@@ -171,6 +171,8 @@ void test_parse_blocks(void)
 	
 	assert(0 == strcasecmp(hex, output_hex));
 	
+	dump_line("block_hash(big-endian)", &block->hash, 32); 
+	
 	free(block_data);
 	free(output);
 	free(output_hex);

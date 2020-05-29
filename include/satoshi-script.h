@@ -81,9 +81,7 @@ int satoshi_script_parse(const unsigned char * script_varstr, const unsigned cha
 );
 
 int satoshi_script_eval(script_stack_t * op_stack, script_stack_t * params_stack, script_stack_t * alt_stack);
-
 int satoshi_script_add(const unsigned char op_code, ...);
-
 
 #ifdef __cplusplus
 }

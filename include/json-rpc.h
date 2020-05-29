@@ -57,6 +57,15 @@ bitcoin_cli_context_t * bitcoin_cli_context_new(
 	);
 void bitcoin_cli_context_free(struct bitcoin_cli_context * ctx);
 
+
+/* utils */
+json_object * satoshi_block_to_json(const satoshi_block_t * block);
+satoshi_block_t * satoshi_block_from_json(satoshi_block_t * block, json_object * jblock);
+
+json_object * satoshi_tx_to_json(const satoshi_tx_t * tx);
+satoshi_tx_t * satoshi_tx_from_json(satoshi_tx_t * tx, json_object * jtx);
+
+
 #ifdef __cplusplus
 }
 #endif
