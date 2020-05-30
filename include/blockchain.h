@@ -15,17 +15,32 @@ extern "C" {
  * UTXOs
  ******************************************************/
 typedef struct db_record_utxo db_record_utxo_t;
+struct db_record_utxo_data
+{
+	uint256_t block_hash;			// secondary key
+	// satoshi_txout_t txout;
+	int64_t value;	// little-endian
+	uint32_t cb_script;
+	unsigned char pk_scripts[0];	// variable length data
+}__attribute__((packed));;
 struct db_record_utxo
 {
 	// key
 	satoshi_outpoint_t outpoint;	// primary key, <tx_hash>:<txout_index>
 	
 	// data
-	uint256_t block_hash;			// secondary key
-	// satoshi_txout_t txout;
-	int64_t value;	// little-endian
-	uint32_t cb_script;
-	unsigned char pk_scripts[0];	// variable length data
+	union
+	{
+		struct db_record_utxo_data data;
+		struct
+		{
+			uint256_t block_hash;			// secondary key
+			// satoshi_txout_t txout;
+			int64_t value;	// little-endian
+			uint32_t cb_script;
+			unsigned char pk_scripts[0];	// variable length data
+		}__attribute__((packed));
+	};
 }__attribute__((packed));
 struct db_record_utxo * db_record_utxo_new(
 	const uint256_t * block_hash, 
@@ -41,20 +56,25 @@ typedef struct bitcoin_utxo_db
 
 	int (* add)(struct bitcoin_utxo_db * db, const uint256_t * block_hash, const satoshi_outpoint_t *outpoint, const satoshi_txout_t * txout);
 	int (* remove)(struct bitcoin_utxo_db * db, const struct satoshi_outpoint * outpoint);
-	int (* find)(struct bitcoin_utxo_db * db, const satoshi_outpoint_t * outpoint, db_record_utxo_t * utxo);
+	int (* find)(struct bitcoin_utxo_db * db, 
+		const satoshi_outpoint_t * outpoint, // (NOT NULL)
+		satoshi_txout_t * txout, // (nullable)
+		uint256_t * block_hash	// (nullable)
+	);
 	
 	// DB Transaction Subsystem Wrapper
-	void (* set_txn)(struct bitcoin_utxo_db * db, void * txn /* DB_TXN */);
-	//~ int (* txn_begin)(struct bitcoin_utxo_db * db);
-	//~ int (* txn_commit)(struct bitcoin_utxo_db * db);
-	//~ int (* txn_abort)(struct bitcoin_utxo_db * db);
-	
+	void (* set_txn)(struct bitcoin_utxo_db * db, 
+		void * txn /* a DB_TXN object, should be created by db_env->txn_begin() */
+	);
+
 	ssize_t (* get_utxoes)(struct bitcoin_utxo_db * db, const uint256_t * block_hash, db_record_utxo_t ** p_utxoes);	// find utxoes in orphan blocks
 	
 	ssize_t (* get_count)(const struct bitcoin_utxo_db * db, const uint256_t * block_hash);	// if (NULL == block_hash) return all_utxoes_count;
 }bitcoin_utxo_db_t;
 bitcoin_utxo_db_t * bitcoin_utxo_db_init(bitcoin_utxo_db_t * db, void * user_data);
 void bitcoin_utxo_db_cleanup(bitcoin_utxo_db_t * db);
+
+
 
 /*******************************************************
  * BLOCKs

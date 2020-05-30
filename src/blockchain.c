@@ -57,18 +57,22 @@ struct db_record_utxo * db_record_utxo_new(
 	const satoshi_outpoint_t *outpoint, 
 	const satoshi_txout_t * txout)
 {
-	uint32_t cb_script = txout?0:txout->cb_script;
+	uint32_t cb_script = txout?txout->cb_script:0;
 	struct db_record_utxo * utxo = calloc(
 		sizeof(*utxo) + cb_script, // allocate additional size for scripts data
 		1); 
 	assert(utxo);
 	
 	utxo->cb_script = cb_script;
-	if(cb_script && txout && txout->scripts)
+	if(txout)
 	{
-		memcpy(utxo->pk_scripts, txout->scripts, cb_script);
+		utxo->value = txout->value;
+		if(cb_script && txout->scripts)
+		{
+			memcpy(utxo->pk_scripts, txout->scripts, cb_script);
+		}
 	}
-	
+
 	if(outpoint)
 	{
 		memcpy(&utxo->outpoint, outpoint, sizeof(*outpoint));
@@ -324,25 +328,90 @@ static int utxo_db_add(struct bitcoin_utxo_db * db,
 	
 	int ret = 0;
 	DB * dbp = priv->dbp;
-	DB_ENV * env = priv->env;
-	
 	ret = dbp->put(dbp, priv->txn, &key, &value, 0);
 	if(ret)
 	{
-		db_error(env, "dbp->put()", "put utxo failed");
+		dbp->err(dbp, ret, "dbp->put(): value_size=%d", (int)value.size);
+		
 	}
 	
+	assert(ret == 0);
 	db_record_utxo_free(utxo);
 	return ret;
 }
 
 int utxo_db_remove(struct bitcoin_utxo_db * db, const struct satoshi_outpoint * outpoint)
 {
+	utxo_db_private_t * priv = db->priv;
+	assert(priv && priv->db == db && priv->dbp);
+	
+	DB * dbp = priv->dbp;
+	int ret = 0;
+	DBT key;
+	memset(&key, 0, sizeof(key));
+	key.data = (void *)outpoint;
+	key.size = sizeof(*outpoint);
+	ret = dbp->del(dbp, priv->txn, &key, 0);
+	
+	if(ret != 0)
+	{
+		if(ret == DB_NOTFOUND) return 1;
+		dbp->err(dbp, ret, "delete key(%p) failed", outpoint);
+		return -1;	// error
+	}
 	return 0;
 }
 
-int utxo_db_find(struct bitcoin_utxo_db * db, const satoshi_outpoint_t * outpoint, db_record_utxo_t * utxo)
+int utxo_db_find(struct bitcoin_utxo_db * db, const satoshi_outpoint_t * outpoint, satoshi_txout_t * txout, uint256_t * block_hash)
 {
+	utxo_db_private_t * priv = db->priv;
+	assert(priv && priv->db == db && priv->dbp);
+	
+	DB * dbp = priv->dbp;
+	int ret = 0;
+	DBT key, value;
+	memset(&key, 0, sizeof(key));
+	memset(&value, 0, sizeof(value));
+	
+	key.data = (void *)outpoint;
+	key.size = sizeof(*outpoint);
+	
+	value.flags = DB_DBT_MALLOC;
+	ret = dbp->get(dbp, priv->txn, &key, &value, 0);
+	
+	
+	if(ret != 0)
+	{
+		if(ret != DB_NOTFOUND) {
+			dbp->err(dbp, ret, "delete key(%p) failed", outpoint);
+		}
+		return -1;
+	}
+	
+	struct db_record_utxo_data * utxo = value.data;
+	uint32_t data_size = value.size;
+	assert(data_size == (sizeof(*utxo) + utxo->cb_script));
+	
+	if(block_hash)
+	{
+		memcpy(block_hash, &utxo->block_hash, sizeof(*block_hash));
+	}
+	
+	if(txout)
+	{
+		txout->value = utxo->value;
+		txout->cb_script = utxo->cb_script;
+		if(utxo->cb_script > 0)
+		{
+			unsigned char * pk_scripts = realloc(txout->scripts, utxo->cb_script);
+			txout->scripts = pk_scripts;
+			assert(pk_scripts);
+			
+			memcpy(pk_scripts, utxo->pk_scripts, utxo->cb_script);
+		}
+	}
+	
+	free(utxo);
 	return 0;
 }
 	
@@ -361,7 +430,6 @@ bitcoin_utxo_db_t * bitcoin_utxo_db_init(bitcoin_utxo_db_t * db, void * user_dat
 	
 	utxo_db_private_t * priv = utxo_db_private_new(db, NULL, NULL);
 	assert((db->priv == priv)); 
-	
 	
 	return db;
 }
@@ -423,7 +491,7 @@ int main(int argc, char ** argv)
 	
 	
 	bitcoin_utxo_db_cleanup(utxoes_db);
-	
+	free(utxoes_db);
 	
 	if(s_db_env)
 	{
@@ -438,8 +506,10 @@ void test_utxoes(bitcoin_utxo_db_t * db)
 	// prepare data
 	uint256_t block_hashes[2];
 	memset(block_hashes, 0, sizeof(block_hashes));
-	hash256("block1", 7, (unsigned char *)&block_hashes[0]);
-	hash256("block2", 7, (unsigned char *)&block_hashes[1]);
+	//~ hash256("block1", 7, (unsigned char *)&block_hashes[0]);
+	//~ hash256("block2", 7, (unsigned char *)&block_hashes[1]);
+	strcpy((char *)&block_hashes[0], "block1");
+	strcpy((char *)&block_hashes[1], "block2");
 	
 	struct satoshi_txout txouts[2];
 	memset(txouts, 0, sizeof(txouts));
@@ -458,10 +528,10 @@ void test_utxoes(bitcoin_utxo_db_t * db)
 	txouts[0].scripts = calloc(4, 1);
 	*(uint32_t *)txouts[0].scripts = 0x11223344;
 	
-	txouts[1].value = 10000;
+	txouts[1].value = 20000;
 	txouts[1].cb_script = 4;
 	txouts[1].scripts = calloc(4, 1);
-	*(uint32_t *)txouts[1].scripts = 0x11223344;
+	*(uint32_t *)txouts[1].scripts = 0xabababab;
 	
 	db_record_utxo_t utxo[1];
 	memset(utxo, 0, sizeof(utxo));
@@ -488,31 +558,48 @@ void test_utxoes(bitcoin_utxo_db_t * db)
 	}
 	txn = NULL;
 	
+	
 	// spend
 	// -- find utxo
-	rc = db->find(db, &outpoints[0], utxo);
+	
+	db->set_txn(db, NULL);
+	struct satoshi_txout txout[1];
+	memset(txout, 0, sizeof(txout));
+	uint256_t hash[1];
+	memset(hash, 0, sizeof(hash));
+	
+	rc = db->find(db, &outpoints[0], txout, hash);
 	assert(0 == rc);
+	printf("txout: \n"
+		"\t value=%" PRIi64 "\n"
+		"\t cb_script=%u \n"
+		"\t scripts=0x%.8x \n",
+		txout->value,
+		(uint32_t)txout->cb_script,
+		*(uint32_t *)txout->scripts);
+	satoshi_txout_cleanup(txout);
 
-	
-	// -- step 1. remove outpoint utxo
-	
+
 	ret = env->txn_begin(env, NULL, &txn, 0);
 	if(ret)
 	{
 		db_error(env, "txn_begin", "txn_begin_failed");
 		exit(1);
 	}
-	
 	db->set_txn(db, txn);
-	rc = db->remove(db, &outpoints[0]);
-	if(!rc)
-	{
-		txn->abort(txn);
-		exit(111);
-	}
+	
+	// -- step 1. remove outpoint utxo
+	//~ rc = db->remove(db, &outpoints[0]);
+	//~ if(!rc)
+	//~ {
+		//~ txn->abort(txn);
+		//~ exit(111);
+	//~ }
 	// -- step 2. add new tx's utxoes
+	
+	
 	rc = db->add(db, &block_hashes[1], &outpoints[1], &txouts[1]);
-	if(!rc)
+	if(rc)
 	{
 		txn->abort(txn);
 		exit(112);
@@ -524,6 +611,27 @@ void test_utxoes(bitcoin_utxo_db_t * db)
 		db_error(env, "txn_commit", "commit failed");
 		exit(1);
 	}
+	
+	db->set_txn(db, NULL);
+	
+	memset(txout, 0, sizeof(txout));
+	memset(hash, 0, sizeof(hash));
+	
+	rc = db->find(db, &outpoints[1], txout, hash);
+	assert(0 == rc);
+	printf("txouts[1]: \n"
+		"\t value=%" PRIi64 "\n"
+		"\t cb_script=%u \n"
+		"\t scripts=0x%.8x \n",
+		txout->value,
+		(uint32_t)txout->cb_script,
+		*(uint32_t *)txout->scripts);
+	satoshi_txout_cleanup(txout);
+	
+	
+	// cleanup
+	satoshi_txout_cleanup(&txouts[0]);
+	satoshi_txout_cleanup(&txouts[1]);
 	
 	return;
 }
