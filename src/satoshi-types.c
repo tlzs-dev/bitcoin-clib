@@ -344,6 +344,7 @@ ssize_t uint256_from_string(uint256_t * u256, int from_little_endian, const char
 			__FILE__, __LINE__, __FUNCTION__,	\
 			##__VA_ARGS__);						\
 		abort();								\
+		goto label_error;						\
 	} while(0)
 #else
 #define message_parser_error_handler(fmt, ...) do { \

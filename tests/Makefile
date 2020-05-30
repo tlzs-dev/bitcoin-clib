@@ -4,7 +4,7 @@ CC=gcc -std=gnu99 -Wall
 LINKER=gcc -std=gnu99 -Wall
 
 CFLAGS = -g -I../include -D_DEBUG
-LIBS = -lm -lpthread -ljson-c
+LIBS = -lm -lpthread -ljson-c -ldb
 
 SRC_DIR := ../src
 OBJ_DIR := ../obj
@@ -39,6 +39,13 @@ $(BASE_OBJECTS): $(BASE_OBJ_DIR)/%.o : $(BASE_SRC_DIR)/%.c
 
 $(UTILS_OBJECTS): $(UTILS_OBJ_DIR)/%.o : $(UTILS_SRC_DIR)/%.c
 	$(CC) -o $@ -c $< $(CFLAGS)
+
+
+blockchain: test_blockchain
+
+test_blockchain: $(BASE_OBJECTS) $(UTILS_OBJECTS) $(OBJ_DIR)/satoshi-types.o $(SRC_DIR)/blockchain.c
+	echo "build $@ ..."
+	$(CC) -o $@ $(CFLAGS) $(LIBS) $^ -D_TEST_BITCOIN_BLOCKCHAIN -D_STAND_ALONE
 
 .PHONY: do_init clean
 do_init:
