@@ -31,6 +31,9 @@
 #include <string.h>
 #include <assert.h>
 
+#include <stdint.h>
+#include <inttypes.h>
+
 #include "bitcoin-consensus.h"
 #include "satoshi-types.h"
 #include "utils.h"
@@ -42,12 +45,149 @@
 
 #define BLOCKCHAIN_ALLOC_SIZE			(65536)
 
+/***************************************
+ * Utils
+ **************************************/
 static void db_error(const DB_ENV * env, 
 	const char * errpfx, const char * msg)
 {
 	fprintf(stderr, "\e[33m" "%s: %s" "\e[39m" "\n", errpfx, msg);
 	return;
 }
+
+static int check_path(const char * path)
+{
+	assert(path);
+	char command[100 + PATH_MAX] = "";
+	snprintf(command, sizeof(command), "mkdir -p \"%s\"", path); 
+	int rc = system(command);
+	assert(0 == rc);
+	return rc;
+}
+
+static pthread_once_t s_once_key = PTHREAD_ONCE_INIT;
+static DB_ENV * s_db_env;
+static const char s_db_home[PATH_MAX] = "data";
+
+static DB_ENV * init_db_env(const char * db_home)
+{
+	DB_ENV * env = NULL;
+	int ret = db_env_create(&env, 0);
+	if(ret)
+	{
+		fprintf(stderr, "[ERROR]::%s() failed: %s\n", 
+			__FUNCTION__,
+			db_strerror(ret));
+		exit(1);
+	}
+	
+	if(NULL == db_home) db_home = s_db_home;
+	
+	u_int32_t flags = DB_CREATE 
+		| DB_INIT_MPOOL 
+		| DB_INIT_LOG
+		| DB_INIT_LOCK
+		| DB_INIT_TXN
+		| DB_RECOVER
+		| DB_REGISTER
+		| DB_THREAD
+		| 0;
+	int mode = 0666;
+	ret = env->open(env, db_home, flags, mode);
+	if(ret)
+	{
+		fprintf(stderr, "[DB::ERROR]: %s\n", db_strerror(ret));
+		env->close(env, 0);
+		return NULL;
+	}
+	
+	env->set_errpfx(env, "[DB::ERROR]");
+	env->set_errcall(env, db_error);
+
+	return env;
+}
+
+static void init_db_env_default(void)
+{
+	s_db_env = init_db_env(s_db_home);
+	assert(s_db_env);
+	return;
+}
+
+static void close_db(DB_ENV * env, DB * dbp, DB * sdbp)
+{
+	assert(env);
+	int rc = 0;
+	if(sdbp) // close secondary db before primary
+	{
+		rc = sdbp->close(sdbp, 0);
+		if(rc)
+		{
+			env->err(env, rc, NULL);
+		//	exit(1);
+		}
+	}
+	
+	if(dbp)
+	{
+		rc = dbp->close(dbp, 0);
+		if(rc)
+		{
+			env->err(env, rc, NULL);
+		//	exit(1);
+		}
+	}
+	return;
+}
+
+static int open_db(DB_ENV ** p_env, const char * db_name, 
+	DBTYPE type, u_int32_t flags,
+	DB ** p_dbp /* [OUT] */
+)
+{
+	static const u_int32_t default_flags = DB_CREATE 
+		| DB_READ_UNCOMMITTED
+		| DB_AUTO_COMMIT;
+	
+	assert(db_name && p_dbp);
+	DB_ENV * env = NULL;
+	if(p_env) env = *p_env;
+	
+	if(NULL == env)
+	{
+		pthread_once(&s_once_key, init_db_env_default);
+		env = s_db_env;
+		assert(env);
+		
+		if(p_env) * p_env = env;
+	}
+	
+	if(0 == flags) flags = default_flags;
+	
+	int rc = 0;
+	DB * dbp = NULL;
+	rc = db_create(&dbp, env, 0);
+	if(rc)
+	{
+		env->err(env, rc, NULL);
+		exit(1);
+	}
+	
+	rc = dbp->open(dbp, NULL, db_name, NULL, 
+		type, flags, 0666);
+	if(rc)
+	{
+		env->err(env, rc, NULL);
+		exit(1);
+	}
+	
+	int txn_mode = dbp->get_transactional(dbp);
+	assert(txn_mode != 0);	// db MUST support DB transaction operation
+	
+	*p_dbp = dbp;
+	return rc;
+}
+	
 
 /******************************************
  * db_record_utxo
@@ -118,10 +258,6 @@ typedef struct block_db_private
 
 
 
-static pthread_once_t s_once_key = PTHREAD_ONCE_INIT;
-static DB_ENV * s_db_env;
-static const char s_db_home[PATH_MAX] = "data";
-
 static int utxo_record_get_block_hash(DB *sdbp,
     const DBT *key, const DBT *value, DBT *result)
 {
@@ -132,56 +268,18 @@ static int utxo_record_get_block_hash(DB *sdbp,
 	return 0;
 }
 
-static void init_db_env_default(void)
-{
-	DB_ENV * env = NULL;
-	int ret = db_env_create(&env, 0);
-	if(ret)
-	{
-		fprintf(stderr, "[ERROR]::%s() failed: %s\n", 
-			__FUNCTION__,
-			db_strerror(ret));
-		exit(1);
-	}
-	
-	const char * home_dir = s_db_home;
-	u_int32_t flags = DB_CREATE 
-		| DB_INIT_MPOOL 
-		| DB_INIT_LOG
-		| DB_INIT_LOCK
-		| DB_INIT_TXN
-		| DB_RECOVER
-		| DB_REGISTER
-		| DB_THREAD
-		| 0;
-	int mode = 0666;
-	ret = env->open(env, home_dir, flags, mode);
-	if(ret)
-	{
-		fprintf(stderr, "[DB::ERROR]: %s\n", db_strerror(ret));
-		env->close(env, 0);
-		return;
-	}
-	
-	env->set_errpfx(env, "[DB::ERROR]");
-	env->set_errcall(env, db_error);
-
-	s_db_env = env;
-	return;
-}
-
 
 static utxo_db_private_t * utxo_db_private_new(bitcoin_utxo_db_t * db, DB_ENV * env, const char * db_name)
 {
-	if(NULL == env)
-	{
-		pthread_once(&s_once_key, init_db_env_default);
-		env = s_db_env;
-		assert(env);
-	}
-	
+	static const u_int32_t flags = DB_CREATE 
+		| DB_READ_UNCOMMITTED
+		| DB_AUTO_COMMIT;
 	int rc;
 	if(NULL == db_name) db_name = "utxo.db";
+	char sdb_name[PATH_MAX] = "";
+	int cb = snprintf(sdb_name, sizeof(sdb_name), "blocks-%s", db_name);
+	assert(cb >= 0 && cb < PATH_MAX);
+	
 	utxo_db_private_t * priv = calloc(1, sizeof(*priv));
 	assert(priv);
 	
@@ -191,54 +289,11 @@ static utxo_db_private_t * utxo_db_private_new(bitcoin_utxo_db_t * db, DB_ENV * 
 	DB * dbp = NULL;		// primary db
 	DB * sdbp = NULL;		// secondary db
 	
-	rc = db_create(&dbp, env, 0);
-	if(rc)
-	{
-		env->err(env, rc, NULL);
-		exit(1);
-	}
+	rc = open_db(&env, db_name, DB_HASH, flags, &dbp);
+	assert(0 == rc);
 	
-	u_int32_t flags = DB_CREATE 
-		| DB_READ_UNCOMMITTED
-		| DB_AUTO_COMMIT;
-	
-	rc = dbp->open(dbp, NULL, db_name, NULL, 
-		DB_HASH, 
-		flags,
-		0666);
-	if(rc)
-	{
-		env->err(env, rc, NULL);
-		exit(1);
-	}
-	
-	char sdb_name[PATH_MAX] = "";
-	int cb = snprintf(sdb_name, sizeof(sdb_name), "blocks-%s", db_name);
-	assert(cb >= 0 && cb < PATH_MAX);
-	
-	rc = db_create(&sdbp, env, 0);
-	if(rc)
-	{
-		env->err(env, rc, NULL);
-		exit(1);
-	}
-	rc = sdbp->set_flags(sdbp, DB_DUPSORT);
-	if(rc)
-	{
-		env->err(env, rc, NULL);
-		exit(1);
-	}
-	
-	rc = sdbp->open(sdbp, NULL, 
-		sdb_name, NULL,
-		DB_HASH, 
-		flags, 
-		0666);
-	if(rc)
-	{
-		env->err(env, rc, NULL);
-		exit(1);
-	}
+	rc = open_db(&env, sdb_name, DB_HASH, flags, &sdbp);
+	assert(0 == rc);
 	
 	rc = dbp->associate(dbp, NULL, sdbp, 
 		utxo_record_get_block_hash, 
@@ -254,13 +309,6 @@ static utxo_db_private_t * utxo_db_private_new(bitcoin_utxo_db_t * db, DB_ENV * 
 	priv->env = env;
 	priv->dbp = dbp;
 	priv->sdbp = sdbp;
-	
-	int txn_mode = dbp->get_transactional(dbp);
-	assert(txn_mode != 0);	// primary db MUST support DB transaction operation
-	
-	txn_mode = sdbp->get_transactional(sdbp);
-	assert(txn_mode != 0);	// secondary db MUST support DB transaction operation
-	
 	strncpy(priv->db_name, db_name, sizeof(priv->db_name));
 	return priv;
 }
@@ -268,30 +316,7 @@ static utxo_db_private_t * utxo_db_private_new(bitcoin_utxo_db_t * db, DB_ENV * 
 void utxo_db_private_free(utxo_db_private_t * priv)
 {
 	if(NULL == priv) return;
-	int rc = 0;
-	DB_ENV * env = priv->env;
-	if(priv->sdbp) // close secondary db before primary
-	{
-		
-		rc = priv->sdbp->close(priv->sdbp, 0);
-		if(rc)
-		{
-			env->err(env, rc, NULL);
-		//	exit(1);
-		}
-		priv->sdbp = NULL;
-	}
-	
-	if(priv->dbp)
-	{
-		rc = priv->dbp->close(priv->dbp, 0);
-		if(rc)
-		{
-			env->err(env, rc, NULL);
-		//	exit(1);
-		}
-		priv->dbp = NULL;
-	}
+	close_db(priv->env, priv->dbp, priv->sdbp);
 	free(priv);
 }
 
@@ -414,7 +439,6 @@ int utxo_db_find(struct bitcoin_utxo_db * db, const satoshi_outpoint_t * outpoin
 	free(utxo);
 	return 0;
 }
-	
 
 bitcoin_utxo_db_t * bitcoin_utxo_db_init(bitcoin_utxo_db_t * db, void * user_data)
 {
@@ -427,9 +451,22 @@ bitcoin_utxo_db_t * bitcoin_utxo_db_init(bitcoin_utxo_db_t * db, void * user_dat
 	
 	db->set_txn = utxo_db_set_txn;
 	
+	bitcoin_blockchain_t * chain = user_data;
+	DB_ENV * env = NULL;
+	const char * db_name = NULL;	///< @todo load from settings
 	
-	utxo_db_private_t * priv = utxo_db_private_new(db, NULL, NULL);
+	if(chain)
+	{
+		env = chain->env;
+	}
+	
+	utxo_db_private_t * priv = utxo_db_private_new(db, env, db_name);
 	assert((db->priv == priv)); 
+	
+	if(env)
+	{
+		assert(priv->env == (DB_ENV *)chain->env);
+	}
 	
 	return db;
 }
@@ -437,6 +474,343 @@ void bitcoin_utxo_db_cleanup(bitcoin_utxo_db_t * db)
 {
 	if(NULL == db) return;
 	utxo_db_private_free(db->priv);
+	return;
+}
+
+/*******************************************************
+ * BLOCKs
+ ******************************************************/ 
+typedef struct blocks_db_private
+{
+	bitcoin_blocks_db_t * db;
+ // priv
+	char db_name[200];
+	DB_ENV * env;
+	DB * dbp;	// primary db, indexed by outpoint
+	DB * sdbp;	// secondary db,  indexed by block_hash
+	ssize_t count;
+
+	DB_TXN * txn;	// if txn == NULL, transactions would be auto commited.
+}blocks_db_private_t;
+
+static int blocks_record_get_height(DB *sdbp,
+    const DBT *key, const DBT *value, DBT *result)
+{
+	memset(result, 0, sizeof(*result));
+	const struct db_record_block_data * block = value->data;
+	
+	result->data = (void *)&block->height;
+	result->size = sizeof(block->height);
+	return 0;
+}
+
+blocks_db_private_t * blocks_db_private_new(
+	bitcoin_blocks_db_t * db, 
+	DB_ENV * env, 
+	const char * db_name)
+{
+	static const u_int32_t flags = DB_CREATE 
+		| DB_READ_UNCOMMITTED
+		| DB_AUTO_COMMIT;
+		
+	if(NULL == db_name) db_name = "blocks_db";
+	char sdb_name[PATH_MAX] = "";
+	snprintf(sdb_name, sizeof(sdb_name), "heights-%s", db_name);
+	
+	int rc = 0;
+	blocks_db_private_t * priv = calloc(1, sizeof(*priv));
+	assert(priv);
+	priv->db = db;
+	db->priv = priv;
+
+	DB * dbp = NULL;		// primary db
+	DB * sdbp = NULL;		// secondary db
+	
+	rc = open_db(&env, db_name, DB_HASH, flags, &dbp);
+	assert(0 == rc);
+	
+	rc = open_db(&env, sdb_name, DB_BTREE, flags, &sdbp);
+	assert(0 == rc);
+	
+	rc = dbp->associate(dbp, NULL, sdbp, 
+		blocks_record_get_height, 
+		0
+	//	| DB_IMMUTABLE_KEY	/9/ assume that the block hash associated with the UTXO will never be changed. if need reorg, remove all orphaned block's UTXOes first.
+	);
+	if(rc)
+	{
+		env->err(env, rc, NULL);
+		exit(1);
+	}
+	
+	priv->env = env;
+	priv->dbp = dbp;
+	priv->sdbp = sdbp;
+	strncpy(priv->db_name, db_name, sizeof(priv->db_name));
+	
+	return priv;
+}
+
+static void blocks_db_private_free(blocks_db_private_t * priv)
+{
+	if(NULL == priv) return;
+	close_db(priv->env, priv->dbp, priv->sdbp);
+	free(priv);
+	return;
+}
+
+//~ typedef struct bitcoin_blocks_db
+//~ {
+	//~ void * user_data;
+	//~ void * priv;
+	
+	//~ int (* add)(struct bitcoin_blocks_db * db, int file_index, 
+		//~ const uint256_t * block_hash,
+		//~ int64_t start_pos, 
+		//~ uint32_t magic, uint32_t block_size);
+	//~ int (* remove)(struct bitcoin_blocks_db * db, const uint256_t * block_hash);
+	//~ int (* find)(struct bitcoin_blocks_db * db, const uint256_t * block_hash, db_record_block_t * record);
+
+//~ }bitcoin_blocks_db_t;
+static int blocks_db_add(struct bitcoin_blocks_db * db, 
+	const uint256_t * block_hash,
+	int height,
+	const struct satoshi_block_header hdr,
+	int file_index, 
+	int64_t start_pos, 
+	uint32_t magic, uint32_t block_size)
+{
+	int rc = 0;
+	blocks_db_private_t * priv = db->priv;
+	assert(priv);
+	
+	struct db_record_block_data block[1];
+	memset(block, 0, sizeof(block));
+	block->height = height;
+	block->hdr = hdr;
+	block->file_index = file_index;
+	block->start_pos = start_pos;
+	block->magic = magic;
+	block->block_size = block_size;
+	
+	DB_ENV * env = priv->env;
+	DB * dbp = priv->dbp;
+	assert(env && dbp);
+	
+	DBT key, value;
+	memset(&key, 0, sizeof(key));
+	memset(&value, 0, sizeof(value));
+	
+	key.data = (void *)block_hash;
+	key.size = sizeof(*block_hash);
+	
+	value.data = block;
+	value.size = sizeof(block);
+	
+	rc = dbp->put(dbp, priv->txn, &key, &value, 0);
+	if(rc)
+	{
+		env->err(env, rc, NULL);
+	}
+	return rc;
+}
+
+static int blocks_db_remove(struct bitcoin_blocks_db * db, const uint256_t * block_hash)
+{
+	assert(db && block_hash);
+	
+	int rc = 0;
+	blocks_db_private_t * priv = db->priv;
+	assert(priv);
+	DB_ENV * env = priv->env;
+	DB * dbp = priv->dbp;
+	assert(env && dbp);
+	
+	DBT key;
+	memset(&key, 0, sizeof(key));
+	
+	key.data = (void *)block_hash;
+	key.size = sizeof(*block_hash);
+	
+	rc = dbp->del(dbp, priv->txn, &key, 0);
+	if(rc)
+	{
+		env->err(env, rc, NULL);
+	}
+	return rc;
+}
+
+static int blocks_db_find(struct bitcoin_blocks_db * db, 
+	const uint256_t * block_hash, 
+	db_record_block_t ** p_record)
+{
+	assert(db && block_hash);
+	
+	int rc = 0;
+	blocks_db_private_t * priv = db->priv;
+	assert(priv);
+	DB_ENV * env = priv->env;
+	DB * dbp = priv->dbp;
+	assert(env && dbp);
+	
+	DBT key, value;
+	memset(&key, 0, sizeof(key));
+	memset(&value, 0, sizeof(value));
+	
+	key.data = (void *)block_hash;
+	key.size = sizeof(*block_hash);
+	
+	value.flags = DB_DBT_MALLOC;
+	rc = dbp->get(dbp, priv->txn, &key, &value, 0);
+	if(0 == rc) {
+		struct db_record_block_data * block_data = value.data;
+		assert(value.size == sizeof(*block_data));
+		if(p_record)
+		{
+			db_record_block_t * block = *p_record;
+			if(NULL == block)
+			{
+				block = calloc(1, sizeof(*block));
+			}
+			assert(block);
+			block->hash = *block_hash;
+			block->data = *block_data;
+			
+			*p_record = block;
+		}
+	}else if(rc != DB_NOTFOUND) {
+			env->err(env, rc, NULL);
+	}
+	
+	if(value.data) free(value.data);
+	return rc;
+}
+
+void blocks_db_set_txn(struct bitcoin_blocks_db * db, void * txn)
+{
+	blocks_db_private_t * priv = db->priv;
+	assert(priv);
+	priv->txn = txn;
+	return;
+}
+
+bitcoin_blocks_db_t * bitcoin_blocks_db_init(bitcoin_blocks_db_t * db, void * user_data)
+{
+	if(NULL == db) db = calloc(1, sizeof(*db));
+	assert(db);
+	db->user_data = user_data;
+	db->add = blocks_db_add;
+	db->remove = blocks_db_remove;
+	db->find = blocks_db_find;
+	db->set_txn = blocks_db_set_txn;
+	
+	
+	bitcoin_blockchain_t * chain = user_data;
+	DB_ENV * env = NULL;
+	const char * db_name = NULL;	///< @todo load from settings
+	if(chain)
+	{
+		env = chain->env;
+	}
+	blocks_db_private_t * priv = blocks_db_private_new(db, env, db_name);
+	assert(priv && (db->priv == priv));
+	
+	if(env)
+	{
+		assert(priv->env == (DB_ENV *)chain->env);
+	}
+	
+	return db;
+}
+
+void bitcoin_blocks_db_cleanup(bitcoin_blocks_db_t * db)
+{
+	if(NULL == db) return;
+	blocks_db_private_free(db->priv);
+	db->priv = NULL;
+	return;
+}
+
+typedef struct blockchain_private {
+	bitcoin_blockchain_t * chain;
+	char db_home[PATH_MAX];
+	char blocks_dir[PATH_MAX];
+}blockchain_private_t;
+blockchain_private_t * blockchain_private_new(bitcoin_blockchain_t * chain,
+	const char * db_home, 
+	const char *blocks_dir)
+{
+	blockchain_private_t * priv = calloc(1, sizeof(*priv));
+	assert(priv);
+	
+	if(NULL == db_home) db_home = "data";
+	if(NULL == blocks_dir) blocks_dir = "blocks";
+	strncpy(priv->db_home, db_home, sizeof(priv->db_home));
+	strncpy(priv->blocks_dir, blocks_dir, sizeof(priv->blocks_dir));
+	
+	int rc = 0;
+	rc = check_path(db_home);		assert(0 == rc);
+	rc = check_path(blocks_dir);	assert(0 == rc);
+	return priv;
+}
+void blockchain_private_free(blockchain_private_t * priv)
+{
+	if(NULL == priv) return;
+	free(priv);
+	return;
+}
+
+
+static int blockchain_add(struct bitcoin_blockchain blockchain, const satoshi_block_t * block)
+{
+	return 0;
+}
+
+static int blockchain_remove(struct bitcoin_blockchain blockchain, const uint256_t * hash)
+{
+	return 0;
+}
+
+
+bitcoin_blockchain_t * bitcoin_blockchain_init(bitcoin_blockchain_t * chain, 
+	uint32_t magic,
+	const char * db_home,		// database home_dir
+	const char * blocks_dir,	// to store block_nnnnn.dat files 
+	ssize_t mempool_size,		
+	void * user_data)
+{
+	if(NULL == chain) chain = calloc(1, sizeof(*chain));
+	assert(chain);
+	
+	chain->add = blockchain_add;
+	chain->remove = blockchain_remove;
+	
+	chain->magic = magic;
+	chain->user_data = user_data;
+	
+	blockchain_private_t * priv = blockchain_private_new(chain, db_home, blocks_dir);
+	assert(priv && (chain->priv == priv));
+	
+	if(NULL == db_home) db_home = priv->db_home;
+	if(NULL == blocks_dir) blocks_dir = priv->blocks_dir;
+
+	DB_ENV * env = init_db_env(db_home);
+	assert(env);
+
+	bitcoin_utxo_db_t * utxo_db = bitcoin_utxo_db_init(chain->utxo_db, chain);
+	bitcoin_blocks_db_t * blocks_db = bitcoin_blocks_db_init(chain->blocks_db, chain);
+	assert(utxo_db && utxo_db == chain->utxo_db);
+	assert(blocks_db && blocks_db == chain->blocks_db);
+	
+	return chain;
+}
+void bitcoin_blockchain_cleanup(bitcoin_blockchain_t * chain)
+{
+	if(NULL == chain) return;
+	if(chain->utxo_db) 
+	{
+		bitcoin_utxo_db_cleanup(chain->utxo_db);
+	}
 	return;
 }
 
@@ -464,18 +838,10 @@ int set_working_dir(const char * path)
 	return rc;
 }
 
-int check_path(const char * path)
-{
-	assert(path);
-	char command[100 + PATH_MAX] = "";
-	snprintf(command, sizeof(command), "mkdir -p \"%s\"", path); 
-	int rc = system(command);
-	assert(0 == rc);
-	return rc;
-}
-
-
 void test_utxoes();
+void test_blocks();
+void test_blockchain();
+
 int main(int argc, char ** argv)
 {
 	int rc = set_working_dir(NULL);
@@ -484,24 +850,23 @@ int main(int argc, char ** argv)
 	char db_home[PATH_MAX] = "data";
 	check_path(db_home);
 	
-	bitcoin_utxo_db_t * utxoes_db = bitcoin_utxo_db_init(NULL, NULL);
-	assert(utxoes_db);
-	
-	test_utxoes(utxoes_db);
-	
-	
-	bitcoin_utxo_db_cleanup(utxoes_db);
-	free(utxoes_db);
+	test_utxoes(db_home);
+	test_blocks(db_home);
+	test_blockchain(db_home);
 	
 	if(s_db_env)
 	{
 		s_db_env->close(s_db_env, 0);
+		s_db_env = NULL;
 	}
 	return 0;
 }
 
-void test_utxoes(bitcoin_utxo_db_t * db)
+void test_utxoes(const char * db_home)
 {
+	bitcoin_utxo_db_t * db = bitcoin_utxo_db_init(NULL, NULL);
+	assert(db);
+	
 	int rc = 0;
 	// prepare data
 	uint256_t block_hashes[2];
@@ -589,15 +954,13 @@ void test_utxoes(bitcoin_utxo_db_t * db)
 	db->set_txn(db, txn);
 	
 	// -- step 1. remove outpoint utxo
-	//~ rc = db->remove(db, &outpoints[0]);
-	//~ if(!rc)
-	//~ {
-		//~ txn->abort(txn);
-		//~ exit(111);
-	//~ }
+	rc = db->remove(db, &outpoints[0]);
+	if(rc)
+	{
+		txn->abort(txn);
+		exit(111);
+	}
 	// -- step 2. add new tx's utxoes
-	
-	
 	rc = db->add(db, &block_hashes[1], &outpoints[1], &txouts[1]);
 	if(rc)
 	{
@@ -633,7 +996,18 @@ void test_utxoes(bitcoin_utxo_db_t * db)
 	satoshi_txout_cleanup(&txouts[0]);
 	satoshi_txout_cleanup(&txouts[1]);
 	
+	
+	bitcoin_utxo_db_cleanup(db);
+	free(db);
 	return;
 }
 
+void test_blocks(const char * db_home)
+{
+	
+}
+
+void test_blockchain(const char * db_home)
+{
+}
 #endif
