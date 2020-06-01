@@ -34,6 +34,8 @@
 #include <stdint.h>
 #include <inttypes.h>
 
+#include <json-c/json.h>
+
 #include "bitcoin-consensus.h"
 #include "satoshi-types.h"
 #include "utils.h"
@@ -513,7 +515,7 @@ blocks_db_private_t * blocks_db_private_new(
 		| DB_READ_UNCOMMITTED
 		| DB_AUTO_COMMIT;
 		
-	if(NULL == db_name) db_name = "blocks_db";
+	if(NULL == db_name) db_name = "blocks.db";
 	char sdb_name[PATH_MAX] = "";
 	snprintf(sdb_name, sizeof(sdb_name), "heights-%s", db_name);
 	
@@ -559,23 +561,10 @@ static void blocks_db_private_free(blocks_db_private_t * priv)
 	return;
 }
 
-//~ typedef struct bitcoin_blocks_db
-//~ {
-	//~ void * user_data;
-	//~ void * priv;
-	
-	//~ int (* add)(struct bitcoin_blocks_db * db, int file_index, 
-		//~ const uint256_t * block_hash,
-		//~ int64_t start_pos, 
-		//~ uint32_t magic, uint32_t block_size);
-	//~ int (* remove)(struct bitcoin_blocks_db * db, const uint256_t * block_hash);
-	//~ int (* find)(struct bitcoin_blocks_db * db, const uint256_t * block_hash, db_record_block_t * record);
-
-//~ }bitcoin_blocks_db_t;
 static int blocks_db_add(struct bitcoin_blocks_db * db, 
 	const uint256_t * block_hash,
 	int height,
-	const struct satoshi_block_header hdr,
+	const struct satoshi_block_header * hdr,
 	int file_index, 
 	int64_t start_pos, 
 	uint32_t magic, uint32_t block_size)
@@ -587,7 +576,7 @@ static int blocks_db_add(struct bitcoin_blocks_db * db,
 	struct db_record_block_data block[1];
 	memset(block, 0, sizeof(block));
 	block->height = height;
-	block->hdr = hdr;
+	if(hdr) block->hdr = *hdr;
 	block->file_index = file_index;
 	block->start_pos = start_pos;
 	block->magic = magic;
@@ -704,7 +693,6 @@ bitcoin_blocks_db_t * bitcoin_blocks_db_init(bitcoin_blocks_db_t * db, void * us
 	db->find = blocks_db_find;
 	db->set_txn = blocks_db_set_txn;
 	
-	
 	bitcoin_blockchain_t * chain = user_data;
 	DB_ENV * env = NULL;
 	const char * db_name = NULL;	///< @todo load from settings
@@ -731,7 +719,11 @@ void bitcoin_blocks_db_cleanup(bitcoin_blocks_db_t * db)
 	return;
 }
 
-typedef struct blockchain_private {
+/***********************************************************************
+ * blockchain
+ **********************************************************************/
+typedef struct blockchain_private 
+{
 	bitcoin_blockchain_t * chain;
 	char db_home[PATH_MAX];
 	char blocks_dir[PATH_MAX];
@@ -753,13 +745,13 @@ blockchain_private_t * blockchain_private_new(bitcoin_blockchain_t * chain,
 	rc = check_path(blocks_dir);	assert(0 == rc);
 	return priv;
 }
+
 void blockchain_private_free(blockchain_private_t * priv)
 {
 	if(NULL == priv) return;
 	free(priv);
 	return;
 }
-
 
 static int blockchain_add(struct bitcoin_blockchain blockchain, const satoshi_block_t * block)
 {
@@ -771,8 +763,8 @@ static int blockchain_remove(struct bitcoin_blockchain blockchain, const uint256
 	return 0;
 }
 
-
-bitcoin_blockchain_t * bitcoin_blockchain_init(bitcoin_blockchain_t * chain, 
+bitcoin_blockchain_t * bitcoin_blockchain_init(
+	bitcoin_blockchain_t * chain, 
 	uint32_t magic,
 	const char * db_home,		// database home_dir
 	const char * blocks_dir,	// to store block_nnnnn.dat files 
@@ -781,13 +773,13 @@ bitcoin_blockchain_t * bitcoin_blockchain_init(bitcoin_blockchain_t * chain,
 {
 	if(NULL == chain) chain = calloc(1, sizeof(*chain));
 	assert(chain);
-	
+
 	chain->add = blockchain_add;
 	chain->remove = blockchain_remove;
 	
 	chain->magic = magic;
 	chain->user_data = user_data;
-	
+
 	blockchain_private_t * priv = blockchain_private_new(chain, db_home, blocks_dir);
 	assert(priv && (chain->priv == priv));
 	
@@ -801,9 +793,10 @@ bitcoin_blockchain_t * bitcoin_blockchain_init(bitcoin_blockchain_t * chain,
 	bitcoin_blocks_db_t * blocks_db = bitcoin_blocks_db_init(chain->blocks_db, chain);
 	assert(utxo_db && utxo_db == chain->utxo_db);
 	assert(blocks_db && blocks_db == chain->blocks_db);
-	
+
 	return chain;
 }
+
 void bitcoin_blockchain_cleanup(bitcoin_blockchain_t * chain)
 {
 	if(NULL == chain) return;
@@ -813,7 +806,6 @@ void bitcoin_blockchain_cleanup(bitcoin_blockchain_t * chain)
 	}
 	return;
 }
-
 
 #if defined(_TEST_BITCOIN_BLOCKCHAIN) && defined(_STAND_ALONE)
 
@@ -850,8 +842,8 @@ int main(int argc, char ** argv)
 	char db_home[PATH_MAX] = "data";
 	check_path(db_home);
 	
-	test_utxoes(db_home);
-	test_blocks(db_home);
+	test_utxoes(NULL, db_home);
+	test_blocks(NULL, db_home);
 	test_blockchain(db_home);
 	
 	if(s_db_env)
@@ -862,9 +854,10 @@ int main(int argc, char ** argv)
 	return 0;
 }
 
-void test_utxoes(const char * db_home)
+void test_utxoes(bitcoin_utxo_db_t * utxo_db, const char * db_home)
 {
-	bitcoin_utxo_db_t * db = bitcoin_utxo_db_init(NULL, NULL);
+	bitcoin_utxo_db_t * db = utxo_db;
+	if(NULL == db) db = bitcoin_utxo_db_init(NULL, NULL);
 	assert(db);
 	
 	int rc = 0;
@@ -996,14 +989,121 @@ void test_utxoes(const char * db_home)
 	satoshi_txout_cleanup(&txouts[0]);
 	satoshi_txout_cleanup(&txouts[1]);
 	
-	
-	bitcoin_utxo_db_cleanup(db);
-	free(db);
+	if(NULL == utxo_db)
+	{
+		bitcoin_utxo_db_cleanup(db);
+		free(db);
+	}
 	return;
 }
 
-void test_blocks(const char * db_home)
+
+ssize_t load_block(const char * data_file, satoshi_block_t * block)
 {
+	/**
+	 * generate block's hex data
+	 * $ bitcoin-cli getblock `bitcoin-cli getblockhash 100000` 0 > block-100000.hex
+	**/
+
+	if(NULL == data_file) data_file = "block-100000.hex";	// without block_file_hdr
+	FILE * fp = fopen(data_file, "rb");
+	assert(fp);
+	fseek(fp, 0, SEEK_END);
+	ssize_t file_size = ftell(fp);
+	fseek(fp, 0, SEEK_SET);
+	
+	assert(file_size > 0);
+	char * hex = malloc(file_size + 1);
+	ssize_t cb = fread(hex, 1, file_size, fp);
+	assert(cb == file_size);
+	fclose(fp);
+	
+	hex[cb] = '\0';
+	while(cb > 0 && (hex[cb - 1] == '\r' || hex[cb - 1] == '\n')) hex[--cb] = '\0';
+	assert((cb % 2) == 0);
+	
+	unsigned char * data = NULL;
+	cb = hex2bin(hex, cb, (void **)&data);
+	assert(cb > 0);
+	
+	ssize_t block_size = satoshi_block_parse(block, cb, data);
+	assert(block_size);
+	
+	return block_size;
+}
+
+
+void test_blocks(bitcoin_blocks_db_t * blocks_db, const char * db_home)
+{
+	static int block_height = 100000;
+	
+	// prepare data
+	satoshi_block_t block[1];
+	memset(block, 0, sizeof(block));
+	ssize_t block_size = load_block(NULL, block);
+	
+	bitcoin_blocks_db_t * db = blocks_db;
+	if(NULL == db)
+	{
+		db = bitcoin_blocks_db_init(NULL, NULL);
+		assert(db);
+	}
+	
+	
+	blocks_db_private_t * priv = db->priv;
+	assert(priv && db->priv == priv);
+	
+//	DB_ENV * env = priv->env;
+	DBT key, value;
+	memset(&key, 0, sizeof(key));
+	memset(&value, 0, sizeof(value));
+	
+	int rc = 0;
+	// 1. add block
+	rc = db->add(db, 
+		&block->hash, 
+		block_height, 
+		&block->hdr,
+		0, 0,
+		BITCOIN_MESSAGE_MAGIC_MAINNET,
+		block_size);
+	assert(0 == rc);
+	
+	// 2. find block
+	rc = db->find(db, &block->hash, NULL); 
+	assert(0 == rc);
+	
+	// 3. remove block
+	rc = db->remove(db, &block->hash);
+	assert(0 == rc);
+	
+	// 4. add and replace 
+	rc = db->add(db, 
+		&block->hash, 
+		block_height, 
+		&block->hdr,
+		0, 0,
+		BITCOIN_MESSAGE_MAGIC_MAINNET,
+		block_size);
+	assert(0 == rc);
+	
+	rc = db->add(db, 
+		&block->hash, 
+		1, 	// set block_height to 1
+		&block->hdr,
+		0, 0,
+		BITCOIN_MESSAGE_MAGIC_MAINNET,
+		block_size);
+	assert(0 == rc);
+	
+	if(NULL == blocks_db)
+	{
+		bitcoin_blocks_db_cleanup(db);
+		free(db);
+	}
+	
+	satoshi_block_cleanup(block);
+	return;
 	
 }
 

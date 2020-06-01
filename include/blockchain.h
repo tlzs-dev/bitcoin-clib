@@ -22,7 +22,7 @@ struct db_record_utxo_data
 	int64_t value;	// little-endian
 	uint32_t cb_script;
 	unsigned char pk_scripts[0];	// variable length data
-}__attribute__((packed));;
+}__attribute__((packed));
 struct db_record_utxo
 {
 	// key
@@ -121,7 +121,7 @@ typedef struct bitcoin_blocks_db
 	int (* add)(struct bitcoin_blocks_db * db, 
 		const uint256_t * block_hash,
 		int height,
-		const struct satoshi_block_header hdr,
+		const struct satoshi_block_header * hdr,
 		int file_index, 
 		int64_t start_pos, 
 		uint32_t magic, uint32_t block_size
