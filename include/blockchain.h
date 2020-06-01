@@ -156,7 +156,7 @@ typedef struct bitcoin_blockchain
 	
 	// TODO:
 	bitcoin_consensus_t * consensus;
-	void * mempoo;
+	void * mempool;
 	size_t mempool_size;
 }bitcoin_blockchain_t;
 

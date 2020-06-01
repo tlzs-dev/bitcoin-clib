@@ -735,6 +735,9 @@ blockchain_private_t * blockchain_private_new(bitcoin_blockchain_t * chain,
 	blockchain_private_t * priv = calloc(1, sizeof(*priv));
 	assert(priv);
 	
+	priv->chain = chain;
+	chain->priv = priv;
+	
 	if(NULL == db_home) db_home = "data";
 	if(NULL == blocks_dir) blocks_dir = "blocks";
 	strncpy(priv->db_home, db_home, sizeof(priv->db_home));
@@ -788,6 +791,7 @@ bitcoin_blockchain_t * bitcoin_blockchain_init(
 
 	DB_ENV * env = init_db_env(db_home);
 	assert(env);
+	chain->env = env;
 
 	bitcoin_utxo_db_t * utxo_db = bitcoin_utxo_db_init(chain->utxo_db, chain);
 	bitcoin_blocks_db_t * blocks_db = bitcoin_blocks_db_init(chain->blocks_db, chain);
@@ -842,8 +846,8 @@ int main(int argc, char ** argv)
 	char db_home[PATH_MAX] = "data";
 	check_path(db_home);
 	
-	test_utxoes(NULL, db_home);
-	test_blocks(NULL, db_home);
+	//~ test_utxoes(NULL, db_home);
+	//~ test_blocks(NULL, db_home);
 	test_blockchain(db_home);
 	
 	if(s_db_env)
@@ -859,6 +863,9 @@ void test_utxoes(bitcoin_utxo_db_t * utxo_db, const char * db_home)
 	bitcoin_utxo_db_t * db = utxo_db;
 	if(NULL == db) db = bitcoin_utxo_db_init(NULL, NULL);
 	assert(db);
+	
+	utxo_db_private_t * priv = db->priv;
+	assert(priv && db->priv == priv);
 	
 	int rc = 0;
 	// prepare data
@@ -896,7 +903,7 @@ void test_utxoes(bitcoin_utxo_db_t * utxo_db, const char * db_home)
 	
 	// deposit
 	// add utxo
-	DB_ENV * env = s_db_env;
+	DB_ENV * env = priv->env;
 	DB_TXN * txn = NULL;
 	int ret = env->txn_begin(env, NULL, &txn, 0);
 	if(ret)
@@ -1049,7 +1056,6 @@ void test_blocks(bitcoin_blocks_db_t * blocks_db, const char * db_home)
 		assert(db);
 	}
 	
-	
 	blocks_db_private_t * priv = db->priv;
 	assert(priv && db->priv == priv);
 	
@@ -1078,8 +1084,7 @@ void test_blocks(bitcoin_blocks_db_t * blocks_db, const char * db_home)
 	assert(0 == rc);
 	
 	// 4. add and replace 
-	rc = db->add(db, 
-		&block->hash, 
+	rc = db->add(db, &block->hash, 
 		block_height, 
 		&block->hdr,
 		0, 0,
@@ -1087,9 +1092,8 @@ void test_blocks(bitcoin_blocks_db_t * blocks_db, const char * db_home)
 		block_size);
 	assert(0 == rc);
 	
-	rc = db->add(db, 
-		&block->hash, 
-		1, 	// set block_height to 1
+	rc = db->add(db, &block->hash, 
+		1, 	// update block_height to 1
 		&block->hdr,
 		0, 0,
 		BITCOIN_MESSAGE_MAGIC_MAINNET,
@@ -1109,5 +1113,18 @@ void test_blocks(bitcoin_blocks_db_t * blocks_db, const char * db_home)
 
 void test_blockchain(const char * db_home)
 {
+	static const char * blocks_dir = "blocks";
+	bitcoin_blockchain_t * chain = bitcoin_blockchain_init(NULL, 
+		BITCOIN_MESSAGE_MAGIC_MAINNET,
+		db_home, blocks_dir, 0, NULL);
+	assert(chain);
+	
+	test_utxoes(chain->utxo_db, NULL);
+	test_blocks(chain->blocks_db, NULL);
+	
+	bitcoin_blockchain_cleanup(chain);
+	free(chain);
+
+	return;
 }
 #endif
