@@ -48,7 +48,7 @@
 /*********************************************************
  * varint
 *********************************************************/
-static inline size_t varint_calc_size(uint64_t value)
+size_t varint_calc_size(uint64_t value)
 {
 	if(value < 0XFD) return 1;
 	if(value <= 0xFFFF) return 3;

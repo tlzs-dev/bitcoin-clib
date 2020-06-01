@@ -47,6 +47,11 @@ test_blockchain: $(BASE_OBJECTS) $(UTILS_OBJECTS) $(OBJ_DIR)/satoshi-types.o $(S
 	echo "build $@ ..."
 	$(CC) -o $@ $(CFLAGS) $(LIBS) $^ -D_TEST_BITCOIN_BLOCKCHAIN -D_STAND_ALONE
 
+satoshi-script: test_satoshi-script
+test_satoshi-script: $(BASE_OBJECTS) $(UTILS_OBJECTS) $(OBJ_DIR)/satoshi-types.o $(SRC_DIR)/satoshi-script.c
+	echo "build $@ ..."
+	$(CC) -o $@ $(CFLAGS) $(LIBS) $^ -D_TEST_SATOSHI_SCRIPT -D_STAND_ALONE
+
 .PHONY: do_init clean
 do_init:
 	mkdir -p ../obj/base ../obj/utils

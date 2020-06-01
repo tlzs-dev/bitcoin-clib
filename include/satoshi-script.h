@@ -12,36 +12,36 @@ extern "C" {
 #include <stdint.h>
 #include <stdbool.h>
 
-enum satoshi_node_data_type
+enum satoshi_script_data_type
 {
-	satoshi_node_data_type_unknown = -1,
-	satoshi_node_data_type_null = 0,
-	satoshi_node_data_type_bool,
-	satoshi_node_data_type_op_code,
-	satoshi_node_data_type_varint,
-	satoshi_node_data_type_varstr,
-	satoshi_node_data_type_uint8,
-	satoshi_node_data_type_uint16,
-	satoshi_node_data_type_uint32,
-	satoshi_node_data_type_uint64,
-	satoshi_node_data_type_hash256,
-	satoshi_node_data_type_hash160,
-	satoshi_node_data_type_uchars,	// array, no-free
-	satoshi_node_data_type_pointer,	// need free
+	satoshi_script_data_type_unknown = -1,
+	satoshi_script_data_type_null = 0,
+	satoshi_script_data_type_bool,
+	satoshi_script_data_type_op_code,
+	satoshi_script_data_type_varint,
+	satoshi_script_data_type_varstr,
+	satoshi_script_data_type_uint8,
+	satoshi_script_data_type_uint16,
+	satoshi_script_data_type_uint32,
+	satoshi_script_data_type_uint64,
+	satoshi_script_data_type_hash256,
+	satoshi_script_data_type_hash160,
+	satoshi_script_data_type_uchars,	// array, no-free
+	satoshi_script_data_type_pointer,	// need free
 };
 
 enum satoshi_script_opcode
 {
 	// push value
 	satoshi_script_opcode_op_0 = 0x00,
-	satoshi_script_opcode_op_false = op_0,
+	satoshi_script_opcode_op_false = satoshi_script_opcode_op_0,
 	satoshi_script_opcode_op_pushdata1 = 0x4c,
 	satoshi_script_opcode_op_pushdata2 = 0x4d,
 	satoshi_script_opcode_op_pushdata4 = 0x4e,
 	satoshi_script_opcode_op_1negate = 0x4f,
 	satoshi_script_opcode_op_reserved = 0x50,
 	satoshi_script_opcode_op_1 = 0x51,
-	satoshi_script_opcode_op_true=op_1,
+	satoshi_script_opcode_op_true = satoshi_script_opcode_op_1,
 	satoshi_script_opcode_op_2 = 0x52,
 	satoshi_script_opcode_op_3 = 0x53,
 	satoshi_script_opcode_op_4 = 0x54,
@@ -171,7 +171,7 @@ enum satoshi_script_opcode
 
 typedef struct satoshi_script_data
 {
-	enum satoshi_node_data_type type;
+	enum satoshi_script_data_type type;
 	union
 	{
 		int8_t b;	// bool value
@@ -182,13 +182,12 @@ typedef struct satoshi_script_data
 	};
 	size_t size;	// data.size
 }satoshi_script_data_t;
-satoshi_script_data_t * satoshi_script_data_set(satoshi_script_data_t * sdata, enum satoshi_node_data_type type, const void * data, size_t size);
+ssize_t satoshi_script_data_set(satoshi_script_data_t * sdata, enum satoshi_script_data_type type, const void * data, size_t size);
 void satoshi_script_data_cleanup(satoshi_script_data_t * sdata);
-
 
 typedef struct satoshi_script_stack
 {
-	satoshi_script_data_t ** top;		// use array[] to impl.
+	satoshi_script_data_t ** data;		// use array[] to impl.
 	ssize_t max_size;				// max stack_array[] size
 	ssize_t count;					// current items count
 	void * user_data;
@@ -198,15 +197,15 @@ typedef struct satoshi_script_stack
 	
 	//~ ssize_t (* pop_n)(struct satoshi_script_stack * script, int n, satoshi_script_data_t *** p_sdata);
 }satoshi_script_stack_t;
-satoshi_script_stack_t * satoshi_script_stack_init(satoshi_script_stack_t * stack, ssize_t size);
+satoshi_script_stack_t * satoshi_script_stack_init(satoshi_script_stack_t * stack, ssize_t size, void * user_data);
 void satoshi_script_stack_cleanup(satoshi_script_stack_t * stack);
 
 typedef struct satoshi_script
 {
 	void * user_data;
 	void * priv;
-	script_stack_t main[1];
-	script_stack_t alt[1];
+	satoshi_script_stack_t main[1];
+	satoshi_script_stack_t alt[1];
 	int flags;
 	
 	int (* eval)(struct satoshi_script * scripts);
@@ -219,10 +218,6 @@ void satoshi_script_cleanup(satoshi_script_t * scripts);
 
 //~ int satoshi_script_eval(script_stack_t * op_stack, script_stack_t * params_stack, script_stack_t * alt_stack);
 //~ int satoshi_script_add(satoshi_script_t * script, const unsigned char op_code, const unsigned char * p_start, const unsigned char * p_end);
-
-
-
-
 
 #ifdef __cplusplus
 }

@@ -34,6 +34,7 @@ typedef struct varint
 {
 	unsigned char vch[1];
 }varint_t;
+size_t varint_calc_size(uint64_t value);
 
 /**
   * @ingroup varint
