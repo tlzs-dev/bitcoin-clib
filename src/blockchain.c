@@ -1108,7 +1108,6 @@ void test_blocks(bitcoin_blocks_db_t * blocks_db, const char * db_home)
 	
 	satoshi_block_cleanup(block);
 	return;
-	
 }
 
 void test_blockchain(const char * db_home)

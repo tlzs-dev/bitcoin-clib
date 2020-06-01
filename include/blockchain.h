@@ -75,12 +75,9 @@ bitcoin_utxo_db_t * bitcoin_utxo_db_init(bitcoin_utxo_db_t * db, void * user_dat
 void bitcoin_utxo_db_cleanup(bitcoin_utxo_db_t * db);
 
 
-
 /*******************************************************
  * BLOCKs
  ******************************************************/
-
-
 struct db_record_block_data
 {
 	int32_t height;
@@ -137,7 +134,6 @@ typedef struct bitcoin_blocks_db
 bitcoin_blocks_db_t * bitcoin_blocks_db_init(bitcoin_blocks_db_t * db, void * user_data);
 void bitcoin_blocks_db_cleanup(bitcoin_blocks_db_t * db);
 
-
 typedef void bitcoin_consensus_t;	///< @todo
 typedef struct bitcoin_blockchain
 {
@@ -146,12 +142,11 @@ typedef struct bitcoin_blockchain
 	char working_path[PATH_MAX];
 	
 	uint32_t magic;		// network magic
-	
 	int (* add)(struct bitcoin_blockchain blockchain, const satoshi_block_t * block);
 	int (* remove)(struct bitcoin_blockchain blockchain, const uint256_t * hash);
 
-	void * env;	// DB_ENV 
-	bitcoin_utxo_db_t utxo_db[1]; 
+	void * env;			// DB_ENV 
+	bitcoin_utxo_db_t 	utxo_db[1]; 
 	bitcoin_blocks_db_t blocks_db[1];
 	
 	// TODO:
@@ -164,11 +159,9 @@ bitcoin_blockchain_t * bitcoin_blockchain_init(bitcoin_blockchain_t * chain,
 	uint32_t magic,
 	const char * db_home,		// database home_dir
 	const char * blocks_dir,	// to store block_nnnnn.dat files 
-	ssize_t mempool_size,		
+	ssize_t mempool_size,
 	void * user_data);
 void bitcoin_blockchain_free(bitcoin_blockchain_t * blockchain);
-
-
 
 #ifdef __cplusplus
 }
