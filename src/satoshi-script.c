@@ -67,6 +67,7 @@ ssize_t satoshi_script_data_set(satoshi_script_data_t * sdata, enum satoshi_scri
 		assert(vint_size > 0);
 		sdata->u64 = varint_get((varint_t *)p);
 		sdata->size = 0;
+		payload_size = vint_size;
 		break;
 	case satoshi_script_data_type_varstr:
 		vint_size = varint_size((varint_t *)p);
@@ -91,27 +92,27 @@ ssize_t satoshi_script_data_set(satoshi_script_data_t * sdata, enum satoshi_scri
 	case satoshi_script_data_type_uint16:
 		payload_size = sizeof(uint16_t);
 		sdata->u64 = *(uint16_t *)data;
-		sdata->size = 0;
+		sdata->size = payload_size;
 		break;
 	case satoshi_script_data_type_uint32:
 		payload_size = sizeof(uint32_t);
 		sdata->u64 = *(uint32_t *)data;
-		sdata->size = 0;
+		sdata->size = payload_size;
 		break;
 	case satoshi_script_data_type_uint64:
 		payload_size = sizeof(uint64_t);
 		sdata->u64 = *(uint64_t *)data;
-		sdata->size = 0;
+		sdata->size = payload_size;
 		break;
 	case satoshi_script_data_type_hash256:
 		payload_size = 32;
 		memcpy(sdata->h256, data, 32);
-		sdata->size = 0;
+		sdata->size = 32;
 		break;
 	case satoshi_script_data_type_hash160:
 		payload_size = 20;
 		memcpy(sdata->h160, data, 20);
-		sdata->size = 0;
+		sdata->size = 20;
 		break;
 	case satoshi_script_data_type_uchars:
 		payload_size = size;
@@ -246,6 +247,7 @@ satoshi_script_data_t * satoshi_script_data_new(enum satoshi_script_data_type ty
 	assert(cb >= 0);
 	return sdata;
 }
+
 /*******************************************************
  * satoshi_script_stack
 *******************************************************/
@@ -329,7 +331,6 @@ void satoshi_script_stack_cleanup(satoshi_script_stack_t * stack)
 	return;
 }
 
-
 /***********************************************
  * satoshi_script
 ***********************************************/
@@ -345,10 +346,126 @@ void satoshi_script_stack_cleanup(satoshi_script_stack_t * stack)
 	//~ ssize_t (* parse)(struct satoshi_script * scripts, const unsigned char * payload, size_t length);
 //~ }satoshi_script_t;
 
+#define scripts_parser_error_handler(fmt, ...) do {	\
+		fprintf(stderr, "\e[33m" "%s@%d::%s(): " fmt "\e[39m" "\n",	\
+			__FILE__, __LINE__, __FUNCTION__,		\
+			##__VA_ARGS__ 							\
+		);											\
+		goto label_error;							\
+	} while(0)
+
 #ifndef UNUSED
 #define UNUSED(x) ((void)(x))
 #endif
-ssize_t scripts_parse(struct satoshi_script * scripts, const unsigned char * payload, size_t length)
+
+static inline int parse_op_hash(satoshi_script_stack_t * stack, uint8_t op_code, const unsigned char * p, const unsigned char * p_end)
+{
+	int rc = 0;
+	ripemd160_ctx_t ripemd[1];
+	sha256_ctx_t sha[1];
+	
+	satoshi_script_data_t * sdata = stack->pop(stack);
+	if(NULL == sdata)
+	{
+		scripts_parser_error_handler("invalid operation: opcode=%.2x, stack empty.", op_code); 
+	}
+	unsigned char hash[32];
+	size_t cb_hash = 32;
+	
+	unsigned char * data = NULL;
+	ssize_t length = 0;
+	enum satoshi_script_data_type type = satoshi_script_data_get(sdata, &data, &length);
+	assert(type != satoshi_script_data_type_unknown);
+	
+	switch(op_code)
+	{
+	case satoshi_script_opcode_op_ripemd160:
+		ripemd160_init(ripemd);
+		ripemd160_update(ripemd, data, length);
+		ripemd160_final(ripemd, hash);
+		cb_hash = 20;
+		type = satoshi_script_data_type_hash160;
+		break;
+	
+	case satoshi_script_opcode_op_sha256:	
+	case satoshi_script_opcode_op_hash160:
+	case satoshi_script_opcode_op_hash256:
+		sha256_init(sha);
+		sha256_update(sha, data, length);
+		sha256_final(sha, hash);
+		
+		type = satoshi_script_data_type_hash256;
+		if(op_code ==  satoshi_script_opcode_op_hash160)	// ripemd160(sha256(data))
+		{
+			ripemd160_ctx_t ripemd[1];
+			ripemd160_init(ripemd);
+			ripemd160_update(ripemd, hash, 32);
+			ripemd160_final(ripemd, hash);
+			cb_hash = 20;
+			type = satoshi_script_data_type_hash160;
+		}else if(op_code == satoshi_script_opcode_op_hash256) // sha256(sha256(data))
+		{
+			sha256_init(sha);
+			sha256_update(sha, hash, 32);
+			sha256_final(sha, hash);
+		}
+		break;
+	default:
+		scripts_parser_error_handler("unsupported hash_type: %.2x", op_code);
+	}
+	
+	rc = stack->push(stack, satoshi_script_data_new(type, hash, cb_hash));
+	assert(0 == rc);
+	
+	return 0;
+label_error:
+	return -1;
+}
+
+static inline ssize_t parse_op_push_data(satoshi_script_stack_t * stack, uint8_t op_code, const unsigned char * p, const unsigned char * p_end)
+{
+	assert(op_code <= satoshi_script_opcode_op_pushdata4);
+	int rc = 0;
+	ssize_t data_size = op_code;
+	ssize_t offset = 0;
+
+	switch(op_code)
+	{
+	case satoshi_script_opcode_op_pushdata1:
+		offset = 1;
+		if((p + offset) > p_end) scripts_parser_error_handler("invalid payload length.");
+		data_size = *(uint8_t *)p;
+		break;
+	case satoshi_script_opcode_op_pushdata2:
+		offset = 2;
+		if((p + offset) > p_end) scripts_parser_error_handler("invalid payload length.");
+		data_size = *(uint16_t *)p; 
+		
+		break;
+	case satoshi_script_opcode_op_pushdata4:
+		offset = 4;
+		if((p + offset) > p_end) scripts_parser_error_handler("invalid payload length.");
+		data_size = *(uint32_t *)p;
+		break;
+	default:
+		break;
+	}
+
+	p += offset;
+	if((p + data_size) > p_end) {
+		scripts_parser_error_handler("invalid payload length.");
+	}
+			
+	rc = stack->push(stack, 
+		satoshi_script_data_new(satoshi_script_data_type_pointer, p, data_size)
+	);
+	assert(0 == rc);
+	return (offset + data_size);
+label_error:
+	return -1;
+}
+
+static ssize_t scripts_parse(struct satoshi_script * scripts, const unsigned char * payload, size_t length)
 {
 	assert(scripts && payload && (length > 0));
 	bitcoin_blockchain_t * chain = scripts->user_data;
@@ -367,23 +484,14 @@ ssize_t scripts_parse(struct satoshi_script * scripts, const unsigned char * pay
 	{
 		int rc = 0;
 		uint8_t op_code = *p++;
-		satoshi_script_data_t * sdata = NULL; 
 		ssize_t data_size = 0;
-		ssize_t cb = 0;
-		
-		if(op_code < satoshi_script_opcode_op_pushdata1)
+	
+		if(op_code <= satoshi_script_opcode_op_pushdata4)
 		{
-			data_size = op_code;
-			sdata = calloc(1, sizeof(*sdata));
-			assert(sdata);
+			data_size = parse_op_push_data(main_stack, op_code, p, p_end);
 			
-			cb = satoshi_script_data_set(sdata, satoshi_script_data_type_pointer, p, data_size);
-			
-			assert(cb == data_size);
-			p += cb;
-			
-			rc = main_stack->push(main_stack, sdata);
-			assert(0 == rc);
+			if(data_size < 0) return -1;
+			p += data_size;
 			continue;
 		}
 		
@@ -395,69 +503,25 @@ ssize_t scripts_parse(struct satoshi_script * scripts, const unsigned char * pay
 			if(op_code == satoshi_script_opcode_op_pushdata1) { data_size = *(uint8_t *)p++; }
 			else if(op_code == satoshi_script_opcode_op_pushdata2) { data_size = *(uint16_t *)p; p += 2; }
 			else if(op_code == satoshi_script_opcode_op_pushdata4) { data_size = *(uint32_t *)p; p += 4; }
-
-			sdata = calloc(1, sizeof(*sdata));
-			assert(sdata);
 			
-			cb = satoshi_script_data_set(sdata, satoshi_script_data_type_pointer, p, data_size);
-			assert(cb == data_size);
-			p += cb;
+			if((p + data_size) > p_end) {
+				scripts_parser_error_handler("invalid payload length.");
+			}
 			
-			rc = main_stack->push(main_stack, sdata);
-			break;
+			rc = main_stack->push(main_stack, 
+				satoshi_script_data_new(satoshi_script_data_type_pointer, p, data_size)
+				);
+			assert(0 == rc);
+			p += data_size;
+			continue;
 		
 		// crypto
 		case satoshi_script_opcode_op_ripemd160:
 		case satoshi_script_opcode_op_hash160:
 		case satoshi_script_opcode_op_sha256:
 		case satoshi_script_opcode_op_hash256:
-			sdata = main_stack->pop(main_stack);
-			if(NULL == sdata) return -1;		// parse failed
-			else {
-				unsigned char * data = NULL;
-				ssize_t cb_data = 0;
-				int type = satoshi_script_data_get(sdata, &data, &cb_data);
-				assert(type > satoshi_script_data_type_null );
-				
-				unsigned char hash[32];
-				ssize_t cb_hash = 20;
-				
-				enum satoshi_script_data_type data_type = satoshi_script_data_type_hash160;
-				if(op_code == satoshi_script_opcode_op_ripemd160)
-				{
-					
-					ripemd160_ctx_t ctx[1];
-					ripemd160_init(ctx);
-					ripemd160_update(ctx, data, cb_data);
-					ripemd160_final(ctx, hash);
-					
-				}else if(op_code == satoshi_script_opcode_op_hash160)
-				{
-					hash160(data, cb_data, hash);
-				}else
-				{
-					sha256_ctx_t ctx[1];
-					sha256_init(ctx);
-					sha256_update(ctx, data, cb_data);
-					sha256_final(ctx, hash);
-					
-					if(op_code == satoshi_script_opcode_op_hash256)
-					{
-						sha256_init(ctx);
-						sha256_update(ctx, hash, 32);
-						sha256_final(ctx, hash);
-					}
-					cb_hash = 32;
-					data_type = satoshi_script_data_type_hash256;
-				}
-				free(data);
-				satoshi_script_data_cleanup(sdata);
-				free(sdata);
-			
-				rc = main_stack->push(main_stack,
-					satoshi_script_data_new(data_type, hash, cb_hash));
-				assert(0 == rc);
-			}
+			rc = parse_op_hash(main_stack, op_code, p, p_end); 
+			if(rc < 0) return -1;
 			break;
 		default:
 			return -1;	// parse failed
@@ -467,7 +531,10 @@ ssize_t scripts_parse(struct satoshi_script * scripts, const unsigned char * pay
 	
 	assert(p <= p_end);
 	return (p_end - payload);
+label_error:
+	return -1;
 }
+
 satoshi_script_t * satoshi_script_init(satoshi_script_t * scripts, void * user_data)
 {
 	if(NULL == scripts) scripts = calloc(1, sizeof(*scripts));
@@ -488,13 +555,13 @@ void satoshi_script_reset(satoshi_script_t * scripts)
 	satoshi_script_stack_cleanup(scripts->main);
 	satoshi_script_stack_cleanup(scripts->alt);
 }
+
 void satoshi_script_cleanup(satoshi_script_t * scripts)
 {
 	if(NULL == scripts) return;
 	satoshi_script_reset(scripts);
 	return;
 }
-
 
 #if defined(_TEST_SATOSHI_SCRIPT) && defined(_STAND_ALONE)
 int main(int argc, char **argv)
