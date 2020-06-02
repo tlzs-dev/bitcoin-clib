@@ -497,24 +497,6 @@ static ssize_t scripts_parse(struct satoshi_script * scripts, const unsigned cha
 		
 		switch(op_code)
 		{
-		case satoshi_script_opcode_op_pushdata1:
-		case satoshi_script_opcode_op_pushdata2:
-		case satoshi_script_opcode_op_pushdata4:
-			if(op_code == satoshi_script_opcode_op_pushdata1) { data_size = *(uint8_t *)p++; }
-			else if(op_code == satoshi_script_opcode_op_pushdata2) { data_size = *(uint16_t *)p; p += 2; }
-			else if(op_code == satoshi_script_opcode_op_pushdata4) { data_size = *(uint32_t *)p; p += 4; }
-			
-			if((p + data_size) > p_end) {
-				scripts_parser_error_handler("invalid payload length.");
-			}
-			
-			rc = main_stack->push(main_stack, 
-				satoshi_script_data_new(satoshi_script_data_type_pointer, p, data_size)
-				);
-			assert(0 == rc);
-			p += data_size;
-			continue;
-		
 		// crypto
 		case satoshi_script_opcode_op_ripemd160:
 		case satoshi_script_opcode_op_hash160:
