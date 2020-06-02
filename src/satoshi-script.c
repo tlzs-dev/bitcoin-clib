@@ -38,9 +38,57 @@
 #include "blockchain.h"
 #include "crypto.h"
 
+
+#ifndef UNUSED
+#define UNUSED(x) ((void)(x))
+#endif
+
+#define AUTO_FREE_PTR __attribute__((cleanup(auto_free_ptr)))
+static void auto_free_ptr(void * ptr)
+{
+	void * p = *(void **)ptr;
+	if(p)
+	{
+		free(p);
+		*(void **)ptr = NULL;
+	}
+}
+
+
 /*******************************************************
  * satoshi_script_data
  *******************************************************/
+int satoshi_script_data_compare(const satoshi_script_data_t * sdata1, const satoshi_script_data_t * sdata2)
+{
+	assert(sdata1 && sdata2);
+	if(sdata1->type != sdata2->type) return -1;
+	enum satoshi_script_data_type type = sdata1->type;
+	
+	if(type == satoshi_script_data_type_unknown ||
+		type == satoshi_script_data_type_null) return -1;
+		
+	switch(type)
+	{
+	case satoshi_script_data_type_bool:
+	case satoshi_script_data_type_op_code:
+		return (int)(sdata1->b - sdata2->b);
+	case satoshi_script_data_type_varint:
+	case satoshi_script_data_type_uint8:
+	case satoshi_script_data_type_uint16:
+	case satoshi_script_data_type_uint32:
+	case satoshi_script_data_type_uint64:
+		if(sdata1->u64 == sdata2->u64) return 0;
+		return -1;
+	default:
+		if(sdata1->size > 0 && (sdata1->size == sdata2->size))
+		{
+			return memcmp(sdata1->data, sdata2->data, sdata1->size);
+		}
+		break;
+	}
+	return -1;
+}
+ 
 ssize_t satoshi_script_data_set(satoshi_script_data_t * sdata, enum satoshi_script_data_type type, const void * data, size_t size)
 {
 	assert(type != satoshi_script_data_type_unknown);
@@ -136,7 +184,7 @@ ssize_t satoshi_script_data_set(satoshi_script_data_t * sdata, enum satoshi_scri
 	return payload_size;
 }
 
-enum satoshi_script_data_type  satoshi_script_data_get(satoshi_script_data_t * sdata, unsigned char ** p_data, ssize_t * p_length)
+enum satoshi_script_data_type  satoshi_script_data_get(const satoshi_script_data_t * sdata, unsigned char ** p_data, ssize_t * p_length)
 {
 	assert(sdata && p_data && p_length);
 	enum satoshi_script_data_type type = sdata->type;
@@ -223,6 +271,30 @@ enum satoshi_script_data_type  satoshi_script_data_get(satoshi_script_data_t * s
 	if(p_length) *p_length = length;
 	return type;
 }
+
+satoshi_script_data_t * satoshi_script_data_clone(const satoshi_script_data_t * sdata)
+{
+	//~ AUTO_FREE_PTR unsigned char * data = NULL;
+	//~ ssize_t length = 0;
+	//~ enum satoshi_script_data_type type = satoshi_script_data_get(sdata, &data, &length);
+	//~ assert(type != satoshi_script_data_type_unknown);
+	
+	//~ return satoshi_script_data_new(type, data, length);
+	assert(sdata && (sdata->type != satoshi_script_data_type_unknown));
+	satoshi_script_data_t * new_data = calloc(1, sizeof(*new_data));
+	assert(new_data);
+	switch(sdata->type)
+	{
+	case satoshi_script_data_type_varstr:
+	case satoshi_script_data_type_pointer:
+		satoshi_script_data_set(new_data, sdata->type, sdata->data, sdata->size);
+		break;
+	default:
+		memcpy(new_data, sdata, sizeof(*new_data));
+	}
+	return new_data;
+}
+
 
 void satoshi_script_data_cleanup(satoshi_script_data_t * sdata)
 {
@@ -354,9 +426,6 @@ void satoshi_script_stack_cleanup(satoshi_script_stack_t * stack)
 		goto label_error;							\
 	} while(0)
 
-#ifndef UNUSED
-#define UNUSED(x) ((void)(x))
-#endif
 
 static inline int parse_op_hash(satoshi_script_stack_t * stack, uint8_t op_code, const unsigned char * p, const unsigned char * p_end)
 {
@@ -372,7 +441,7 @@ static inline int parse_op_hash(satoshi_script_stack_t * stack, uint8_t op_code,
 	unsigned char hash[32];
 	size_t cb_hash = 32;
 	
-	unsigned char * data = NULL;
+	AUTO_FREE_PTR unsigned char * data = NULL;
 	ssize_t length = 0;
 	enum satoshi_script_data_type type = satoshi_script_data_get(sdata, &data, &length);
 	assert(type != satoshi_script_data_type_unknown);
@@ -465,6 +534,116 @@ label_error:
 	return -1;
 }
 
+static inline int parse_op_dup(satoshi_script_stack_t * stack)
+{
+	int rc = 0;
+	if(stack->count <= 0)
+	{
+		scripts_parser_error_handler("invalid operation: opcode=%.2x, stack empty.", 
+			satoshi_script_opcode_op_dup);
+	}
+	const satoshi_script_data_t * sdata = stack->data[stack->count - 1];
+	assert(sdata);
+	
+	rc = stack->push(stack, satoshi_script_data_clone(sdata));
+	return rc;
+label_error:
+	return -1;
+}
+
+
+static inline int parse_op_equalverify(satoshi_script_stack_t * stack)
+{
+	if(stack->count < 2 )
+	{
+		scripts_parser_error_handler("invalid operation: opcode=%.2x, stack empty.", 
+			satoshi_script_opcode_op_equalverify);
+	}
+	satoshi_script_data_t * sdata1 = stack->pop(stack);
+	satoshi_script_data_t * sdata2 = stack->pop(stack);
+	
+	int rc = satoshi_script_data_compare(sdata1, sdata2);
+	
+	satoshi_script_data_cleanup(sdata1);
+	satoshi_script_data_cleanup(sdata2);
+	free(sdata1);
+	free(sdata2);
+	return rc;
+label_error:
+	return -1;
+}
+
+
+static inline int parse_op_checksig(satoshi_script_stack_t * stack, satoshi_script_t * scripts)
+{
+	int8_t ok = 0;
+	if(stack->count <= 0)
+	{
+		scripts_parser_error_handler("invalid operation: opcode=%.2x, stack empty.", 
+			satoshi_script_opcode_op_equalverify);
+	}
+	//~ satoshi_script_data_t * sdata = stack->pop(stack);
+	
+	//~ AUTO_FREE_PTR unsigned char * sig_scripts = NULL;
+	//~ ssize_t cb_scripts = 0;
+	//~ satoshi_script_data_get(sdata, &sig_scripts, &cb_script);
+	//~ satoshi_script_data_cleanup(sdata);
+	//~ free(sdata);
+	
+	//~ assert(p && cb_script > 0);	///< @todo: 
+	//~ unsigned char * p = sig_scripts;
+	//~ unsigned char * p_end = p + cb_script;
+	
+	//~ ssize_t cb_sig_with_type = varstr_size((varstr_t *)p);
+	//~ assert(cb_sig > 0);
+	//~ p++;
+	
+	//~ unsigned char * vstr_sig = p;
+	//~ ssize_t cb_sig = varstr_size((varstr_t *)p);
+	//~ assert(cb_sig_with_type == (cb_sig + 1));
+	//~ p += cb_sig;
+	
+	//~ uint32_t hash_type = *p++; 
+
+	//~ unsigned char * vstr_pubkey = p;
+	//~ p += varstr_size((varstr_t *)p);
+	
+	//~ assert(p == p_end);
+	
+	//~ secp256k1_context * secp = secp256k1_context_create(
+		//~ SECP256K1_FLAGS_BIT_CONTEXT_VERIFY | SECP256K1_CONTEXT_VERIFY);
+	//~ assert(secp);
+	
+	//~ secp256k1_pubkey pubkey;
+	//~ secp256k1_ecdsa_signature sig;
+	
+	//~ ok = secp256k1_ec_pubkey_parse(secp, &pubkey, 
+		//~ vstr_pubkey + varint_size((varint_t *)vstr_pubkey),
+		//~ varint_get((varint_t *)vstr_pubkey)
+	//~ );
+	//~ assert(ok);
+	
+	//~ ok = secp256k1_ecdsa_signature_parse_der(secp, &sig, 
+		//~ vstr_sig + varint_size((varint_t *)vstr_sig),
+		//~ varint_get((varint_t *)vstr_sig)
+	//~ );
+	//~ assert(ok);
+		
+	//~ uint256_t hash;
+	//~ memset(&hash, 0, sizeof(hash));
+	//~ satoshi_script_get_rawtx_hash(scripts, &hash);
+	
+	//~ ok = secp256k1_ecdsa_verify(secp, &sig, (unsigned char *)&hash, &pubkey);
+	
+	//~ secp256k1_context_destroy(secp);
+	
+	if(!ok) goto label_error;
+	return 0;
+label_error:
+	return -1;
+}
+
+
 static ssize_t scripts_parse(struct satoshi_script * scripts, const unsigned char * payload, size_t length)
 {
 	assert(scripts && payload && (length > 0));
@@ -503,16 +682,26 @@ static ssize_t scripts_parse(struct satoshi_script * scripts, const unsigned cha
 		case satoshi_script_opcode_op_sha256:
 		case satoshi_script_opcode_op_hash256:
 			rc = parse_op_hash(main_stack, op_code, p, p_end); 
-			if(rc < 0) return -1;
+			break;
+		case satoshi_script_opcode_op_dup:
+			rc = parse_op_dup(main_stack);
+			break;
+		case satoshi_script_opcode_op_equalverify:
+			rc = parse_op_equalverify(main_stack);
+			break;
+		case satoshi_script_opcode_op_checksig:
+			rc = parse_op_checksig(main_stack, scripts);
 			break;
 		default:
-			return -1;	// parse failed
+			goto label_error;	// parse failed
 		}
+		if(rc < 0) goto label_error;
 		
 	}
 	
 	assert(p <= p_end);
 	return (p_end - payload);
+	
 label_error:
 	return -1;
 }
