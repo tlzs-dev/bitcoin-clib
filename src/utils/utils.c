@@ -114,7 +114,11 @@ ssize_t bin2hex(const void * data, size_t length, char ** p_hex)
 
 ssize_t hex2bin(const char * hex, size_t length, void ** p_data)
 {
-	if(length == 0 || NULL == hex) return 0;
+	if(NULL == hex) return 0;
+	if(((ssize_t)length) <= 0) length = strlen(hex);
+	if(length == 0) return 0;
+	
+	
 	if(length % 2) return -1;
 	ssize_t size = length / 2;
 	

@@ -580,7 +580,7 @@ static inline int parse_op_checksig(satoshi_script_stack_t * stack, satoshi_scri
 	if(stack->count <= 0)
 	{
 		scripts_parser_error_handler("invalid operation: opcode=%.2x, stack empty.", 
-			satoshi_script_opcode_op_equalverify);
+			satoshi_script_opcode_op_checksig);
 	}
 	//~ satoshi_script_data_t * sdata = stack->pop(stack);
 	
@@ -735,9 +735,140 @@ void satoshi_script_cleanup(satoshi_script_t * scripts)
 }
 
 #if defined(_TEST_SATOSHI_SCRIPT) && defined(_STAND_ALONE)
+
+/*****************************************/
+
+
+
+static const char * s_hex_p2sh_txns[2] = {
+// prev_outpoint
+// # txid= LE"40eee3ae1760e3a8532263678cdf64569e6ad06abc133af64f735e52562bccc8"	
+"01000000"
+"01"
+"da75479f893cccfaa8e4558b28ec7cb4309954389f251f2212eabad7d7fda342"
+"00000000"
+"6a"
+"47"
+"3044"
+"022048d1468895910edafe53d4ec4209192cc3a8f0f21e7b9811f83b5e419bfb57e0"
+"02203fef249b56682dbbb1528d4338969abb14583858488a3a766f609185efe68bca"
+"01"
+"21"
+"031a455dab5e1f614e574a2f4f12f22990717e93899695fb0d81e4ac2dcfd25d00"
+"ffffffff"
+"01"
+"301b0f0000000000"
+"17a914e9c3dd0c07aac76179ebc76a6c78d4d67c6c160a"
+"87"
+"00000000",
+
+//# txid = LE"7edb32d4ffd7a385b763c7a8e56b6358bcd729e747290624e18acdbe6209fc45"
+"01000000"
+"01"
+"c8cc2b56525e734ff63a13bc6ad06a9e5664df8c67632253a8e36017aee3ee40" // big-endian
+"00000000"
+"90"
+"00"
+"48"
+"3045"
+"022100ad0851c69dd756b45190b5a8e97cb4ac3c2b0fa2f2aae23aed6ca97ab33bf883"
+"02200b248593abc1259512793e7dea61036c601775ebb23640a0120b0dba2c34b790"
+"01"
+"45"
+"51"
+"41"
+"042f90074d7a5bf30c72cf3a8dfd1381bdbd30407010e878f3a11269d5f74a58788505cdca22ea6eab7cfb40dc0e07aba200424ab0d79122a653ad0c7ec9896bdf"
+"51"
+"ae"
+"feffffff"
+"01"
+"20f40e0000000000"
+"1976a9141d30342095961d951d306845ef98ac08474b36a0"
+"88ac"
+"a7270400"
+};
+
+#define dump_line(prefix, data, length) do {							\
+		printf(prefix); dump(data, length); printf("\e[39m\n");	\
+	} while(0)
+
 int main(int argc, char **argv)
 {
+// 	static const char * pkscripts_hex_of_prev_tx = 
+// //~ "0100000001fa19382fd7a4834f0d420b273888b223ed821996c0efbe2756e5dfe12b653b74000000006c49304602210091f4ad9e90bcb930e75b9cf0d48417f9d3966c15d40ef82f2a0fae1317368d94022100c8c6390eb304b52f2626a3de64bbeca1a6c2b1afcf65e5366d232c403d007d6b012103c58187d401a1a97a29caaba5f03d687b06d24e569816a471b3f3a872fcc31760ffffffff"
+// //~ "02"	// txouts_count
+// //~ // txouts[0]:
+// //~ "40420f0000000000"
+// "1976a91412a9abf5c32392f38bd8a1f57d81b1aeecc5699588ac"
+// // txouts[1]
+// //~ "b0608b3b00000000"
+// //~ "1976a9141d30342095961d951d306845ef98ac08474b36a088ac"
+// //~ "00000000"
+//	;
+
+
+	unsigned char * p2sh_txns_data[2] = {NULL, NULL};
+	ssize_t cb_txns[2] = { 0 };
 	
+	cb_txns[0] = hex2bin(s_hex_p2sh_txns[0], -1, (void **)&p2sh_txns_data[0]);
+	cb_txns[1] = hex2bin(s_hex_p2sh_txns[1], -1, (void **)&p2sh_txns_data[1]);
+	
+	assert(cb_txns[0] > 0 && p2sh_txns_data[0]);
+	assert(cb_txns[1] > 0 && p2sh_txns_data[1]);
+	
+	satoshi_tx_t txns[2];
+	memset(txns, 0, sizeof(txns));
+	ssize_t cb = 0;
+	
+	cb = satoshi_tx_parse(&txns[0], cb_txns[0], p2sh_txns_data[0]);
+	assert(cb == cb_txns[0]);
+	
+	cb = satoshi_tx_parse(&txns[1], cb_txns[1], p2sh_txns_data[1]);
+	assert(cb == cb_txns[1]);
+	
+	satoshi_tx_t raw_tx[1];
+	memset(raw_tx, 0, sizeof(raw_tx));
+	cb = satoshi_tx_parse(raw_tx, cb_txns[1], p2sh_txns_data[1]);
+	assert(cb == cb_txns[1]);
+	
+	uint256_t prev_hash;
+	memset(&prev_hash, 0, sizeof(prev_hash));
+	hash256(p2sh_txns_data[0], cb_txns[0], (unsigned char *)&prev_hash);
+	dump_line("prev_hash: ", &prev_hash, 32);
+	
+	assert(0 == memcmp(&prev_hash, &txns[1].txins[0].outpoint.prev_hash, 32));
+	
+	int index = txns[1].txins[0].outpoint.index;
+	assert(index == 0);
+	satoshi_txout_t * prev_txout = &txns[0].txouts[index];
+	assert(prev_txout);
+	
+	assert(raw_tx->txin_count == 1);
+	satoshi_txin_t * txin = &raw_tx->txins[0];
+	assert(txin);
+	free(txin->scripts);
+	txin->scripts = prev_txout->scripts;			// use prev_txout's pointer directly, should be set to NULL before cleanup (to avoid double free)
+	txin->cb_script = prev_txout->cb_script;
+	
+	AUTO_FREE_PTR unsigned char * rawtx_data = NULL;
+	ssize_t cb_rawtx = satoshi_tx_serialize(raw_tx, &rawtx_data);
+	assert(cb_rawtx > 0 && rawtx_data);
+	
+	txin->scripts = NULL; // set to NULL to avoid double free
+	
+	uint256_t tx_hash;
+	hash256(rawtx_data, cb_rawtx, (unsigned char *)&tx_hash);
+	
+	printf("rawtx_hash: ");
+	dump(&tx_hash, 32);
+	printf("\n");
+	
+	satoshi_tx_cleanup(raw_tx);
+	satoshi_tx_cleanup(&txns[0]);
+	satoshi_tx_cleanup(&txns[1]);
+	
+	free(p2sh_txns_data[0]);
+	free(p2sh_txns_data[1]);
 	return 0;
 }
 #endif

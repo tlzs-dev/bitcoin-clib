@@ -42,7 +42,7 @@
 #include <poll.h>
 
 #include "utils.h"
-#include "satoshi-type.h"
+#include "satoshi-types.h"
 #include "bitcoin-consensus.h"
 #include "crypto.h"
 #include "satoshi-script.h"
