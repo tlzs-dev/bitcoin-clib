@@ -811,19 +811,6 @@ static const char * s_hex_txns[3] = {
 
 int main(int argc, char **argv)
 {
-// 	static const char * pkscripts_hex_of_prev_tx = 
-// //~ "0100000001fa19382fd7a4834f0d420b273888b223ed821996c0efbe2756e5dfe12b653b74000000006c49304602210091f4ad9e90bcb930e75b9cf0d48417f9d3966c15d40ef82f2a0fae1317368d94022100c8c6390eb304b52f2626a3de64bbeca1a6c2b1afcf65e5366d232c403d007d6b012103c58187d401a1a97a29caaba5f03d687b06d24e569816a471b3f3a872fcc31760ffffffff"
-// //~ "02"	// txouts_count
-// //~ // txouts[0]:
-// //~ "40420f0000000000"
-// "1976a91412a9abf5c32392f38bd8a1f57d81b1aeecc5699588ac"
-// // txouts[1]
-// //~ "b0608b3b00000000"
-// //~ "1976a9141d30342095961d951d306845ef98ac08474b36a088ac"
-// //~ "00000000"
-//	;
-
-
 	unsigned char * txns_data[3] = {NULL};
 	ssize_t cb_txns[3] = { 0 };
 	
