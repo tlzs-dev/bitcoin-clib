@@ -52,6 +52,7 @@ ssize_t crypto_privkey_export(crypto_context_t * crypto,
 	const crypto_privkey_t * privkey, 
 	unsigned char ** p_secdata);
 void crypto_privkey_free(crypto_privkey_t * privkey);
+const crypto_pubkey_t * crypto_privkey_get_pubkey(crypto_privkey_t * privkey);
 
 crypto_pubkey_t * crypto_pubkey_import(crypto_context_t * crypto, const unsigned char * pubkey_data, size_t length);
 ssize_t crypto_pubkey_export(crypto_context_t * crypto, 

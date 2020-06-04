@@ -65,7 +65,13 @@ struct crypto_privkey
 	unsigned char key[PRIVKEY_SIZE];
 	size_t length;
 	struct crypto_pubkey pubkey[1];
-}; 
+};
+
+const crypto_pubkey_t * crypto_privkey_get_pubkey(crypto_privkey_t * privkey)
+{
+	if(NULL == privkey || privkey->length != 32) return NULL;
+	return privkey->pubkey;
+}
 
 crypto_privkey_t * crypto_privkey_import(crypto_context_t * crypto, const unsigned char * secdata, ssize_t length)
 {
@@ -235,10 +241,11 @@ void crypto_context_private_free(crypto_context_private_t * priv)
 static int crypto_sign(struct crypto_context * crypto, 
 	const unsigned char * msg, size_t msg_len,
 	const crypto_privkey_t * privkey, 
-	unsigned char ** p_signatuer_der, ssize_t * p_cb_sig_der)
+	unsigned char ** p_sig_der, ssize_t * p_cb_sig_der)
 {
 	assert(crypto && crypto->priv);
 	assert(privkey && msg);
+	assert(p_sig_der && p_cb_sig_der);
 		
 	crypto_context_private_t * priv = crypto->priv;
 	secp256k1_context * secp = priv->sign_ctx;
@@ -251,7 +258,25 @@ static int crypto_sign(struct crypto_context * crypto,
 		(unsigned char *)msg, 
 		privkey->key, 
 		secp256k1_nonce_function_default, NULL);
-	if(ok > 0) return 0;
+	if(ok > 0) {
+		unsigned char sig_buffer[100] = { 0 };
+		size_t cb_buffer = sizeof(sig_buffer);
+		
+		ok = secp256k1_ecdsa_signature_serialize_der(secp, sig_buffer, &cb_buffer, sig);
+		if(ok)
+		{
+			assert(cb_buffer > 0);
+			*p_cb_sig_der = cb_buffer;
+			unsigned char * sig_der = *p_sig_der;
+			if(NULL == sig_der) {
+				sig_der = malloc(cb_buffer);
+				assert(sig_der);
+				*p_sig_der = sig_der;
+			}
+			memcpy(sig_der, sig_buffer, cb_buffer);
+			return 0;
+		} 
+	}
 	return -1;
 }
 static int crypto_verify(struct crypto_context * crypto, 
@@ -366,8 +391,8 @@ void test_encrypt(int argc, char ** argv)
 /**************************************************************************
  * test_sign_and_verify
  *************************************************************************/
-#define AUTO_FREE_PTR __attribute__((cleanup(auto_free_ptr)))
-static void auto_free_ptr(void * ptr)
+#define AUTO_FREE_PTR __attribute__((cleanup(auto_free_ptr))) 
+void auto_free_ptr(void * ptr)
 {
 	void * p = *(void **)ptr;
 	if(p)
@@ -399,39 +424,91 @@ void auto_free_crypto_pubkey(void * ptr)
 	}
 }
 
+static void prepare_data(
+	unsigned char rawtx_hash[/* 32 */],
+	unsigned char ** p_pubkey_data, ssize_t * p_cb_pubkey_data,
+	unsigned char ** p_sig_der, ssize_t * p_cb_sig_der)
+{
+	// use tx_data from satoshi-script.c::TEST::txns[1]
+	// calculated by tests/test_satoshi-script
+	static const char * rawtx_hash_hex = "e6d9603313a33b0b0e34f19247c9cc3d56052c6f4e9184fb4cc7cf73e7f8cd6a";
+	
+	static const char * pubkey_hex 	// satoshi-script.c::TEST::txns[1].txins[0].pubkey
+			= "031a455dab5e1f614e574a2f4f12f22990717e93899695fb0d81e4ac2dcfd25d00";	
+	
+	static const char * sig_der_hex // satoshi-script.c::TEST::txns[1].txins[0].signatures
+		= "3044"
+			"022048d1468895910edafe53d4ec4209192cc3a8f0f21e7b9811f83b5e419bfb57e0"
+			"02203fef249b56682dbbb1528d4338969abb14583858488a3a766f609185efe68bca";
+			
+	ssize_t cb_hash = hex2bin(rawtx_hash_hex, -1, (void **)&rawtx_hash);
+	assert(cb_hash == 32);
+	
+	*p_cb_pubkey_data = hex2bin(pubkey_hex, -1, (void **)p_pubkey_data);
+	*p_cb_sig_der = hex2bin(sig_der_hex, -1, (void **)p_sig_der);
+	
+	assert(*p_pubkey_data && *p_sig_der);
+	return;
+}
+
 void test_sign_and_verify(int argc, char ** argv)
 {
-	// test verify:
-	static const char * rawtx_hash_hex = "e6d9603313a33b0b0e34f19247c9cc3d56052c6f4e9184fb4cc7cf73e7f8cd6a";	// calculated by tests/test_satoshi-script
-	static const char * pubkey_hex = "031a455dab5e1f614e574a2f4f12f22990717e93899695fb0d81e4ac2dcfd25d00";		// satoshi-script.c::TEST::txns[1].txins[0].pubkey
-	static const char * sig_der_hex = "3044"
-		"022048d1468895910edafe53d4ec4209192cc3a8f0f21e7b9811f83b5e419bfb57e0"
-		"02203fef249b56682dbbb1528d4338969abb14583858488a3a766f609185efe68bca";									// satoshi-script.c::TEST::txns[1].txins[0].signatures
+	int rc = 0;
+// test1.  verify():
+	unsigned char rawtx_hash[32] = { 0 };
+	unsigned char * pubkey_data = NULL;
+	unsigned char * sig_der = NULL;
+	ssize_t cb_pubkey = 0;
+	ssize_t cb_sig_der = 0;
 	
-	AUTO_FREE_PTR unsigned char * rawtx_hash = NULL;
-	AUTO_FREE_PTR unsigned char * pubkey_data = NULL;
-	AUTO_FREE_PTR unsigned char * sig_der = NULL;
+	prepare_data(rawtx_hash, 
+		&pubkey_data, &cb_pubkey,
+		&sig_der, &cb_sig_der);
 	
+	// test verify():
 	crypto_context_t * crypto = crypto_context_init(NULL, crypto_backend_libsecp256, NULL);
 	assert(crypto);
 	
-	
-	ssize_t cb_pubkey = hex2bin(pubkey_hex, -1, (void **)&pubkey_data);
-	assert(cb_pubkey > 0 && pubkey_data);
-	AUTO_FREE_PUBKEY crypto_pubkey_t * pubkey = crypto_pubkey_import(crypto, pubkey_data, cb_pubkey);
+	crypto_pubkey_t * pubkey = crypto_pubkey_import(crypto, pubkey_data, cb_pubkey);
 	assert(pubkey);
 	
-	ssize_t cb_sig_der = hex2bin(sig_der_hex, -1, (void **)&sig_der);
-	assert(cb_sig_der > 0 && sig_der);
-	
-	ssize_t cb_hash = hex2bin(rawtx_hash_hex, -1, (void **)&rawtx_hash);
-	assert(cb_hash == 32 && rawtx_hash);
-	
-	int rc = crypto->verify(crypto, rawtx_hash, cb_hash, 
+	rc = crypto->verify(crypto, rawtx_hash, 32, 
 		pubkey, 
 		sig_der, cb_sig_der);
 	assert(0 == rc);
+	printf("verify txns[1]: [OK]\n");
 	
+	// cleanup
+	crypto_pubkey_free(pubkey); pubkey = NULL;
+
+	free(pubkey_data); pubkey_data = NULL;
+	free(sig_der); sig_der = NULL;
+	
+	
+// test2. sign and verify
+	unsigned char sec_data[32] = {	// Pseudo-privkey
+		0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+		0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
+	};
+	
+	AUTO_FREE_PRIVKEY crypto_privkey_t * privkey = crypto_privkey_import(crypto, sec_data, 32);
+	assert(privkey);
+	
+	pubkey = (crypto_pubkey_t *)crypto_privkey_get_pubkey(privkey);
+	assert(pubkey);
+	
+	rc = crypto->sign(crypto, rawtx_hash, 32,
+		privkey, &sig_der, &cb_sig_der);
+	assert(0 == rc);
+	printf("sign: [OK]\n");
+	
+	rc = crypto->verify(crypto, rawtx_hash, 32,
+		pubkey, sig_der, cb_sig_der);
+	assert(0 == rc);
+	printf("verify: [OK]\n");
+	
+	
+	free(sig_der); sig_der = NULL;
 	
 	crypto_context_cleanup(crypto);
 	free(crypto);
