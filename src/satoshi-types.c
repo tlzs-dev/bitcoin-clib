@@ -319,28 +319,6 @@ ssize_t uint256_from_string(uint256_t * u256, int from_little_endian, const char
  * @ingroup satoshi_tx
  * 
  */
-//~ typedef struct satoshi_outpoint
-//~ {
-	//~ uint8_t prev_hash[32];
-	//~ uint32_t index;
-//~ }satoshi_outpoint_t;
-
-
-//~ typedef struct satoshi_txin
-//~ {
-	//~ satoshi_outpoint_t outpoint;
-	//~ int flags;
-	
-	//~ ssize_t cb_sig_scripts;
-	//~ unsigned char sig_scripts;
-	//~ uint32_t hash_type;
-	
-	//~ ssize_t cb_pubkey;
-	//~ unsigned char * pubkey_data;
-
-	//~ uint32_t sequence;
-//~ }satoshi_txin_t;
-
 #ifdef _DEBUG
 #define message_parser_error_handler(fmt, ...) do { \
 		fprintf(stderr, "\e31m[ERROR]::%s@%d::%s(): " fmt "\e[39m" "\n", \
@@ -486,42 +464,6 @@ ssize_t satoshi_txin_parse(satoshi_txin_t * txin, ssize_t length, const void * p
 label_error:
 	satoshi_txin_cleanup(txin);
 	return -1;
-}
-
-static inline ssize_t coinbase_txin_serialize(const satoshi_txin_t * txin, unsigned char ** p_data)
-{
-	ssize_t cb_payload = sizeof(struct satoshi_outpoint) 
-			+ varint_calc_size(txin->cb_coinbase_script) + txin->cb_coinbase_script
-			+ sizeof(uint32_t);
-	
-	if(NULL == p_data) return cb_payload;
-	unsigned char * payload = *p_data;
-	if(NULL == payload)
-	{
-		payload = malloc(cb_payload);
-		assert(payload);
-		
-		*p_data = payload;
-	}
-	
-	assert(cb_payload > 0);
-	unsigned char * p = payload;
-	unsigned char * p_end = p + cb_payload;
-	
-	// write outpoint
-	memcpy(p, &txin->outpoint, sizeof(struct satoshi_outpoint));
-	p += sizeof(struct satoshi_outpoint);
-	
-	// write scripts
-	varstr_set((varstr_t *)p, txin->coinbase_scripts, txin->cb_coinbase_script);
-	p += varstr_size((varstr_t *)p);
-	
-	// write sequence
-	*(uint32_t *)p = txin->sequence;
-	p += sizeof(uint32_t);
-	
-	assert(p == p_end);
-	return cb_payload;
 }
 
 ssize_t satoshi_txin_serialize(const satoshi_txin_t * txin, unsigned char ** p_data)
