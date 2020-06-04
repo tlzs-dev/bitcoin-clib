@@ -326,6 +326,9 @@ int main(int argc, char **argv)
 	return 0;
 }
 
+/**************************************************************************
+ * test_encrypt
+ *************************************************************************/
 void test_encrypt(int argc, char ** argv)
 {
 	unsigned char hmac_key[16] = { 0x01, };
@@ -360,6 +363,20 @@ void test_encrypt(int argc, char ** argv)
 }
 
 
+/**************************************************************************
+ * test_sign_and_verify
+ *************************************************************************/
+#define AUTO_FREE_PTR __attribute__((cleanup(auto_free_ptr)))
+static void auto_free_ptr(void * ptr)
+{
+	void * p = *(void **)ptr;
+	if(p)
+	{
+		free(p);
+		*(void **)ptr = NULL;
+	}
+}
+
 #define AUTO_FREE_PRIVKEY __attribute__((cleanup(auto_free_crypto_privkey)))
 void auto_free_crypto_privkey(void * ptr)
 {
@@ -385,15 +402,15 @@ void auto_free_crypto_pubkey(void * ptr)
 void test_sign_and_verify(int argc, char ** argv)
 {
 	// test verify:
-	static const char * rawtx_hash_hex = "e6d9603313a33b0b0e34f19247c9cc3d56052c6f4e9184fb4cc7cf73e7f8cd6a";
-	static const char * pubkey_hex = "031a455dab5e1f614e574a2f4f12f22990717e93899695fb0d81e4ac2dcfd25d00";
+	static const char * rawtx_hash_hex = "e6d9603313a33b0b0e34f19247c9cc3d56052c6f4e9184fb4cc7cf73e7f8cd6a";	// calculated by tests/test_satoshi-script
+	static const char * pubkey_hex = "031a455dab5e1f614e574a2f4f12f22990717e93899695fb0d81e4ac2dcfd25d00";		// satoshi-script.c::TEST::txns[1].txins[0].pubkey
 	static const char * sig_der_hex = "3044"
 		"022048d1468895910edafe53d4ec4209192cc3a8f0f21e7b9811f83b5e419bfb57e0"
-		"02203fef249b56682dbbb1528d4338969abb14583858488a3a766f609185efe68bca";
+		"02203fef249b56682dbbb1528d4338969abb14583858488a3a766f609185efe68bca";									// satoshi-script.c::TEST::txns[1].txins[0].signatures
 	
-	unsigned char * rawtx_hash = NULL;
-	unsigned char * pubkey_data = NULL;
-	unsigned char * sig_der = NULL;
+	AUTO_FREE_PTR unsigned char * rawtx_hash = NULL;
+	AUTO_FREE_PTR unsigned char * pubkey_data = NULL;
+	AUTO_FREE_PTR unsigned char * sig_der = NULL;
 	
 	crypto_context_t * crypto = crypto_context_init(NULL, crypto_backend_libsecp256, NULL);
 	assert(crypto);
