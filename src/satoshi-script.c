@@ -862,9 +862,20 @@ int main(int argc, char **argv)
 	
 	satoshi_txout_t * utxoes = txns[0].txouts;		// get utxoes
 	assert(utxoes);
-	raw_txins[index] = txins_backup[index];	// init raw_txins with current data
-	raw_txins[index].scripts = utxoes[index].scripts;
-	raw_txins[index].cb_script = utxoes[index].cb_script;
+	
+	// init raw_txins with current data
+	memcpy(raw_txins, txins_backup, txns[1].txin_count * sizeof(*raw_txins));
+	for(ssize_t i = 0; i < txns[1].txin_count; ++i)
+	{
+		if(i == index) {
+			raw_txins[index].scripts = utxoes[index].scripts;
+			raw_txins[index].cb_script = utxoes[index].cb_script;
+		}else
+		{
+			raw_txins[index].scripts = NULL;
+			raw_txins[index].cb_script = 0;
+		}
+	}
 	
 	AUTO_FREE_PTR unsigned char * rawtx_data = NULL;
 	ssize_t cb_rawtx = satoshi_tx_serialize(raw_tx, &rawtx_data);	// generate pre-images
