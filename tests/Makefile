@@ -52,6 +52,12 @@ test_satoshi-script: $(BASE_OBJECTS) $(UTILS_OBJECTS) $(OBJ_DIR)/satoshi-types.o
 	echo "build $@ ..."
 	$(CC) -o $@ $(CFLAGS) $(LIBS) $^ -D_TEST_SATOSHI_SCRIPT -D_STAND_ALONE
 
+
+crypto: test_crypto
+test_crypto: $(BASE_OBJECTS) $(UTILS_OBJECTS) $(SRC_DIR)/crypto.c
+	echo "build $@ ..."
+	$(CC) -o $@ $(CFLAGS) $(LIBS) $^ -D_TEST_CRYPTO -D_STAND_ALONE -lsecp256k1
+
 .PHONY: do_init clean
 do_init:
 	mkdir -p ../obj/base ../obj/utils
