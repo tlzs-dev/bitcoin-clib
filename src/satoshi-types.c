@@ -213,25 +213,18 @@ varstr_t * varstr_set(varstr_t * vstr, const unsigned char * data, size_t length
 {
 	if(NULL == vstr) return varstr_new(data, length);
 	
-	size_t old_len = varstr_length(vstr);
-	if(old_len != length)
-	{
-		varstr_free(vstr); 
-		return varstr_new(data, length);
-	}else if(data && length > 0)
-	{
-		unsigned char * p = vstr->vch + varint_size((varint_t *)vstr);
-		assert(p);
-		
-		memcpy(p, data, length);
-	}
+	unsigned char * p = (unsigned char *)vstr;
+	varint_set((varint_t *)p, length);
+	p += varint_size((varint_t *)p);
+	
+	if(data) memcpy(p, data, length);
 	return vstr;
 }
 
-size_t varstr_length(const varstr_t * vstr)
-{
-	return varint_get((varint_t *)vstr);
-}
+//~ size_t varstr_length(const varstr_t * vstr)
+//~ {
+	//~ return varint_get((varint_t *)vstr);
+//~ }
 
 size_t varstr_get(const varstr_t * vstr, unsigned char ** p_data, size_t buf_size)
 {
@@ -249,6 +242,7 @@ size_t varstr_get(const varstr_t * vstr, unsigned char ** p_data, size_t buf_siz
 	{
 		dst = malloc(data_len + 1);
 		assert(dst);
+		*p_data = dst;
 		
 		buf_size = data_len;
 		dst[data_len] = '\0';
@@ -331,13 +325,22 @@ ssize_t uint256_from_string(uint256_t * u256, int from_little_endian, const char
 	//~ uint32_t index;
 //~ }satoshi_outpoint_t;
 
+
 //~ typedef struct satoshi_txin
 //~ {
 	//~ satoshi_outpoint_t outpoint;
-	//~ ssize_t cb_script;
-	//~ unsigned char * scripts;
+	//~ int flags;
+	
+	//~ ssize_t cb_sig_scripts;
+	//~ unsigned char sig_scripts;
+	//~ uint32_t hash_type;
+	
+	//~ ssize_t cb_pubkey;
+	//~ unsigned char * pubkey_data;
+
 	//~ uint32_t sequence;
 //~ }satoshi_txin_t;
+
 #ifdef _DEBUG
 #define message_parser_error_handler(fmt, ...) do { \
 		fprintf(stderr, "\e31m[ERROR]::%s@%d::%s(): " fmt "\e[39m" "\n", \
@@ -354,6 +357,84 @@ ssize_t uint256_from_string(uint256_t * u256, int from_little_endian, const char
 		goto label_error;						\
 	} while(0)
 #endif
+
+static const satoshi_outpoint_t s_coinbase_outpoint[1] = {{
+	.prev_hash = {0},
+	.index = 0xffffffff
+}};
+
+
+static inline int verify_sig_hashtype_format(varstr_t * vsig_hashtype)
+{
+	unsigned char * p = varstr_getdata_ptr(vsig_hashtype);
+	ssize_t cb_sig_hashtype = varstr_length(vsig_hashtype);
+	
+	// step 1 parse signature: DER encoding. ( type | data.length | data )
+	if((p[0] != 0x30)) {		// DER format: type tag indicating SEQUENCE
+		message_parser_error_handler("parse signature failed: %s.", "invalid DER encoding");
+	}
+	ssize_t cb_sig_der = p[1]; 	// data.length 
+	if(cb_sig_der <= 0) {
+		message_parser_error_handler("parse signature failed: %s.", "invalid DER length");
+	}
+	if( (2 + cb_sig_der + 1 ) != cb_sig_hashtype)
+	{
+		message_parser_error_handler("parse signature failed: %s.", "invalid payload length");
+	}
+	return 0;
+label_error:
+	return -1;
+}
+
+static int parse_sig_scripts(satoshi_txin_t * txin)
+{
+	assert(txin && txin->scripts && txin->cb_scripts > 0);
+
+	if(txin->is_coinbase) return 0;	// no additional parsing
+	
+	const unsigned char * p = txin->scripts;
+	const unsigned char * p_end = p + txin->cb_scripts;
+	
+	// step 1. check p2sh flags
+	if(p[0] == 0) {
+		txin->is_p2sh = 1;
+		++p;
+	};
+	
+	/**
+	 * step 2. parse sig_scripts:
+	 * Format:
+	 * 	vstr = varstr( 
+	 * 		(op_0) 
+	 * 		| varstr(signatures | hash_type ) 
+	 * 		| varstr(redeem_scripts) 
+	 * )
+	 * 
+	**/
+	varstr_t * vsig_hashtype = (varstr_t *)p;
+	p += varstr_size(vsig_hashtype);
+	
+	varstr_t * vredeem_scripts = (varstr_t *)p;
+	p += varstr_size(vredeem_scripts);
+	
+	assert(p == p_end);
+	
+	int rc = verify_sig_hashtype_format(vsig_hashtype);
+	if(rc) return -1;
+	
+	ssize_t cb_sig_hashtype = varstr_length(vsig_hashtype);
+	if(cb_sig_hashtype < 1) return -1;
+	
+	txin->cb_signatures = cb_sig_hashtype - 1;
+	txin->signatures = varstr_getdata_ptr(vsig_hashtype);
+	txin->hash_type = txin->signatures[txin->cb_signatures];
+	
+	txin->cb_redeem_scripts = varstr_length(vredeem_scripts);
+	txin->redeem_scripts = varstr_getdata_ptr(vredeem_scripts);
+	
+	return 0;
+}
+
 ssize_t satoshi_txin_parse(satoshi_txin_t * txin, ssize_t length, const void * payload)
 {
 	assert(txin && (length > 0) && payload);
@@ -361,36 +442,40 @@ ssize_t satoshi_txin_parse(satoshi_txin_t * txin, ssize_t length, const void * p
 	const unsigned char * p = payload;
 	const unsigned char * p_end = p + length;
 	
-	// parse outpoint
+	// step 1. parse outpoint
 	if((p + sizeof(struct satoshi_outpoint)) > p_end) {
 		message_parser_error_handler("%s", "parse outpoint failed.");
 	}
 	memcpy(&txin->outpoint, p, sizeof(struct satoshi_outpoint));
 	p += sizeof(struct satoshi_outpoint);
 	
-	// parse sig_scripts
-	size_t vint_size = varint_size((varint_t *)p);
-	if((p + vint_size) > p_end){
-		message_parser_error_handler("parse script length failed: %s.", "invalid payload length");
-	}
-	ssize_t	cb_script = varint_get((varint_t *)p);
-	if(cb_script <= 0) {
-		message_parser_error_handler("parse script length failed: %s.", "invalid payload data");
-	}
-	if((p + vint_size + cb_script) > p_end) {
-		message_parser_error_handler("parse sig_scripts failed: %s.", "invalid payload length");
-	}
-	p += vint_size;
-	txin->cb_script = cb_script;
-	if(cb_script > 0)
+	txin->is_coinbase = (0 == memcmp(&txin->outpoint, s_coinbase_outpoint, sizeof(txin->outpoint)));
+	
+	
+	// step2. parse scripts
+	varstr_t * vstr_scripts = (varstr_t *)p;
+	p += varstr_size(vstr_scripts);
+	if(p > p_end)
 	{
-		txin->scripts = malloc(cb_script);
-		assert(txin->scripts);
-		memcpy(txin->scripts, p, cb_script);
-		p += cb_script;
+		message_parser_error_handler("parse sig_scripts failed: %s", "invalid payload length.");
 	}
 	
-	// parse sequence
+	
+	txin->cb_scripts = varstr_get(vstr_scripts, &txin->scripts, 0); 
+	if(txin->cb_scripts <= 0)
+	{
+		message_parser_error_handler("parse sig_scripts failed: %s", "invalid payload length.");
+	}
+	
+	if(!txin->is_coinbase)
+	{
+		int rc = parse_sig_scripts(txin);
+		if(rc) {
+			message_parser_error_handler("parse sig_scripts failed: %s", "invalid payload data.");
+		}
+	}
+	
+	// step 3. parse sequence
 	if((p + sizeof(uint32_t)) > p_end) {
 		message_parser_error_handler("parse sequence failed: %s.", "invalid payload length");
 	}
@@ -402,50 +487,90 @@ label_error:
 	satoshi_txin_cleanup(txin);
 	return -1;
 }
-ssize_t satoshi_txin_serialize(const satoshi_txin_t * txin, unsigned char ** p_data)
+
+static inline ssize_t coinbase_txin_serialize(const satoshi_txin_t * txin, unsigned char ** p_data)
 {
-	ssize_t vint_size = varint_calc_size(txin->cb_script);
 	ssize_t cb_payload = sizeof(struct satoshi_outpoint) 
-		+ vint_size
-		+ txin->cb_script
-		+ sizeof(uint32_t);
+			+ varint_calc_size(txin->cb_coinbase_script) + txin->cb_coinbase_script
+			+ sizeof(uint32_t);
 	
 	if(NULL == p_data) return cb_payload;
+	unsigned char * payload = *p_data;
+	if(NULL == payload)
+	{
+		payload = malloc(cb_payload);
+		assert(payload);
+		
+		*p_data = payload;
+	}
+	
+	assert(cb_payload > 0);
+	unsigned char * p = payload;
+	unsigned char * p_end = p + cb_payload;
+	
+	// write outpoint
+	memcpy(p, &txin->outpoint, sizeof(struct satoshi_outpoint));
+	p += sizeof(struct satoshi_outpoint);
+	
+	// write scripts
+	varstr_set((varstr_t *)p, txin->coinbase_scripts, txin->cb_coinbase_script);
+	p += varstr_size((varstr_t *)p);
+	
+	// write sequence
+	*(uint32_t *)p = txin->sequence;
+	p += sizeof(uint32_t);
+	
+	assert(p == p_end);
+	return cb_payload;
+}
+
+ssize_t satoshi_txin_serialize(const satoshi_txin_t * txin, unsigned char ** p_data)
+{
+	ssize_t cb_payload 							// payload length
+		= sizeof(struct satoshi_outpoint) 
+		+ varint_calc_size(txin->cb_scripts) 
+		+ txin->cb_scripts
+		+ sizeof(uint32_t);				// sizeof(sequence)
+
+	if(NULL == p_data) return cb_payload;
+	
+	assert(cb_payload > 0);
 	unsigned char * payload = *p_data;
 	if(NULL == payload) {
 		payload = malloc(cb_payload);
 		assert(payload);
 		*p_data = payload;
 	}
-	
+
 	unsigned char * p = payload;
 	unsigned char * p_end = p + cb_payload;
+	
+	// step 1. write outpoint
 	memcpy(p, &txin->outpoint, sizeof(struct satoshi_outpoint));
 	p += sizeof(struct satoshi_outpoint);
 	
-	assert((p + vint_size) < p_end);
-	varint_set((varint_t *)p, txin->cb_script);
-	p += varint_size((varint_t *)p);
-	
-	if(txin->cb_script)
-	{
-		assert((p + txin->cb_script) < p_end);
-		memcpy(p, txin->scripts, txin->cb_script);
-		p += txin->cb_script;
-	}
-	
+	// step 2. write sig_scripts
+	varstr_set((varstr_t *)p, txin->scripts, txin->cb_scripts);
+	p += varstr_size((varstr_t *)p);
+		
+	// step 3. write sequence
 	assert((p + sizeof(uint32_t)) <= p_end);
 	*(uint32_t *)p = txin->sequence;
+	p += sizeof(uint32_t);
 	
+	assert(p == p_end);
 	return cb_payload;
 }
 
 void satoshi_txin_cleanup(satoshi_txin_t * txin)
 {
-	if(txin && txin->scripts) {
-		free(txin->scripts);
-		txin->scripts = NULL;
-		txin->cb_script = 0;
+	if(txin) {
+		if(txin->scripts)
+		{
+			free(txin->scripts);
+			txin->scripts = NULL;
+			txin->cb_scripts = 0;
+		}
 	}
 	return;
 }
@@ -554,6 +679,8 @@ void satoshi_txout_cleanup(satoshi_txout_t * txout)
 	//~ uint32_t lock_time;
 	
 //~ }satoshi_tx_t;
+
+
 ssize_t satoshi_tx_parse(satoshi_tx_t * _tx, ssize_t length, const void * payload)
 {
 	satoshi_tx_t * tx = _tx;
@@ -566,7 +693,6 @@ ssize_t satoshi_tx_parse(satoshi_tx_t * _tx, ssize_t length, const void * payloa
 	const unsigned char * p_end = p + length;
 	
 	// parse version
-	
 	if((p + sizeof(int32_t)) > p_end) {
 		message_parser_error_handler("parse version failed: %s", "invalid payload length");
 	}
@@ -774,24 +900,7 @@ ssize_t satoshi_tx_serialize(const satoshi_tx_t * tx, unsigned char ** p_data)
 	return tx_size;
 }
 
-//~ struct satoshi_block_header
-//~ {
-	//~ int32_t version;
-	//~ uint8_t prev_hash[32];
-	//~ uint8_t merkle_root[32];
-	//~ uint32_t timestamp;
-	//~ uint32_t bits;
-	//~ uint32_t nounce;
-	//~ uint8_t txn_count[0];	// place-holder
-//~ }__attribute__((packed));
 
-//~ typedef struct satoshi_block
-//~ {
-	//~ struct satoshi_block_header hdr;
-	//~ ssize_t txn_count;
-	//~ satoshi_tx_t * txns;
-	//~ uint256_t hash;
-//~ }satoshi_block_t;
 ssize_t satoshi_block_parse(satoshi_block_t * block, ssize_t length, const void * payload)
 {
 	assert(block && (length > 0) && payload);
@@ -928,3 +1037,12 @@ ssize_t satoshi_block_serialize(const satoshi_block_t * block, unsigned char ** 
 	assert((p - payload) == block_size);
 	return block_size;
 }
+
+
+#if defined(_TEST_SATOSHI_TYPES) && defined(_STAND_ALONE)
+int main(int argc, char ** argv)
+{
+	
+	return 0;
+}
+#endif

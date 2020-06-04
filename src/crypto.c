@@ -37,7 +37,7 @@
 #include <ctype.h>		// for ptrdiff_t
 #include <secp256k1.h>	// use https://github.com/bitcoin/bitcoin/tree/master/src/secp256k1
 
-
+#include "utils.h"
 #include "crypto.h"
 
 
@@ -123,6 +123,10 @@ ssize_t crypto_privkey_export(crypto_context_t * crypto, const crypto_privkey_t 
 }
 void crypto_privkey_free(crypto_privkey_t * privkey)
 {
+	if(privkey)
+	{
+		memset(privkey->key, 0, sizeof(privkey->key));	// clear sensitive data
+	}
 	free(privkey);
 }
 
@@ -311,7 +315,18 @@ void crypto_context_cleanup(crypto_context_t * crypto)
 #undef PRIVKEY_SIZE
 
 #if defined(_TEST_CRYPTO) && defined(_STAND_ALONE)
+
+void test_encrypt();
+void test_sign_and_verify();
+
 int main(int argc, char **argv)
+{
+//	test_encrypt(argc, argv);
+	test_sign_and_verify(argc, argv);
+	return 0;
+}
+
+void test_encrypt(int argc, char ** argv)
 {
 	unsigned char hmac_key[16] = { 0x01, };
 	unsigned char hash[64] = { 0 };
@@ -342,6 +357,67 @@ int main(int argc, char **argv)
 		printf(" %.2x <-- %.2x | ", plain[i], cipher[i]);
 		if((i & 0x0f) == 0x0F) printf("\n");
 	}
-	return 0;
+}
+
+
+#define AUTO_FREE_PRIVKEY __attribute__((cleanup(auto_free_crypto_privkey)))
+void auto_free_crypto_privkey(void * ptr)
+{
+	crypto_privkey_t * privkey = *(void **)ptr;
+	if(privkey)
+	{
+		crypto_privkey_free(privkey);
+		*(void **)ptr = NULL;
+	}
+}
+
+#define AUTO_FREE_PUBKEY __attribute__((cleanup(auto_free_crypto_pubkey)))
+void auto_free_crypto_pubkey(void * ptr)
+{
+	crypto_pubkey_t * pubkey = *(void **)ptr;
+	if(pubkey)
+	{
+		crypto_pubkey_free(pubkey);
+		*(void **)ptr = NULL;
+	}
+}
+
+void test_sign_and_verify(int argc, char ** argv)
+{
+	// test verify:
+	static const char * rawtx_hash_hex = "e6d9603313a33b0b0e34f19247c9cc3d56052c6f4e9184fb4cc7cf73e7f8cd6a";
+	static const char * pubkey_hex = "031a455dab5e1f614e574a2f4f12f22990717e93899695fb0d81e4ac2dcfd25d00";
+	static const char * sig_der_hex = "3044"
+		"022048d1468895910edafe53d4ec4209192cc3a8f0f21e7b9811f83b5e419bfb57e0"
+		"02203fef249b56682dbbb1528d4338969abb14583858488a3a766f609185efe68bca";
+	
+	unsigned char * rawtx_hash = NULL;
+	unsigned char * pubkey_data = NULL;
+	unsigned char * sig_der = NULL;
+	
+	crypto_context_t * crypto = crypto_context_init(NULL, crypto_backend_libsecp256, NULL);
+	assert(crypto);
+	
+	
+	ssize_t cb_pubkey = hex2bin(pubkey_hex, -1, (void **)&pubkey_data);
+	assert(cb_pubkey > 0 && pubkey_data);
+	AUTO_FREE_PUBKEY crypto_pubkey_t * pubkey = crypto_pubkey_import(crypto, pubkey_data, cb_pubkey);
+	assert(pubkey);
+	
+	ssize_t cb_sig_der = hex2bin(sig_der_hex, -1, (void **)&sig_der);
+	assert(cb_sig_der > 0 && sig_der);
+	
+	ssize_t cb_hash = hex2bin(rawtx_hash_hex, -1, (void **)&rawtx_hash);
+	assert(cb_hash == 32 && rawtx_hash);
+	
+	int rc = crypto->verify(crypto, rawtx_hash, cb_hash, 
+		pubkey, 
+		sig_der, cb_sig_der);
+	assert(0 == rc);
+	
+	
+	crypto_context_cleanup(crypto);
+	free(crypto);
+	return;
 }
 #endif

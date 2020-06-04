@@ -29,7 +29,7 @@ all: do_init $(TARGET)
 $(TARGET): $(BASE_OBJECTS) $(OBJECTS) $(UTILS_OBJECTS) unit-test.c
 	echo "objects: $(OBJECTS)"
 	echo "sources: $(SOURCES)"
-	$(CC) -o $@ $^ $(CFLAGS) $(LIBS)
+	$(CC) -o $@ $^ $(CFLAGS) $(LIBS) -lsecp256k1
 
 $(OBJECTS): $(OBJ_DIR)/%.o : $(SRC_DIR)/%.c 
 	$(CC) -o $@ -c $< $(CFLAGS)
@@ -57,6 +57,11 @@ crypto: test_crypto
 test_crypto: $(BASE_OBJECTS) $(UTILS_OBJECTS) $(SRC_DIR)/crypto.c
 	echo "build $@ ..."
 	$(CC) -o $@ $(CFLAGS) $(LIBS) $^ -D_TEST_CRYPTO -D_STAND_ALONE -lsecp256k1
+
+satoshi-types: test_satoshi-types
+test_satoshi-types: $(BASE_OBJECTS) $(UTILS_OBJECTS) $(SRC_DIR)/satoshi-types.c
+	echo "build $@ ..."
+	$(CC) -o $@ $(CFLAGS) $(LIBS) $^ -D_TEST_SATOSHI_TYPES -D_STAND_ALONE
 
 .PHONY: do_init clean
 do_init:

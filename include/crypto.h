@@ -20,8 +20,8 @@ enum crypto_backend_type
 	//~ crypto_backend_custom,
 };
 
-typedef struct crypto_privkey crypto_privkey_t; // Opaque data structured that holds a privkey.
-typedef struct crypto_pubkey crypto_pubkey_t;	// Opaque data structured that holds a pubkey.
+typedef struct crypto_privkey crypto_privkey_t; // opaque data structure that holds a privkey.
+typedef struct crypto_pubkey crypto_pubkey_t;	// opaque data structure that holds a pubkey.
 
 typedef struct crypto_context
 {

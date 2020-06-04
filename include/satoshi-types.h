@@ -46,6 +46,7 @@ void varint_free(varint_t * vint);
 size_t varint_size(const varint_t * vint);
 varint_t * varint_set(varint_t * vint, uint64_t value);
 uint64_t varint_get(const varint_t * vint);
+
 /**
  * @}
  */
@@ -77,8 +78,11 @@ varstr_t * varstr_resize(varstr_t * vstr, size_t new_size);
 
 size_t varstr_size(const varstr_t * vstr);
 varstr_t * varstr_set(varstr_t * vstr, const unsigned char * data, size_t length);
-size_t varstr_length(const varstr_t * vstr);
+//~ size_t varstr_length(const varstr_t * vstr);
 size_t varstr_get(const varstr_t * vstr, unsigned char ** p_data, size_t buf_size);
+
+#define varstr_length(vstr)			varint_get((varint_t *)vstr)
+#define varstr_getdata_ptr(vstr) 	((unsigned char *)vstr + varint_size((varint_t *)vstr))
 /**
  * @}
  */
@@ -131,11 +135,25 @@ typedef struct satoshi_outpoint
 typedef struct satoshi_txin
 {
 	satoshi_outpoint_t outpoint;
-	ssize_t cb_script;
+	int is_coinbase;	// coinbase flag
+	int is_p2sh;		// p2sh flag
+	
+	ssize_t cb_scripts;
 	unsigned char * scripts;
+
+	// for coinbase txins only
+	ssize_t cb_coinbase_script;
+	const unsigned char * coinbase_scripts;
+	
+	// for standard txins
+	ssize_t cb_signatures;
+	const unsigned char * signatures;
+	uint32_t hash_type;
+	
+	ssize_t cb_redeem_scripts;	// pubkey or redeem script
+	const unsigned char * redeem_scripts;
+
 	uint32_t sequence;
-	
-	
 }satoshi_txin_t;
 
 ssize_t satoshi_txin_parse(satoshi_txin_t * txin, ssize_t length, const void * payload);

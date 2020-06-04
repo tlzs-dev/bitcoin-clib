@@ -169,6 +169,9 @@ void test_parse_blocks(void)
 	cb = bin2hex(output, cb_block, &output_hex);
 	assert(cb == (cb_block * 2));
 	
+	
+	printf("output_hex: %s\n", output_hex);
+	
 	assert(0 == strcasecmp(hex, output_hex));
 	
 	dump_line("block_hash(big-endian)", &block->hash, 32); 
