@@ -868,12 +868,12 @@ int main(int argc, char **argv)
 	for(ssize_t i = 0; i < txns[1].txin_count; ++i)
 	{
 		if(i == index) {
-			raw_txins[index].scripts = utxoes[index].scripts;
-			raw_txins[index].cb_script = utxoes[index].cb_script;
+			raw_txins[i].scripts = utxoes[i].scripts;
+			raw_txins[i].cb_script = utxoes[i].cb_script;
 		}else
 		{
-			raw_txins[index].scripts = NULL;
-			raw_txins[index].cb_script = 0;
+			raw_txins[i].scripts = NULL;
+			raw_txins[i].cb_script = 0;
 		}
 	}
 	
