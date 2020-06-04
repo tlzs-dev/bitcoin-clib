@@ -739,7 +739,9 @@ void satoshi_script_cleanup(satoshi_script_t * scripts)
 /*****************************************/
 
 
-
+/**
+ *  TEST DATA
+ */
 static const char * s_hex_p2sh_txns[2] = {
 // prev_outpoint
 // # txid= LE"40eee3ae1760e3a8532263678cdf64569e6ad06abc133af64f735e52562bccc8"	
@@ -788,6 +790,9 @@ static const char * s_hex_p2sh_txns[2] = {
 "a7270400"
 };
 
+/********************************************************/
+
+
 #define dump_line(prefix, data, length) do {							\
 		printf(prefix); dump(data, length); printf("\e[39m\n");	\
 	} while(0)
@@ -816,7 +821,7 @@ int main(int argc, char **argv)
 	assert(cb_txns[0] > 0 && p2sh_txns_data[0]);
 	assert(cb_txns[1] > 0 && p2sh_txns_data[1]);
 	
-	satoshi_tx_t txns[2];
+	satoshi_tx_t txns[2];		// txn[0]: deposit;  txns[1]:  withdraw
 	memset(txns, 0, sizeof(txns));
 	ssize_t cb = 0;
 	
@@ -825,43 +830,49 @@ int main(int argc, char **argv)
 	
 	cb = satoshi_tx_parse(&txns[1], cb_txns[1], p2sh_txns_data[1]);
 	assert(cb == cb_txns[1]);
+	assert(txns[1].txin_count > 0);
 	
-	satoshi_tx_t raw_tx[1];
-	memset(raw_tx, 0, sizeof(raw_tx));
-	cb = satoshi_tx_parse(raw_tx, cb_txns[1], p2sh_txns_data[1]);
-	assert(cb == cb_txns[1]);
 	
 	uint256_t prev_hash;
 	memset(&prev_hash, 0, sizeof(prev_hash));
 	hash256(p2sh_txns_data[0], cb_txns[0], (unsigned char *)&prev_hash);
 	dump_line("prev_hash: ", &prev_hash, 32);
-	
-	assert(0 == memcmp(&prev_hash, &txns[1].txins[0].outpoint.prev_hash, 32));
+	assert(0 == memcmp(&prev_hash, &txns[1].txins[0].outpoint.prev_hash, 32));	// verify test data
 	
 	int index = txns[1].txins[0].outpoint.index;
-	assert(index == 0);
-	satoshi_txout_t * prev_txout = &txns[0].txouts[index];
-	assert(prev_txout);
+	assert(index == 0);		// verify test data
 	
-	assert(raw_tx->txin_count == 1);
-	satoshi_txin_t * txin = &raw_tx->txins[0];
-	assert(txin);
-	free(txin->scripts);
-	txin->scripts = prev_txout->scripts;			// use prev_txout's pointer directly, should be set to NULL before cleanup (to avoid double free)
-	txin->cb_script = prev_txout->cb_script;
+	// prepare raw_tx's txins
+	AUTO_FREE_PTR satoshi_txin_t * raw_txins = calloc(txns[1].txin_count, sizeof(*raw_txins));
+	assert(raw_txins);
+	
+	satoshi_tx_t * raw_tx = &txns[1];				// use txns[1] as raw_tx directly
+	satoshi_txin_t * txins_backup = txns[1].txins;	// backup current txins
+	raw_tx->txins = raw_txins;						// replace txns[1].txins with raw_txins
+	
+	satoshi_txout_t * utxoes = txns[0].txouts;		// get utxoes
+	assert(utxoes);
+	raw_txins[index] = txins_backup[index];	// init raw_txins with current data
+	raw_txins[index].scripts = utxoes[index].scripts;
+	raw_txins[index].cb_script = utxoes[index].cb_script;
 	
 	AUTO_FREE_PTR unsigned char * rawtx_data = NULL;
-	ssize_t cb_rawtx = satoshi_tx_serialize(raw_tx, &rawtx_data);
+	ssize_t cb_rawtx = satoshi_tx_serialize(raw_tx, &rawtx_data);	// generate pre-images
 	assert(cb_rawtx > 0 && rawtx_data);
 	
-	txin->scripts = NULL; // set to NULL to avoid double free
 	
-	uint256_t tx_hash;
-	hash256(rawtx_data, cb_rawtx, (unsigned char *)&tx_hash);
+	
+	uint256_t rawtx_hash;	// msg
+	hash256(rawtx_data, cb_rawtx, (unsigned char *)&rawtx_hash);	// msg = hash256(rawtx);  
 	
 	printf("rawtx_hash: ");
-	dump(&tx_hash, 32);
+	dump(&rawtx_hash, 32);
 	printf("\n");
+	
+	// todo: parse scripts and secp256k1_ecdsa_verify(sig, pubkey, msg)
+	
+	
+	txns[1].txins = txins_backup;	// restore txins
 	
 	satoshi_tx_cleanup(raw_tx);
 	satoshi_tx_cleanup(&txns[0]);
