@@ -63,6 +63,11 @@ test_satoshi-types: $(BASE_OBJECTS) $(UTILS_OBJECTS) $(SRC_DIR)/satoshi-types.c
 	echo "build $@ ..."
 	$(CC) -o $@ $(CFLAGS) $(LIBS) $^ -D_TEST_SATOSHI_TYPES -D_STAND_ALONE
 
+satoshi-tx: test_satoshi-tx
+test_satoshi-tx: $(BASE_OBJECTS) $(UTILS_OBJECTS) $(SRC_DIR)/satoshi-tx.c $(SRC_DIR)/satoshi-types.c
+	echo "build $@ ..."
+	$(CC) -o $@ $(CFLAGS) $(LIBS) $^ -D_TEST_SATOSHI_TX -D_STAND_ALONE
+
 .PHONY: do_init clean
 do_init:
 	mkdir -p ../obj/base ../obj/utils

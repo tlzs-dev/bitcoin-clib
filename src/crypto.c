@@ -507,7 +507,6 @@ void test_sign_and_verify(int argc, char ** argv)
 	assert(0 == rc);
 	printf("verify: [OK]\n");
 	
-	
 	free(sig_der); sig_der = NULL;
 	
 	crypto_context_cleanup(crypto);
