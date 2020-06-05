@@ -238,10 +238,243 @@ int satoshi_tx_get_digest(const satoshi_tx_t * tx,
 	return 0;
 }
 
+
+
+//~ typedef struct satoshi_rawtx 
+//~ {
+	//~ satoshi_tx_t * tx;
+	//~ // backup
+	//~ unsigned char ** scripts;
+	//~ ssize_t * cb_scripts;
+	
+	//~ // internal states
+	//~ sha256_ctx_t sha[1];
+	//~ unsigned char hash[32];
+//~ }satoshi_rawtx_t;
+satoshi_rawtx_t * satoshi_rawtx_prepare(satoshi_rawtx_t * rawtx, satoshi_tx_t * tx)
+{
+	assert(tx && tx->txin_count > 0 && tx->txins);
+	
+	if(NULL == rawtx) rawtx = calloc(1, sizeof(*rawtx));
+	assert(rawtx);
+	rawtx->tx = tx;
+	
+	sha256_ctx_t temp_sha[1];
+	unsigned char hash[32];
+	sha256_init(rawtx->sha);
+	
+	if(tx->has_flag)
+	{
+		assert(tx->flag[0] == 0 && tx->flag[1] == 1);	// support segwit_v0 only
+		// pre-hash common data to internal SHA context (step 1, 2, 3, 8)
+
+		// 1. nVersion of the transaction (4-byte little endian)
+		sha256_update(rawtx->sha, (unsigned char *)&tx->version, sizeof(uint32_t));
+		
+		// 2. hashPrevouts (32-byte hash)	( sha256(sha256(outpoints[])) )
+		const satoshi_txin_t * txins = tx->txins;
+		sha256_init(temp_sha);
+		for(ssize_t i = 0; i < tx->txin_count; ++i)
+		{
+			sha256_update(temp_sha, (unsigned char *)&txins[i].outpoint, sizeof(satoshi_outpoint_t));
+		}
+		sha256_final(temp_sha, hash);
+		sha256_init(temp_sha);
+		sha256_update(temp_sha, hash, 32);
+		sha256_final(temp_sha, hash);	// calc hash256() result 
+		
+		sha256_update(rawtx->sha, (unsigned char *)hash, 32);
+		
+		
+		// 3. hashSequence (32-byte hash)
+		sha256_init(temp_sha);
+		for(ssize_t i = 0; i < tx->txin_count; ++i)
+		{
+			sha256_update(temp_sha, (unsigned char *)&txins[i].sequence, sizeof(uint32_t));
+		}
+		sha256_final(temp_sha, hash);
+		sha256_init(temp_sha);
+		sha256_update(temp_sha, hash, 32);
+		sha256_final(temp_sha, hash);	// write hash256() result 
+		
+		sha256_update(rawtx->sha, (unsigned char *)hash, 32);
+		
+		//  8. hashOutputs (32-byte hash)
+		const satoshi_txout_t * txouts = tx->txouts;
+		for(ssize_t i = 0; i < tx->txout_count; ++i)
+		{
+			unsigned char vlength[8];	// varint_t 
+			varint_set((varint_t *)vlength, txouts[i].cb_script);
+			sha256_update(temp_sha, (unsigned char *)&txouts[i].value, sizeof(int64_t));
+			sha256_update(temp_sha, vlength, varint_size((varint_t *)vlength));
+			sha256_update(temp_sha, txouts[i].scripts, txouts[i].cb_script);
+		}
+		sha256_final(temp_sha, hash);
+		sha256_init(temp_sha);
+		sha256_update(temp_sha, hash, 32);
+		sha256_final(temp_sha, rawtx->txouts_hash);	// write hash256() result 
+		
+	}else // legacy tx
+	{
+		// backup scripts
+		rawtx->backup = calloc(tx->txin_count, sizeof(*rawtx->backup));
+		assert(rawtx->backup);
+		
+		satoshi_txin_t * txins = tx->txins;
+		for(ssize_t i = 0; i < tx->txin_count; ++i)
+		{
+			rawtx->backup[i].scripts = txins[i].scripts;
+			rawtx->backup[i].cb_scripts = txins[i].cb_scripts;
+			
+			txins[i].scripts = NULL;
+			txins[i].cb_scripts = 0;
+		}
+	}
+	return rawtx;
+}
+
+void satoshi_rawtx_reset(satoshi_rawtx_t * rawtx)
+{
+	if(NULL == rawtx || NULL == rawtx->backup) return;
+	
+	satoshi_tx_t * tx = rawtx->tx;
+	assert(tx);
+	
+	if(tx->has_flag == 0) // legacy tx
+	{
+		
+		if(tx)
+		{
+			satoshi_txin_t * txins = tx->txins;
+			for(ssize_t i = 0; i < tx->txin_count; ++i)
+			{
+				txins[i].scripts = rawtx->backup[i].scripts;
+				txins[i].cb_scripts = rawtx->backup[i].cb_scripts;
+			}
+		}
+		free(rawtx->backup);
+		rawtx->backup = NULL;
+	}
+	
+	rawtx->tx = NULL;
+	sha256_init(rawtx->sha);
+	return;
+}
+
+int satoshi_rawtx_get_digest(satoshi_rawtx_t * rawtx, 
+	int cur_index, 
+	const satoshi_txout_t * utxo,
+	uint256_t * hash)
+{
+	assert(rawtx && rawtx->tx);
+	satoshi_tx_t * tx = rawtx->tx;
+	
+	assert(tx->txins && cur_index >= 0 && cur_index < tx->txin_count && utxo && hash);
+	sha256_ctx_t sha[1];
+	memcpy(sha, rawtx->sha, sizeof(sha));	// copy internal state ( common data pre-hashed )
+	
+	unsigned char vlength[8] = {0};	// hold enough buffer size, can be processed as varint_t * 
+	
+	if(tx->has_flag)
+	{
+		assert(tx->flag[0] == 0 && tx->flag[1] == 1);
+		
+		satoshi_txin_t * txins = tx->txins;
+		
+		// hash different parts (start from step 4)
+		//  4. outpoint (32-byte hash + 4-byte little endian) 
+		sha256_update(sha, (unsigned char *)&txins[cur_index].outpoint, sizeof(satoshi_outpoint_t));
+		
+		//  5. scriptCode of the input (serialized as scripts inside CTxOuts)
+		varint_set((varint_t *)vlength, utxo->cb_script);
+		sha256_update(sha, vlength, varint_size((varint_t *)vlength));
+		
+		//  6. value of the output spent by this input (8-byte little endian)
+		sha256_update(sha, (unsigned char *)utxo->value, sizeof(int64_t));
+		
+		//  7. nSequence of the input (4-byte little endian)
+		sha256_update(sha, (unsigned char *)&txins[cur_index].sequence, sizeof(uint32_t));
+
+		//  8. hashOutputs (32-byte hash)
+		sha256_update(sha, rawtx->txouts_hash, 32);
+		
+		// 9. nLocktime of the transaction (4-byte little endian)
+		sha256_update(sha, (unsigned char *)&tx->lock_time, sizeof(uint32_t));
+		
+		// 10. sighash type of the signature (4-byte little endian)
+		sha256_update(sha, (unsigned char *)&txins[cur_index].hash_type, sizeof(uint32_t));
+	}else
+	{
+		satoshi_txin_t * txins = tx->txins;
+		for(ssize_t i = 0; i < tx->txin_count; ++i)
+		{
+			if(i == cur_index)
+			{
+				txins[i].scripts = utxo->scripts;
+				txins[i].cb_scripts = utxo->cb_script;
+			}else
+			{
+				txins[i].scripts = NULL;
+				txins[i].cb_scripts = 0;
+			}
+		}
+		
+		unsigned char * preimage = NULL;
+		ssize_t cb_image = satoshi_tx_serialize(tx, &preimage);
+		assert(preimage && cb_image > 0);
+		
+		sha256_update(sha, preimage, cb_image);
+		sha256_update(sha, (unsigned char *)&txins[cur_index].hash_type, sizeof(uint32_t));
+	}
+	
+	sha256_final(sha, (unsigned char *)hash);
+	
+	// double hash
+	sha256_init(sha);
+	sha256_update(sha, (unsigned char *)hash, 32);
+	sha256_final(sha, (unsigned char *)hash);		
+	
+	return 0;
+}
+
 #if defined(_TEST_SATOSHI_TX) && defined(_STAND_ALONE)
+#define dump_line(prefix, data, length) do {							\
+		printf(prefix); dump(data, length); printf("\e[39m\n");	\
+	} while(0)
+
+
 int main(int argc, char **argv)
 {
+	unsigned char data[100] = {1, 2, 3, 4, 5, 6, 7, 8};
 	
+	// test: SHA states copy
+	sha256_ctx_t sha[1];
+	sha256_ctx_t temp_sha[1];
+	
+	unsigned char hash[32];
+	
+	sha256_init(temp_sha);
+	sha256_update(temp_sha, data, 4);
+	
+	
+	memcpy(sha, temp_sha, sizeof(sha));
+	sha256_update(sha, data + 4, 4);
+	sha256_final(sha, hash);
+	
+	dump_line("hash1: ", hash, 32);
+	
+	
+	memset(hash, 0, 32);
+	sha256_init(sha);
+	sha256_update(sha, data, 8);
+	sha256_final(sha, hash);
+	dump_line("hash2: ", hash, 32);
+	
+	
+	memcpy(sha, temp_sha, sizeof(sha));
+	sha256_update(sha, data + 4, 4);
+	sha256_final(sha, hash);
+	dump_line("hash3: ", hash, 32);
 	return 0;
 }
 #endif
