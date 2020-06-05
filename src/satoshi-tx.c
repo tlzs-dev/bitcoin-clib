@@ -222,6 +222,8 @@ int satoshi_tx_get_digest(const satoshi_tx_t * tx,
 	assert(cb_image > 0);
 	preimage = malloc(cb_image + sizeof(uint32_t));	// preimage | sequence
 	assert(preimage);
+	ssize_t cb = satoshi_tx_serialize(tx, &preimage);	
+	assert(cb == cb_image);
 	
 	*(uint32_t *)(preimage + cb_image) = txins[cur_index].sequence;
 	hash256(preimage, cb_image + sizeof(uint32_t), (unsigned char *)hash);
