@@ -191,6 +191,11 @@ int satoshi_tx_get_digest(const satoshi_tx_t * tx,
 	const satoshi_txout_t * utxo, 
 	uint256_t * hash)
 {
+	if(tx->has_flag && tx->flag[0] == 0 && tx->flag[1] == 1) // segwit_v0
+	{
+		return segwit_v0_tx_get_digest(tx, cur_index, utxo, hash);
+	}
+	
 	struct scripts_data * backup = NULL;
 	backup = calloc(tx->txin_count, sizeof(struct scripts_data));
 	assert(backup);
@@ -213,10 +218,13 @@ int satoshi_tx_get_digest(const satoshi_tx_t * tx,
 	}
 	
 	unsigned char * preimage = NULL;
-	ssize_t cb_image = satoshi_tx_serialize(tx, &preimage);
-	assert(cb_image > 0 && preimage);
+	ssize_t cb_image = satoshi_tx_serialize(tx, NULL);	// get buffer size
+	assert(cb_image > 0);
+	preimage = malloc(cb_image + sizeof(uint32_t));	// preimage | sequence
+	assert(preimage);
 	
-	hash256(preimage, cb_image, (unsigned char *)hash);
+	*(uint32_t *)(preimage + cb_image) = txins[cur_index].sequence;
+	hash256(preimage, cb_image + sizeof(uint32_t), (unsigned char *)hash);
 	free(preimage);
 
 	for(ssize_t i = 0; i < tx->txin_count; ++i)
