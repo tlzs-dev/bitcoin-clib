@@ -75,6 +75,7 @@ typedef struct varstr
 varstr_t * varstr_new(const unsigned char * data, size_t length);
 void varstr_free(varstr_t * vstr);
 varstr_t * varstr_resize(varstr_t * vstr, size_t new_size);
+varstr_t * varstr_clone(const varstr_t * vstr);
 
 size_t varstr_size(const varstr_t * vstr);
 varstr_t * varstr_set(varstr_t * vstr, const unsigned char * data, size_t length);
@@ -170,10 +171,16 @@ ssize_t satoshi_txout_parse(satoshi_txout_t * txout, ssize_t length, const void 
 ssize_t satoshi_txout_serialize(const satoshi_txout_t * txout, unsigned char ** p_data);
 void satoshi_txout_cleanup(satoshi_txout_t * txout);
 
+
+/*
+ * A witness field starts with a var_int to indicate the number of stack items for the txin. 
+ * It is followed by stack items, with each item starts with a var_int to indicate the length. 
+ * Witness data is NOT script.
+ */
 typedef struct bitcoin_tx_witness
 {
-	ssize_t length;
-	uint8_t * data;
+	ssize_t num_items;	//
+	varstr_t ** items; 
 }bitcoin_tx_witness_t;
 
 typedef struct satoshi_tx
@@ -187,7 +194,7 @@ typedef struct satoshi_tx
 	ssize_t txout_count;
 	satoshi_txout_t * txouts;
 	
-	size_t cb_witnesses;
+	ssize_t cb_witnesses;		// witnesses data serialized length (in bytes)
 	bitcoin_tx_witness_t * witnesses;
 	uint32_t lock_time;
 	

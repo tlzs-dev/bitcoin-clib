@@ -178,6 +178,18 @@ void varstr_free(varstr_t * vstr)
 	free(vstr);
 }
 
+varstr_t * varstr_clone(const varstr_t * vstr)
+{
+	if(NULL == vstr) return NULL;
+	ssize_t size = varstr_size(vstr);
+	assert(size > 0);
+	
+	varstr_t * dst = malloc(size);
+	assert(dst);
+	memcpy(dst, vstr, size);
+	return dst;
+}
+
 varstr_t * varstr_resize(varstr_t * vstr, size_t new_len)
 {
 	if(NULL == vstr) return varstr_new(NULL, new_len);
@@ -392,9 +404,14 @@ static int parse_sig_scripts(satoshi_txin_t * txin)
 	varstr_t * vsig_hashtype = (varstr_t *)p;
 	p += varstr_size(vsig_hashtype);
 	
-	varstr_t * vredeem_scripts = (varstr_t *)p;
-	p += varstr_size(vredeem_scripts);
-	
+	if(p < p_end)	// has redeem scripts
+	{
+		varstr_t * vredeem_scripts = (varstr_t *)p;
+		p += varstr_size(vredeem_scripts);
+		
+		txin->cb_redeem_scripts = varstr_length(vredeem_scripts);
+		txin->redeem_scripts = varstr_getdata_ptr(vredeem_scripts);
+	}
 	assert(p == p_end);
 	
 	int rc = verify_sig_hashtype_format(vsig_hashtype);
@@ -406,9 +423,6 @@ static int parse_sig_scripts(satoshi_txin_t * txin)
 	txin->cb_signatures = cb_sig_hashtype - 1;
 	txin->signatures = varstr_getdata_ptr(vsig_hashtype);
 	txin->hash_type = txin->signatures[txin->cb_signatures];
-	
-	txin->cb_redeem_scripts = varstr_length(vredeem_scripts);
-	txin->redeem_scripts = varstr_getdata_ptr(vredeem_scripts);
 	
 	return 0;
 }
@@ -438,14 +452,13 @@ ssize_t satoshi_txin_parse(satoshi_txin_t * txin, ssize_t length, const void * p
 		message_parser_error_handler("parse sig_scripts failed: %s", "invalid payload length.");
 	}
 	
-	
 	txin->cb_scripts = varstr_get(vstr_scripts, &txin->scripts, 0); 
-	if(txin->cb_scripts <= 0)
-	{
-		message_parser_error_handler("parse sig_scripts failed: %s", "invalid payload length.");
-	}
+	//~ if(txin->cb_scripts <= 0)
+	//~ {
+		//~ message_parser_error_handler("parse sig_scripts failed: %s", "invalid payload length.");
+	//~ }
 	
-	if(!txin->is_coinbase)
+	if(!txin->is_coinbase && txin->cb_scripts)
 	{
 		int rc = parse_sig_scripts(txin);
 		if(rc) {
@@ -623,12 +636,9 @@ void satoshi_txout_cleanup(satoshi_txout_t * txout)
 //~ }satoshi_tx_t;
 
 
-ssize_t satoshi_tx_parse(satoshi_tx_t * _tx, ssize_t length, const void * payload)
+ssize_t satoshi_tx_parse(satoshi_tx_t * tx, ssize_t length, const void * payload)
 {
-	satoshi_tx_t * tx = _tx;
-	if(NULL == tx) tx = calloc(1, sizeof(*tx));
 	assert(tx);
-	
 	assert(length > 0 && length <= MAX_BLOCK_SERIALIZED_SIZE);
 	
 	const unsigned char * p = payload;
@@ -696,9 +706,45 @@ ssize_t satoshi_tx_parse(satoshi_tx_t * _tx, ssize_t length, const void * payloa
 	}
 	
 	// parse witnesses_data if has
+	tx->cb_witnesses = 0;
 	if(tx->has_flag)
 	{
-		assert(tx->has_flag);	///< @todo parse witness data
+		/*
+		 * parse payload to witnesses[(tx->txins_count)] array
+		 * each txin is associated with a witness field
+		 * if a txin is non-witness, set witness to 0x00.
+		 */
+		
+		assert(tx->txin_count > 0);
+		bitcoin_tx_witness_t * witnesses = calloc(tx->txin_count, sizeof(*tx->witnesses));
+		assert(witnesses);
+		
+		tx->witnesses = witnesses;
+		const unsigned char * p_witnesses = p;
+		for(ssize_t i = 0; i < tx->txin_count; ++i)
+		{
+			if(p >= p_end) message_parser_error_handler("parse witness data failed: %s.", "invalid payload length");
+			
+			ssize_t num_items = varint_get((varint_t *)p);
+			p += varint_size((varint_t *)p);
+			
+			witnesses[i].num_items = num_items;
+			if(num_items > 0)
+			{
+				varstr_t ** items = calloc(num_items, sizeof(*items));
+				assert(items);
+				witnesses[i].items = items;
+				
+				for(ssize_t item_index = 0; item_index < num_items; ++item_index)
+				{
+					if(p >= p_end) message_parser_error_handler("parse witness data failed: %s.", "invalid payload length");
+					items[item_index] = varstr_clone((varstr_t *)p);
+					assert(items[item_index]);
+					p += varstr_size((varstr_t *)p);
+				}
+			}
+		}
+		tx->cb_witnesses = p - p_witnesses;
 	}
 	
 	// parse lock_time
@@ -713,9 +759,34 @@ label_error:
 	satoshi_tx_cleanup(tx);
 	return -1;
 }
+
+void bitcoin_tx_witness_cleanup(bitcoin_tx_witness_t * witness)
+{
+	if(NULL == witness) return;
+	for(ssize_t ii = 0; ii < witness->num_items; ++ii)
+	{
+		free(witness->items[ii]);
+	}
+	free(witness->items);
+	witness->items = NULL;
+	witness->num_items = 0;
+	return;
+}
+
 void satoshi_tx_cleanup(satoshi_tx_t * tx)
 {
 	if(NULL == tx) return;
+	
+	if(tx->has_flag && tx->witnesses)
+	{
+		for(ssize_t i = 0; i < tx->txin_count; ++i)
+		{
+			bitcoin_tx_witness_cleanup(&tx->witnesses[i]);
+		}
+		free(tx->witnesses);
+		tx->witnesses = NULL;
+	}
+	
 	if(tx->txins)
 	{
 		for(ssize_t i = 0; i < tx->txin_count; ++i)
@@ -736,6 +807,8 @@ void satoshi_tx_cleanup(satoshi_tx_t * tx)
 		tx->txouts = NULL;
 		tx->txout_count = 0;
 	}
+	
+	
 	return;
 }
 
@@ -824,12 +897,34 @@ ssize_t satoshi_tx_serialize(const satoshi_tx_t * tx, unsigned char ** p_data)
 	// witnesses data
 	if(tx->has_flag)
 	{
-		if(tx->cb_witnesses > 0)
+		assert(tx->cb_witnesses > 0 && tx->witnesses);
+		unsigned char * p_witnesses = p;
+		assert((p + tx->cb_witnesses) < p_end);
+		
+		bitcoin_tx_witness_t * witnesses = tx->witnesses;
+		for(ssize_t i = 0; i < tx->txin_count; ++i)
 		{
-			assert((p + tx->cb_witnesses) < p_end);
-			assert(tx->witnesses);
-			memcpy(p, tx->witnesses, tx->cb_witnesses);
-			p += tx->cb_witnesses;
+			// write items count
+			ssize_t num_items = witnesses[i].num_items;
+			varint_set((varint_t *)p, num_items);
+			p += varint_size((varint_t *)p);
+			
+			if(num_items)
+			{
+				varstr_t ** items = witnesses[i].items;
+				assert(items);
+				
+				for(ssize_t ii = 0; ii < num_items; ++ii)
+				{
+					varstr_t * item = items[ii];
+					assert(item);
+					ssize_t item_size = varstr_size(item);
+					memcpy(p, item, item_size);
+					p += item_size;
+				}
+			}
+			
+			assert((p_witnesses + tx->cb_witnesses) == p); 
 		}
 	}
 	
