@@ -38,6 +38,7 @@
 
 #include <stdint.h>
 #include <inttypes.h>
+#include "satoshi-script.h"
 
 #define debug_printf(fmt, ...) do { \
 		fprintf(stderr, "\e[33m" "%s@%d::%s(): " fmt "\e[39m\n", 	\
@@ -731,6 +732,7 @@ int test_p2wpkh(int argc, char **argv)
 		private key  : bbc27228ddcb9209d7fd6f36b02f7dfa6252af40bb2f1cbc7a557da8027ff866
 	*/
 	
+	// prepare utxo[0]
 	utxoes[0].value = 625000000;	// 6.25 BTC == 625000000 satoshi
 	cb = hex2bin("232103c9f4836b9a4f77fc0d81f7bcb01b7f1b35916864b9476c241ce9fc198bd25432ac", -1, 
 		(void **)&utxoes[0].scripts);
@@ -741,10 +743,36 @@ int test_p2wpkh(int argc, char **argv)
 		private key  : 619c335025c7f4012e556c2a58b2506e30b8511b53ade95ea316fd8c3286feb9
 		public key   : 025476c2e83188368da1ff3e292e7acafcdb3566bb0ad253f62fc70f07aeee6357
 	
-		** PS. there may be errors in the BIP143 documentation. (https://github.com/bitcoin/bips/blob/master/bip-0143.mediawiki)
-		*  	the correct second input should come from an ordinary p2pkh
-		* 	scriptPubkey: 1976a9141d0f172a0ecb48aee1be1f2687d2963ae33f71a188ac, value 6
+		P2WPKH witness program
 	*/
+	
+	// verify P2WPKH witness program
+	unsigned char p2wpkh_program[25] = {
+		[0] = 25, 	// 0x19, vstr.length
+		[1] = satoshi_script_opcode_op_dup,
+		[2] = satoshi_script_opcode_op_hash160,
+		// [3 .. 22 ] <-- hash160
+		[23] = satoshi_script_opcode_op_equalverify, 
+		[24] = satoshi_script_opcode_op_checksig
+	};
+	unsigned char * pubkey2_data = NULL;
+	ssize_t cb_pubkey = hex2bin("025476c2e83188368da1ff3e292e7acafcdb3566bb0ad253f62fc70f07aeee6357", -1, (void **)&pubkey2_data);
+	assert(cb_pubkey == 33);
+	hash160(pubkey2_data, cb_pubkey, &p2wpkh_program[3]);
+	dump_line("p2pkh program: ", p2wpkh_program, 25);
+	
+	unsigned char * script_pubkey_data = NULL;
+	ssize_t cb_pkscript = hex2bin("00141d0f172a0ecb48aee1be1f2687d2963ae33f71a1", -1, (void **)&script_pubkey_data);
+	assert(cb_pkscript == 22);
+	
+	assert(0 == memcmp(&p2wpkh_program[3], // hash160(pubkey)
+					&script_pubkey_data[2], // hash160(pubkey)
+					20));
+					
+	free(pubkey2_data);
+	free(script_pubkey_data);
+	
+	// prepare utxo[1]
 	utxoes[1].value = 600000000;
 	cb = hex2bin("1976a9141d0f172a0ecb48aee1be1f2687d2963ae33f71a188ac", -1, 
 		(void **)&utxoes[1].scripts);

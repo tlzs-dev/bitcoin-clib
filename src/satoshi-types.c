@@ -548,7 +548,7 @@ ssize_t satoshi_txout_parse(satoshi_txout_t * txout, ssize_t length, const void 
 	
 	// parse pk_scripts
 	ssize_t vstr_size = varstr_size((varstr_t *)p);
-	if((p + vstr_size) > p_end) message_parser_error_handler("%s", "invalid varint size.");
+	if((p + vstr_size) > p_end) message_parser_error_handler("%s", "invalid varstr size or payload length.");
 	
 	txout->scripts = varstr_clone((varstr_t *)p);
 	assert(txout->scripts && varstr_size(txout->scripts) == vstr_size);
