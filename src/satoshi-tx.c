@@ -747,25 +747,26 @@ int test_p2wpkh(int argc, char **argv)
 	*/
 	
 	// verify P2WPKH witness program
-	unsigned char p2wpkh_program[25] = {
+	unsigned char p2wpkh_program[] = {
 		[0] = 25, 	// 0x19, vstr.length
 		[1] = satoshi_script_opcode_op_dup,
 		[2] = satoshi_script_opcode_op_hash160,
-		// [3 .. 22 ] <-- hash160
-		[23] = satoshi_script_opcode_op_equalverify, 
-		[24] = satoshi_script_opcode_op_checksig
+		[3] = 20, 	// sizeof( hash160 )
+		// ( [4] .. [23 ]) <-- hash160
+		[24] = satoshi_script_opcode_op_equalverify, 
+		[25] = satoshi_script_opcode_op_checksig
 	};
 	unsigned char * pubkey2_data = NULL;
 	ssize_t cb_pubkey = hex2bin("025476c2e83188368da1ff3e292e7acafcdb3566bb0ad253f62fc70f07aeee6357", -1, (void **)&pubkey2_data);
 	assert(cb_pubkey == 33);
-	hash160(pubkey2_data, cb_pubkey, &p2wpkh_program[3]);
+	hash160(pubkey2_data, cb_pubkey, &p2wpkh_program[4]);
 	dump_line("p2pkh program: ", p2wpkh_program, 25);
 	
 	unsigned char * script_pubkey_data = NULL;
 	ssize_t cb_pkscript = hex2bin("00141d0f172a0ecb48aee1be1f2687d2963ae33f71a1", -1, (void **)&script_pubkey_data);
 	assert(cb_pkscript == 22);
 	
-	assert(0 == memcmp(&p2wpkh_program[3], // hash160(pubkey)
+	assert(0 == memcmp(&p2wpkh_program[4], // hash160(pubkey)
 					&script_pubkey_data[2], // hash160(pubkey)
 					20));
 					
@@ -774,9 +775,11 @@ int test_p2wpkh(int argc, char **argv)
 	
 	// prepare utxo[1]
 	utxoes[1].value = 600000000;
-	cb = hex2bin("1976a9141d0f172a0ecb48aee1be1f2687d2963ae33f71a188ac", -1, 
-		(void **)&utxoes[1].scripts);
-	assert(utxoes[1].scripts && cb > 0);
+	utxoes[1].scripts = varstr_clone((varstr_t *)p2wpkh_program);
+	assert(utxoes[1].scripts && varstr_size(utxoes[1].scripts) == sizeof(p2wpkh_program));
+	//~ cb = hex2bin("1976a9141d0f172a0ecb48aee1be1f2687d2963ae33f71a188ac", -1, 
+		//~ (void **)&utxoes[1].scripts);
+	//~ assert(utxoes[1].scripts && cb > 0);
 	
 	// get digests - method-1: use struct satoshi_rawtx
 	rc = satoshi_rawtx_get_digest(rawtx, 0, &utxoes[0], &hashes[0]); assert(0 == rc);
