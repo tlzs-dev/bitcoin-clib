@@ -1,0 +1,23 @@
+# ignore all
+*
+
+# allow files with extensions
+!*.*
+
+# ignore hidden files / folders
+.*/*
+
+# allow Makefile LICENSE .gitignore
+!Makefile
+!LICENSE
+
+# ignore files
+*.so
+*.bak
+backup/
+
+*/obj/*
+*/bin/*
+*/lib/*
+
+

@@ -139,12 +139,8 @@ typedef struct satoshi_txin
 	int is_coinbase;	// coinbase flag
 	int is_p2sh;		// p2sh flag
 	
-	ssize_t cb_scripts;
-	unsigned char * scripts;
-
-	// for coinbase txins only
-	ssize_t cb_coinbase_script;
-	const unsigned char * coinbase_scripts;
+	varstr_t * scripts;
+	ssize_t cb_scripts;	// hold scripts length
 	
 	// for standard txins
 	ssize_t cb_signatures;
@@ -164,8 +160,7 @@ void satoshi_txin_cleanup(satoshi_txin_t * txin);
 typedef struct satoshi_txout
 {
 	int64_t value;
-	ssize_t cb_script;
-	unsigned char * scripts;
+	varstr_t * scripts;
 }satoshi_txout_t;
 ssize_t satoshi_txout_parse(satoshi_txout_t * txout, ssize_t length, const void * payload);
 ssize_t satoshi_txout_serialize(const satoshi_txout_t * txout, unsigned char ** p_data);

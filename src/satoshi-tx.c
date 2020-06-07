@@ -39,6 +39,18 @@
 #include <stdint.h>
 #include <inttypes.h>
 
+#define debug_printf(fmt, ...) do { \
+		fprintf(stderr, "\e[33m" "%s@%d::%s(): " fmt "\e[39m\n", 	\
+			__FILE__, __LINE__, __FUNCTION__,						\
+			##__VA_ARGS__);											\
+	} while(0)
+
+#define debug_dump(prefix, data, length) do {						\
+		fprintf(stderr, "\e[33m" "%s: ",	prefix);				\
+		dump2(stderr, data, length);								\
+		fprintf(stderr, "\e[39m\n");							\
+	} while(0)
+
 /**
  * Segregated Witness: 
  * 	Transaction Signature Verification for Version 0 Witness Program
@@ -60,18 +72,18 @@ A new transaction digest algorithm is defined, but only applicable to sigops in 
 
 **/
 
-
-
 static ssize_t segwit_v0_generate_preimage(const satoshi_tx_t * tx, 
 	int cur_index, 	// current txin index
 	const satoshi_txout_t * utxo, // prevout
 	unsigned char ** p_image)
 {
+	ssize_t pk_scripts_size = varstr_size(utxo->scripts);
+	
 	ssize_t cb_image = sizeof(uint32_t)		// 1. nVersion of the transaction (4-byte little endian)
 		+ sizeof(uint256_t)	// 2. hashPrevouts (32-byte hash)
 		+ sizeof(uint256_t)	// 3. hashSequence (32-byte hash)
 		+ sizeof(satoshi_outpoint_t)	// 4. outpoint (32-byte hash + 4-byte little endian) 
-		+ varint_calc_size(utxo->cb_script) + utxo->cb_script	//  5. scriptCode of the input (serialized as scripts inside CTxOuts)
+		+ pk_scripts_size	//  5. scriptCode of the input (serialized as scripts inside CTxOuts)
 		+ sizeof(int64_t) // 6. value of the output spent by this input (8-byte little endian)
 		+ sizeof(uint32_t) // 7. nSequence of the input (4-byte little endian)
 		+ sizeof(uint256_t) // 8. hashOutputs (32-byte hash)
@@ -95,6 +107,7 @@ static ssize_t segwit_v0_generate_preimage(const satoshi_tx_t * tx,
 	unsigned char * p_end = p + cb_image;
 	// 1. nVersion of the transaction (4-byte little endian)
 	*(uint32_t *)p = tx->version;
+	debug_dump("version", p, 4);
 	p += sizeof(uint32_t);
 	
     // 2. hashPrevouts (32-byte hash)	( sha256(sha256(outpoints[])) )
@@ -108,6 +121,8 @@ static ssize_t segwit_v0_generate_preimage(const satoshi_tx_t * tx,
 	sha256_init(sha);
 	sha256_update(sha, hash, 32);
 	sha256_final(sha, p);	// write hash256() result 
+	
+	debug_dump("hashPrevouts", p, 32);
 	p += sizeof(uint256_t);
     
     // 3. hashSequence (32-byte hash)
@@ -120,6 +135,8 @@ static ssize_t segwit_v0_generate_preimage(const satoshi_tx_t * tx,
 	sha256_init(sha);
 	sha256_update(sha, hash, 32);
 	sha256_final(sha, p);	// write hash256() result 
+	
+	debug_dump("hashSequence", p, 32);
 	p += sizeof(uint256_t);
 	
    //  4. outpoint (32-byte hash + 4-byte little endian) 
@@ -127,15 +144,18 @@ static ssize_t segwit_v0_generate_preimage(const satoshi_tx_t * tx,
    p += sizeof(satoshi_outpoint_t);
     
    //  5. scriptCode of the input (serialized as scripts inside CTxOuts)
-   varstr_set((varstr_t *)p, utxo->scripts, utxo->cb_script);
-   p += varstr_size((varstr_t *)p);
+   memcpy(p, utxo->scripts, pk_scripts_size);
+   debug_dump("scriptcode", p, pk_scripts_size);
+   p += pk_scripts_size;
    
    //  6. value of the output spent by this input (8-byte little endian)
    *(int64_t *)p = utxo->value;
+   debug_dump("value", p, 8);
    p += sizeof(int64_t);
    
    //  7. nSequence of the input (4-byte little endian)
    *(uint32_t *)p = txins[cur_index].sequence;
+   debug_dump("sequence", p, 4);
    p += sizeof(uint32_t);
 
    //  8. hashOutputs (32-byte hash)
@@ -143,30 +163,38 @@ static ssize_t segwit_v0_generate_preimage(const satoshi_tx_t * tx,
 	sha256_init(sha);
 	for(ssize_t i = 0; i < tx->txout_count; ++i)
 	{
-		unsigned char vlength[8];	// varint_t 
-		varint_set((varint_t *)vlength, txouts[i].cb_script);
 		sha256_update(sha, (unsigned char *)&txouts[i].value, sizeof(int64_t));
-		sha256_update(sha, vlength, varint_size((varint_t *)vlength));
-		sha256_update(sha, txouts[i].scripts, txouts[i].cb_script);
+		ssize_t vstr_size = varstr_size(txouts[i].scripts);
+		assert(vstr_size > 0);
+		sha256_update(sha, (unsigned char *)txouts[i].scripts, vstr_size);
 	}
 	sha256_final(sha, hash);
 	sha256_init(sha);
 	sha256_update(sha, hash, 32);
 	sha256_final(sha, p);	// write hash256() result 
 	
+	debug_dump("hashOutputs", p, 32);
+	p += 32;
+	
     // 9. nLocktime of the transaction (4-byte little endian)
     *(uint32_t *)p = tx->lock_time;
+    debug_dump("lock_time", p, 4);
     p += sizeof(uint32_t);
     
     // 10. sighash type of the signature (4-byte little endian)
-	*(uint32_t *)p = txins[cur_index].hash_type;
+    
+    uint32_t hash_type = txins[cur_index].hash_type;
+	if(0 == hash_type) hash_type = 1;
+    
+	*(uint32_t *)p = hash_type;
+	debug_dump("hash_type", p, 4);
 	p += sizeof(uint32_t);
+	
+	
 	
 	assert(p == p_end);
 	return cb_image;
 }
-
-
 
 int segwit_v0_tx_get_digest(const satoshi_tx_t * tx, 
 	int cur_index, 		// txin index
@@ -177,6 +205,8 @@ int segwit_v0_tx_get_digest(const satoshi_tx_t * tx,
 	unsigned char * preimage = NULL;
 	ssize_t cb_image = segwit_v0_generate_preimage(tx, cur_index, utxo, &preimage);
 	assert(cb_image > 0 && preimage);
+	
+	debug_printf("preimage length: %ld", (long)cb_image);
 	
 	hash256(preimage, cb_image, (unsigned char *)hash);
 	free(preimage);
@@ -199,24 +229,19 @@ int satoshi_tx_get_digest(const satoshi_tx_t * tx,
 		return segwit_v0_tx_get_digest(tx, cur_index, utxo, hash);
 	}
 	
-	struct scripts_data * backup = NULL;
-	backup = calloc(tx->txin_count, sizeof(struct scripts_data));
-	assert(backup);
+	varstr_t ** backup_scripts = NULL;
+	backup_scripts = calloc(tx->txin_count, sizeof(*backup_scripts));
+	assert(backup_scripts);
 	
 	satoshi_txin_t * txins = (satoshi_txin_t *)tx->txins;
 	for(ssize_t i = 0; i < tx->txin_count; ++i)
 	{
-		backup[i].scripts = txins[i].scripts;
-		backup[i].cb_scripts = txins[i].cb_scripts;
-		
+		*(unsigned char *)txins[i].scripts = 0;		// set txin's script length to zero
+		backup_scripts[i] = txins[i].scripts;
+
 		if(i == cur_index)
 		{
 			txins[i].scripts = utxo->scripts;
-			txins[i].cb_scripts = utxo->cb_script;
-		}else
-		{
-			txins[i].scripts = NULL;
-			txins[i].cb_scripts = 0;
 		}
 	}
 	
@@ -234,10 +259,10 @@ int satoshi_tx_get_digest(const satoshi_tx_t * tx,
 
 	for(ssize_t i = 0; i < tx->txin_count; ++i)
 	{
-		txins[i].scripts = backup[i].scripts;
-		txins[i].cb_scripts = backup[i].cb_scripts;
+		txins[i].scripts = backup_scripts[i];
+		varint_set((varint_t *)txins[i].scripts, txins[i].cb_scripts);	// restore script length
 	}
-	free(backup);
+	free(backup_scripts);
 	return 0;
 }
 
@@ -274,6 +299,8 @@ satoshi_rawtx_t * satoshi_rawtx_prepare(satoshi_rawtx_t * rawtx, satoshi_tx_t * 
 		// 1. nVersion of the transaction (4-byte little endian)
 		sha256_update(rawtx->sha, (unsigned char *)&tx->version, sizeof(uint32_t));
 		
+		printf("---- 1. hash version: %u\n", tx->version);
+		
 		// 2. hashPrevouts (32-byte hash)	( sha256(sha256(outpoints[])) )
 		const satoshi_txin_t * txins = tx->txins;
 		sha256_init(temp_sha);
@@ -287,6 +314,7 @@ satoshi_rawtx_t * satoshi_rawtx_prepare(satoshi_rawtx_t * rawtx, satoshi_tx_t * 
 		sha256_final(temp_sha, hash);	// calc hash256() result 
 		
 		sha256_update(rawtx->sha, (unsigned char *)hash, 32);
+		printf("---- 2. hashPrevouts: "); dump(hash, 32); printf("\n");
 		
 		
 		// 3. hashSequence (32-byte hash)
@@ -301,21 +329,25 @@ satoshi_rawtx_t * satoshi_rawtx_prepare(satoshi_rawtx_t * rawtx, satoshi_tx_t * 
 		sha256_final(temp_sha, hash);	// write hash256() result 
 		
 		sha256_update(rawtx->sha, (unsigned char *)hash, 32);
+		printf("---- 2. hashSequence: "); dump(hash, 32); printf("\n");
 		
 		//  8. hashOutputs (32-byte hash)
 		const satoshi_txout_t * txouts = tx->txouts;
+		sha256_init(temp_sha);
 		for(ssize_t i = 0; i < tx->txout_count; ++i)
 		{
-			unsigned char vlength[8];	// varint_t 
-			varint_set((varint_t *)vlength, txouts[i].cb_script);
+			ssize_t vstr_size = varstr_size(txouts[i].scripts);
+			assert(vstr_size > 0);
+			
 			sha256_update(temp_sha, (unsigned char *)&txouts[i].value, sizeof(int64_t));
-			sha256_update(temp_sha, vlength, varint_size((varint_t *)vlength));
-			sha256_update(temp_sha, txouts[i].scripts, txouts[i].cb_script);
+			sha256_update(temp_sha, (unsigned char *)txouts[i].scripts, vstr_size);
 		}
 		sha256_final(temp_sha, hash);
 		sha256_init(temp_sha);
 		sha256_update(temp_sha, hash, 32);
 		sha256_final(temp_sha, rawtx->txouts_hash);	// write hash256() result 
+		printf("---- 8. hashOutputs: "); dump(hash, 32); printf("\n");
+		
 		
 	}else // legacy tx
 	{
@@ -326,17 +358,15 @@ satoshi_rawtx_t * satoshi_rawtx_prepare(satoshi_rawtx_t * rawtx, satoshi_tx_t * 
 		satoshi_txin_t * txins = tx->txins;
 		for(ssize_t i = 0; i < tx->txin_count; ++i)
 		{
-			rawtx->backup[i].scripts = txins[i].scripts;
-			rawtx->backup[i].cb_scripts = txins[i].cb_scripts;
+			*(unsigned char *)txins[i].scripts = 0;	// set length to zero
+			rawtx->backup[i] = txins[i].scripts;
 			
-			txins[i].scripts = NULL;
-			txins[i].cb_scripts = 0;
 		}
 	}
 	return rawtx;
 }
 
-void satoshi_rawtx_reset(satoshi_rawtx_t * rawtx)
+void satoshi_rawtx_final(satoshi_rawtx_t * rawtx)
 {
 	if(NULL == rawtx || NULL == rawtx->backup) return;
 	
@@ -351,8 +381,8 @@ void satoshi_rawtx_reset(satoshi_rawtx_t * rawtx)
 			satoshi_txin_t * txins = tx->txins;
 			for(ssize_t i = 0; i < tx->txin_count; ++i)
 			{
-				txins[i].scripts = rawtx->backup[i].scripts;
-				txins[i].cb_scripts = rawtx->backup[i].cb_scripts;
+				txins[i].scripts = rawtx->backup[i];
+				varint_set((varint_t *)txins[i].scripts, txins[i].cb_scripts);
 			}
 		}
 		free(rawtx->backup);
@@ -375,37 +405,53 @@ int satoshi_rawtx_get_digest(satoshi_rawtx_t * rawtx,
 	assert(tx->txins && cur_index >= 0 && cur_index < tx->txin_count && utxo && hash);
 	sha256_ctx_t sha[1];
 	memcpy(sha, rawtx->sha, sizeof(sha));	// copy internal state ( common data pre-hashed )
+
 	
-	unsigned char vlength[8] = {0};	// hold enough buffer size, can be processed as varint_t * 
-	
+	ssize_t cb_image = 0;
 	if(tx->has_flag)
 	{
 		assert(tx->flag[0] == 0 && tx->flag[1] == 1);
 		
+		cb_image = 4 + 32 + 32;	// skip pre-hashed data
 		satoshi_txin_t * txins = tx->txins;
 		
 		// hash different parts (start from step 4)
 		//  4. outpoint (32-byte hash + 4-byte little endian) 
 		sha256_update(sha, (unsigned char *)&txins[cur_index].outpoint, sizeof(satoshi_outpoint_t));
+		cb_image += sizeof(satoshi_outpoint_t);
 		
 		//  5. scriptCode of the input (serialized as scripts inside CTxOuts)
-		varint_set((varint_t *)vlength, utxo->cb_script);
-		sha256_update(sha, vlength, varint_size((varint_t *)vlength));
+		ssize_t vstr_size = varstr_size(utxo->scripts);
+		assert(vstr_size > 0);
+		sha256_update(sha, (unsigned char *)utxo->scripts, vstr_size);
+		cb_image += vstr_size;
 		
 		//  6. value of the output spent by this input (8-byte little endian)
-		sha256_update(sha, (unsigned char *)utxo->value, sizeof(int64_t));
+		sha256_update(sha, (unsigned char *)&utxo->value, sizeof(int64_t));
+		cb_image += 8;
 		
 		//  7. nSequence of the input (4-byte little endian)
 		sha256_update(sha, (unsigned char *)&txins[cur_index].sequence, sizeof(uint32_t));
+		cb_image += 4;
 
 		//  8. hashOutputs (32-byte hash)
 		sha256_update(sha, rawtx->txouts_hash, 32);
+		cb_image += 32;
 		
 		// 9. nLocktime of the transaction (4-byte little endian)
 		sha256_update(sha, (unsigned char *)&tx->lock_time, sizeof(uint32_t));
+		cb_image += 4;
 		
 		// 10. sighash type of the signature (4-byte little endian)
-		sha256_update(sha, (unsigned char *)&txins[cur_index].hash_type, sizeof(uint32_t));
+		uint32_t hash_type = txins[cur_index].hash_type;
+		if(0 == hash_type) hash_type = 1;
+		
+		sha256_update(sha, (unsigned char *)&hash_type, sizeof(uint32_t));
+		cb_image += 4;
+		
+		debug_printf("hash_type: %u", hash_type);
+		debug_printf("preimage length: %ld", cb_image);
+		
 	}else
 	{
 		satoshi_txin_t * txins = tx->txins;
@@ -414,11 +460,9 @@ int satoshi_rawtx_get_digest(satoshi_rawtx_t * rawtx,
 			if(i == cur_index)
 			{
 				txins[i].scripts = utxo->scripts;
-				txins[i].cb_scripts = utxo->cb_script;
 			}else
 			{
-				txins[i].scripts = NULL;
-				txins[i].cb_scripts = 0;
+				txins[i].scripts = rawtx->backup[i];
 			}
 		}
 		
@@ -427,7 +471,13 @@ int satoshi_rawtx_get_digest(satoshi_rawtx_t * rawtx,
 		assert(preimage && cb_image > 0);
 		
 		sha256_update(sha, preimage, cb_image);
-		sha256_update(sha, (unsigned char *)&txins[cur_index].hash_type, sizeof(uint32_t));
+		
+		uint32_t hash_type = txins[cur_index].hash_type;
+		if(0 == hash_type) hash_type = 1;
+		
+		sha256_update(sha, (unsigned char *)&hash_type, sizeof(uint32_t));
+		
+		debug_printf("hash_type: %u\n", hash_type);
 	}
 	
 	sha256_final(sha, (unsigned char *)hash);
@@ -526,7 +576,7 @@ int satoshi_tx_add_outputs(satoshi_tx_t * tx,
 	for(ssize_t i = 0; i < count; ++i)
 	{
 		txouts[i].value = values[i];
-		txouts[i].cb_script = varstr_get(scripts[i], &txouts[i].scripts, 0);
+		txouts[i].scripts = varstr_clone(scripts[i]);
 	}
 	return 0;
 }
@@ -549,6 +599,17 @@ void satoshi_tx_dump(const satoshi_tx_t * tx)
 		printf("\t== txins[%d] ==\n", (int)i);
 		printf("\t" "outpoint: "); dump(&txin->outpoint.prev_hash, 32); printf(" %.8d\n", (int)txin->outpoint.index);
 		printf("\t" "sig_scripts: (cb=%d)", (int)txin->cb_scripts); dump(txin->scripts, txin->cb_scripts); printf("\n");
+		
+			if(txin->signatures && txin->cb_signatures > 0)
+			{
+				dump_line("\t\tsignatuers: ", txin->signatures, txin->cb_signatures);
+			}
+			printf("\t\thash_type: %u\n", (txin->hash_type > 0)?txin->hash_type:1);
+			if(txin->redeem_scripts && txin->cb_redeem_scripts > 0)
+			{
+				dump_line("redeem scripts: ", txin->redeem_scripts, txin->cb_redeem_scripts);
+			}
+		
 		printf("\t" "sequence: "); dump(&txin->sequence, 4); printf("\n");
 	}
 	printf("== txouts_count: %Zd ==\n", tx->txout_count);
@@ -557,7 +618,8 @@ void satoshi_tx_dump(const satoshi_tx_t * tx)
 		const satoshi_txout_t * txout = &tx->txouts[i];
 		printf("\t== txouts[%d] ==\n", (int)i);
 		printf("\t" "value: %" PRIi64 "(", txout->value); dump(&txout->value, 8); printf(")\n");
-		printf("\t" "pk_scripts: (cb=%d)", (int)txout->cb_script); dump(txout->scripts, txout->cb_script); printf("\n");
+		ssize_t cb_scripts = varstr_length(txout->scripts);
+		printf("\t" "pk_scripts: (cb=%d)", (int)cb_scripts); dump(varstr_getdata_ptr(txout->scripts), cb_scripts); printf("\n");
 	}
 	
 	if(tx->has_flag && tx->witnesses)
@@ -589,6 +651,7 @@ void satoshi_tx_dump(const satoshi_tx_t * tx)
 int test_p2wpkh(int argc, char **argv)
 {
 	static const char * rawtx_hex = "01000000"
+	"0001"
 	"02"
 		"fff7f7881a8099afa6940d42d1e7f6362bec38171ea3edf433541db4e4ad969f" "00000000"
 		"00"
@@ -613,7 +676,7 @@ int test_p2wpkh(int argc, char **argv)
 						"0221008b9d1dc26ba6a9cb62127b02742fa9d754cd3bebf337f7a55d114c8e5cdd30be"
 						"022040529b194ba3f9281a99f2b1c0a19c0489bc22ede944ccf4ecbab4cc618ef3ed"
 					"01"
-				"eeffffff"
+			"eeffffff"
 			"ef51e1b804cc89d182d279655c3aa89e815b1b309fe287d9b2b55d57b90ec68a" "01000000"
 			"00"
 			"ffffffff"
@@ -630,6 +693,7 @@ int test_p2wpkh(int argc, char **argv)
 				"025476c2e83188368da1ff3e292e7acafcdb3566bb0ad253f62fc70f07aeee6357"
 		"11000000";
 	
+	int rc = 0;
 	unsigned char * rawtx_data = NULL;
 	unsigned char * signed_tx_data = NULL;
 	
@@ -651,6 +715,136 @@ int test_p2wpkh(int argc, char **argv)
 	satoshi_tx_dump(&tx[0]);
 	satoshi_tx_dump(&tx[1]);
 	
+	
+	// verify tx[1]
+	satoshi_rawtx_t rawtx[1];
+	memset(rawtx, 0, sizeof(rawtx));
+	satoshi_rawtx_prepare(rawtx, &tx[1]);
+	
+	uint256_t hashes[2];
+	satoshi_txout_t utxoes[2];
+	memset(utxoes, 0, sizeof(utxoes));
+	memset(hashes, 0, sizeof(hashes));
+	/*
+		The first input comes from an ordinary P2PK:
+		scriptPubKey : (23)2103c9f4836b9a4f77fc0d81f7bcb01b7f1b35916864b9476c241ce9fc198bd25432ac value: 6.25
+		private key  : bbc27228ddcb9209d7fd6f36b02f7dfa6252af40bb2f1cbc7a557da8027ff866
+	*/
+	
+	utxoes[0].value = 625000000;	// 6.25 BTC == 625000000 satoshi
+	cb = hex2bin("232103c9f4836b9a4f77fc0d81f7bcb01b7f1b35916864b9476c241ce9fc198bd25432ac", -1, 
+		(void **)&utxoes[0].scripts);
+	assert(utxoes[0].scripts && cb > 0);
+	/*
+		The second input comes from a P2WPKH witness program:
+		scriptPubKey : 00141d0f172a0ecb48aee1be1f2687d2963ae33f71a1, value: 6
+		private key  : 619c335025c7f4012e556c2a58b2506e30b8511b53ade95ea316fd8c3286feb9
+		public key   : 025476c2e83188368da1ff3e292e7acafcdb3566bb0ad253f62fc70f07aeee6357
+	
+		** PS. there may be errors in the BIP143 documentation. (https://github.com/bitcoin/bips/blob/master/bip-0143.mediawiki)
+		*  	the correct second input should come from an ordinary p2pkh
+		* 	scriptPubkey: 1976a9141d0f172a0ecb48aee1be1f2687d2963ae33f71a188ac, value 6
+	*/
+	utxoes[1].value = 600000000;
+	cb = hex2bin("1976a9141d0f172a0ecb48aee1be1f2687d2963ae33f71a188ac", -1, 
+		(void **)&utxoes[1].scripts);
+	assert(utxoes[1].scripts && cb > 0);
+	
+	// get digests - method-1: use struct satoshi_rawtx
+	rc = satoshi_rawtx_get_digest(rawtx, 0, &utxoes[0], &hashes[0]); assert(0 == rc);
+	rc = satoshi_rawtx_get_digest(rawtx, 1, &utxoes[1], &hashes[1]); assert(0 == rc);
+	dump_line("digests[0]: ", &hashes[0], 32);
+	dump_line("digests[1]: ", &hashes[1], 32);
+	
+	// get digests - method2: use segwit_v0_tx_get_digest()
+	uint256_t chk_hashes[2];
+	memset(chk_hashes, 0, sizeof(chk_hashes));
+		
+	satoshi_tx_get_digest(&tx[0], 0, &utxoes[0], &chk_hashes[0]); 
+	satoshi_tx_get_digest(&tx[0], 1, &utxoes[1], &chk_hashes[1]);
+	dump_line("chk_digests[0]: ", &chk_hashes[0], 32);
+	dump_line("chk_digests[1]: ", &chk_hashes[1], 32);
+	
+	// verify digest:  result of method1 == result of method2
+	assert(0 == memcmp(&hashes[0], &chk_hashes[0], 32));	
+	assert(0 == memcmp(&hashes[1], &chk_hashes[1], 32));
+
+
+	// restore tx[1]'s settings before crypto->verify
+	satoshi_rawtx_final(rawtx);	
+	
+	// verify signatures
+	unsigned char * sec_data[2] = { NULL };
+	cb = hex2bin("bbc27228ddcb9209d7fd6f36b02f7dfa6252af40bb2f1cbc7a557da8027ff866", -1, (void **)&sec_data[0]);
+	assert(cb == 32);
+	cb = hex2bin("619c335025c7f4012e556c2a58b2506e30b8511b53ade95ea316fd8c3286feb9", -1, (void **)&sec_data[1]);
+	assert(cb == 32);
+	
+	crypto_context_t * crypto = crypto_context_init(NULL, crypto_backend_libsecp256, NULL);
+	assert(crypto);
+	
+	// import privkeys
+	crypto_privkey_t * privkeys[2] = { NULL };
+	privkeys[0] = crypto_privkey_import(crypto, sec_data[0], 32);
+	privkeys[1] = crypto_privkey_import(crypto, sec_data[1], 32);
+	assert(privkeys[0] && privkeys[1]);
+	
+	// clear sensitive data
+	memset(sec_data[0], 0, 32);
+	memset(sec_data[1], 0, 32);
+	free(sec_data[0]);
+	free(sec_data[1]);
+	
+	// get pubkeys
+	const crypto_pubkey_t * pubkeys[2] = { NULL };
+	pubkeys[0] = crypto_privkey_get_pubkey(privkeys[0]);
+	pubkeys[1] = crypto_privkey_get_pubkey(privkeys[1]);
+	assert(pubkeys[0] && pubkeys[1]);
+	
+	unsigned char buffer[100] = { 0 };
+	unsigned char * pubkey_data = buffer;
+	cb = crypto_pubkey_export(crypto, (crypto_pubkey_t *)pubkeys[0], 1, &pubkey_data);
+	assert(cb > 0 && cb <= 65);
+	
+	dump_line("pubkey[0]: ", pubkey_data, cb);
+	dump_line("signatures[0]:", tx[1].txins[0].signatures, tx[1].txins[0].cb_signatures);
+	
+	
+	int index = 1;
+	const unsigned char * sig_der = NULL;
+	ssize_t cb_sig = 0;
+	
+	bitcoin_tx_witness_t * witness = &tx[1].witnesses[index];
+	sig_der = tx[1].txins[index].signatures;
+	cb_sig  = tx[1].txins[index].cb_signatures;
+	if(witness->num_items == 2)
+	{
+		sig_der = varstr_getdata_ptr(witness->items[0]);
+		cb_sig = varstr_length(witness->items[0]) - 1;
+		assert(cb_sig > 0);
+	}
+	
+	
+	rc = crypto->verify(crypto, (unsigned char *)&chk_hashes[index], 32,
+		pubkeys[index],
+		sig_der, cb_sig);
+	
+	printf("verify chk_hashes: [%s]\n", (0==rc)?"OK":"NG");
+	
+	
+	
+	rc = crypto->verify(crypto, (unsigned char *)&hashes[index], 32,
+		pubkeys[index],
+		sig_der, cb_sig);
+	assert(0 == rc);
+	
+	
+	
+	crypto_privkey_free(privkeys[0]);
+	crypto_privkey_free(privkeys[1]);
+	
+	crypto_context_cleanup(crypto);
+	free(crypto);
 	
 	satoshi_tx_cleanup(&tx[0]);
 	satoshi_tx_cleanup(&tx[1]);
