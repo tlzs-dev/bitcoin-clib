@@ -288,6 +288,18 @@ satoshi_rawtx_t * satoshi_rawtx_prepare(satoshi_rawtx_t * rawtx, satoshi_tx_t * 
 	assert(rawtx);
 	rawtx->tx = tx;
 	
+	rawtx->backup = calloc(tx->txin_count, sizeof(*rawtx->backup));
+	assert(rawtx->backup);
+	
+	// backup scripts
+	satoshi_txin_t * txins = tx->txins;
+	for(ssize_t i = 0; i < tx->txin_count; ++i)
+	{
+		*(unsigned char *)txins[i].scripts = 0;	// set length to zero
+		rawtx->backup[i] = txins[i].scripts;
+		
+	}
+	
 	sha256_ctx_t temp_sha[1];
 	unsigned char hash[32];
 	sha256_init(rawtx->sha);
@@ -350,19 +362,6 @@ satoshi_rawtx_t * satoshi_rawtx_prepare(satoshi_rawtx_t * rawtx, satoshi_tx_t * 
 		printf("---- 8. hashOutputs: "); dump(hash, 32); printf("\n");
 		
 		
-	}else // legacy tx
-	{
-		// backup scripts
-		rawtx->backup = calloc(tx->txin_count, sizeof(*rawtx->backup));
-		assert(rawtx->backup);
-		
-		satoshi_txin_t * txins = tx->txins;
-		for(ssize_t i = 0; i < tx->txin_count; ++i)
-		{
-			*(unsigned char *)txins[i].scripts = 0;	// set length to zero
-			rawtx->backup[i] = txins[i].scripts;
-			
-		}
 	}
 	return rawtx;
 }
@@ -374,18 +373,15 @@ void satoshi_rawtx_final(satoshi_rawtx_t * rawtx)
 	satoshi_tx_t * tx = rawtx->tx;
 	assert(tx);
 	
-	if(tx->has_flag == 0) // legacy tx
+	if(rawtx->backup) // legacy tx
 	{
-		
-		if(tx)
+		satoshi_txin_t * txins = tx->txins;
+		for(ssize_t i = 0; i < tx->txin_count; ++i)
 		{
-			satoshi_txin_t * txins = tx->txins;
-			for(ssize_t i = 0; i < tx->txin_count; ++i)
-			{
-				txins[i].scripts = rawtx->backup[i];
-				varint_set((varint_t *)txins[i].scripts, txins[i].cb_scripts);
-			}
+			txins[i].scripts = rawtx->backup[i];
+			varint_set((varint_t *)txins[i].scripts, txins[i].cb_scripts);
 		}
+		
 		free(rawtx->backup);
 		rawtx->backup = NULL;
 	}
@@ -649,10 +645,33 @@ void satoshi_tx_dump(const satoshi_tx_t * tx)
 	printf("locktime: "); dump(&tx->lock_time, 4); printf("\n");
 }
 
+static inline crypto_privkey_t * import_privkey_from_string(crypto_context_t * crypto, const char * secdata_hex)
+{
+	assert(crypto && secdata_hex);
+	
+	if(NULL == crypto) crypto = crypto_context_init(NULL, crypto_backend_libsecp256, NULL);
+	assert(crypto);
+	
+	int cb_hex = strlen(secdata_hex);
+	if(cb_hex != 64) return NULL;
+	
+	unsigned char buffer[32] = { 0 };
+	void * secdata = buffer;
+	ssize_t cb = hex2bin(secdata_hex, cb_hex, &secdata);
+	assert(cb == 32 && secdata == buffer);
+	
+	crypto_privkey_t * privkey = crypto_privkey_import(crypto, secdata, cb);
+	assert(privkey);
+	
+	// clear sensitive data
+	memset(buffer, 0, 32);
+	return privkey;
+}
+
 int test_p2wpkh(int argc, char **argv)
 {
 	static const char * rawtx_hex = "01000000"
-	"0001"
+//	"0001"
 	"02"
 		"fff7f7881a8099afa6940d42d1e7f6362bec38171ea3edf433541db4e4ad969f" "00000000"
 		"00"
@@ -717,24 +736,22 @@ int test_p2wpkh(int argc, char **argv)
 	satoshi_tx_dump(&tx[1]);
 	
 	
-	// verify tx[1]
-	satoshi_rawtx_t rawtx[1];
-	memset(rawtx, 0, sizeof(rawtx));
-	satoshi_rawtx_prepare(rawtx, &tx[1]);
 	
-	uint256_t hashes[2];
 	satoshi_txout_t utxoes[2];
 	memset(utxoes, 0, sizeof(utxoes));
-	memset(hashes, 0, sizeof(hashes));
 	/*
 		The first input comes from an ordinary P2PK:
-		scriptPubKey : (23)2103c9f4836b9a4f77fc0d81f7bcb01b7f1b35916864b9476c241ce9fc198bd25432ac value: 6.25
+		scriptPubKey : 2103c9f4836b9a4f77fc0d81f7bcb01b7f1b35916864b9476c241ce9fc198bd25432ac value: 6.25
 		private key  : bbc27228ddcb9209d7fd6f36b02f7dfa6252af40bb2f1cbc7a557da8027ff866
 	*/
 	
 	// prepare utxo[0]
 	utxoes[0].value = 625000000;	// 6.25 BTC == 625000000 satoshi
-	cb = hex2bin("232103c9f4836b9a4f77fc0d81f7bcb01b7f1b35916864b9476c241ce9fc198bd25432ac", -1, 
+	cb = hex2bin(
+		"23"	// varstr.length
+		"2103c9f4836b9a4f77fc0d81f7bcb01b7f1b35916864b9476c241ce9fc198bd25432"	// vstr(pubkey)
+		"ac", 	// OP_CHECKSIG
+		-1, 
 		(void **)&utxoes[0].scripts);
 	assert(utxoes[0].scripts && cb > 0);
 	/*
@@ -769,7 +786,7 @@ int test_p2wpkh(int argc, char **argv)
 	assert(0 == memcmp(&p2wpkh_program[4], // hash160(pubkey)
 					&script_pubkey_data[2], // hash160(pubkey)
 					20));
-					
+
 	free(pubkey2_data);
 	free(script_pubkey_data);
 	
@@ -781,50 +798,15 @@ int test_p2wpkh(int argc, char **argv)
 		//~ (void **)&utxoes[1].scripts);
 	//~ assert(utxoes[1].scripts && cb > 0);
 	
-	// get digests - method-1: use struct satoshi_rawtx
-	rc = satoshi_rawtx_get_digest(rawtx, 0, &utxoes[0], &hashes[0]); assert(0 == rc);
-	rc = satoshi_rawtx_get_digest(rawtx, 1, &utxoes[1], &hashes[1]); assert(0 == rc);
-	dump_line("digests[0]: ", &hashes[0], 32);
-	dump_line("digests[1]: ", &hashes[1], 32);
-	
-	// get digests - method2: use segwit_v0_tx_get_digest()
-	uint256_t chk_hashes[2];
-	memset(chk_hashes, 0, sizeof(chk_hashes));
-		
-	satoshi_tx_get_digest(&tx[0], 0, &utxoes[0], &chk_hashes[0]); 
-	satoshi_tx_get_digest(&tx[0], 1, &utxoes[1], &chk_hashes[1]);
-	dump_line("chk_digests[0]: ", &chk_hashes[0], 32);
-	dump_line("chk_digests[1]: ", &chk_hashes[1], 32);
-	
-	// verify digest:  result of method1 == result of method2
-	assert(0 == memcmp(&hashes[0], &chk_hashes[0], 32));	
-	assert(0 == memcmp(&hashes[1], &chk_hashes[1], 32));
-
-
-	// restore tx[1]'s settings before crypto->verify
-	satoshi_rawtx_final(rawtx);	
-	
-	// verify signatures
-	unsigned char * sec_data[2] = { NULL };
-	cb = hex2bin("bbc27228ddcb9209d7fd6f36b02f7dfa6252af40bb2f1cbc7a557da8027ff866", -1, (void **)&sec_data[0]);
-	assert(cb == 32);
-	cb = hex2bin("619c335025c7f4012e556c2a58b2506e30b8511b53ade95ea316fd8c3286feb9", -1, (void **)&sec_data[1]);
-	assert(cb == 32);
 	
 	crypto_context_t * crypto = crypto_context_init(NULL, crypto_backend_libsecp256, NULL);
 	assert(crypto);
 	
 	// import privkeys
 	crypto_privkey_t * privkeys[2] = { NULL };
-	privkeys[0] = crypto_privkey_import(crypto, sec_data[0], 32);
-	privkeys[1] = crypto_privkey_import(crypto, sec_data[1], 32);
+	privkeys[0] = import_privkey_from_string(crypto, "bbc27228ddcb9209d7fd6f36b02f7dfa6252af40bb2f1cbc7a557da8027ff866");
+	privkeys[1] = import_privkey_from_string (crypto, "619c335025c7f4012e556c2a58b2506e30b8511b53ade95ea316fd8c3286feb9");
 	assert(privkeys[0] && privkeys[1]);
-	
-	// clear sensitive data
-	memset(sec_data[0], 0, 32);
-	memset(sec_data[1], 0, 32);
-	free(sec_data[0]);
-	free(sec_data[1]);
 	
 	// get pubkeys
 	const crypto_pubkey_t * pubkeys[2] = { NULL };
@@ -841,36 +823,46 @@ int test_p2wpkh(int argc, char **argv)
 	dump_line("signatures[0]:", tx[1].txins[0].signatures, tx[1].txins[0].cb_signatures);
 	
 	
-	int index = 1;
-	const unsigned char * sig_der = NULL;
-	ssize_t cb_sig = 0;
-	
-	bitcoin_tx_witness_t * witness = &tx[1].witnesses[index];
-	sig_der = tx[1].txins[index].signatures;
-	cb_sig  = tx[1].txins[index].cb_signatures;
-	if(witness->num_items == 2)
+	for(int index = 0; index < tx[1].txin_count; ++index)
 	{
-		sig_der = varstr_getdata_ptr(witness->items[0]);
-		cb_sig = varstr_length(witness->items[0]) - 1;
-		assert(cb_sig > 0);
+		satoshi_rawtx_t rawtx[1];
+		uint256_t hash[1];
+		memset(rawtx, 0, sizeof(rawtx));
+		memset(hash, 0, sizeof(hash));
+		
+		// use tx[0] to verify input[0] (from legacy utxo)
+		// use tx[1] to verify input[1] (from p2wpkh utxo)
+		satoshi_rawtx_prepare(rawtx, &tx[index]);
+
+		// get digests - method-1: use struct satoshi_rawtx
+		rc = satoshi_rawtx_get_digest(rawtx, index, &utxoes[index], hash); assert(0 == rc);
+		printf("digest[%d]: ", index); dump(&hash, 32); printf("\n");
+		
+		// restore tx[1]'s settings before crypto->verify
+		satoshi_rawtx_final(rawtx);	
+		
+		const unsigned char * sig_der = NULL;
+		ssize_t cb_sig = 0;
+		
+		bitcoin_tx_witness_t * witness = &tx[1].witnesses[index];
+		sig_der = tx[1].txins[index].signatures;
+		cb_sig  = tx[1].txins[index].cb_signatures;
+		if(witness->num_items == 2)
+		{
+			sig_der = varstr_getdata_ptr(witness->items[0]);
+			cb_sig = varstr_length(witness->items[0]) - 1;
+			assert(cb_sig > 0);
+		}
+		
+		rc = crypto->verify(crypto, (unsigned char *)hash, 32,
+			pubkeys[index],
+			sig_der, cb_sig);
+
+		const char * term_color = (0 == rc)?"\e[32m":"\e[31m";
+		printf("%s""== verify input[%d]: [%s]\e[39m\n", term_color, index, (0==rc)?"OK":"NG");
+		assert(0 == rc);
 	}
-	
-	
-	rc = crypto->verify(crypto, (unsigned char *)&chk_hashes[index], 32,
-		pubkeys[index],
-		sig_der, cb_sig);
-	
-	printf("verify chk_hashes: [%s]\n", (0==rc)?"OK":"NG");
-	
-	
-	
-	rc = crypto->verify(crypto, (unsigned char *)&hashes[index], 32,
-		pubkeys[index],
-		sig_der, cb_sig);
-	assert(0 == rc);
-	
-	
-	
+
 	crypto_privkey_free(privkeys[0]);
 	crypto_privkey_free(privkeys[1]);
 	

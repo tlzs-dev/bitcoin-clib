@@ -820,7 +820,7 @@ ssize_t satoshi_tx_serialize(const satoshi_tx_t * tx, unsigned char ** p_data)
 		+ txins_size
 		+ txout_vint_size
 		+ txouts_size
-		+ tx->cb_witnesses
+		+ (tx->has_flag?tx->cb_witnesses:0)
 		+ sizeof(uint32_t)	// lock_time
 		;
 	if(NULL == p_data) return tx_size;
