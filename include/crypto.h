@@ -20,8 +20,9 @@ enum crypto_backend_type
 	//~ crypto_backend_custom,
 };
 
-typedef struct crypto_privkey crypto_privkey_t; // opaque data structure that holds a privkey.
-typedef struct crypto_pubkey crypto_pubkey_t;	// opaque data structure that holds a pubkey.
+typedef struct crypto_privkey crypto_privkey_t; 		// opaque data structure that holds a privkey.
+typedef struct crypto_pubkey crypto_pubkey_t;			// opaque data structure that holds a pubkey.
+typedef struct crypto_signature crypto_signature_t; 	// opaque data structure that holds a ecdsa signature.
 
 typedef struct crypto_context
 {
@@ -59,6 +60,10 @@ ssize_t crypto_pubkey_export(crypto_context_t * crypto,
 	crypto_pubkey_t * pubkey, int compressed_flag, 
 	unsigned char ** p_pubkey_data);
 void crypto_pubkey_free(crypto_pubkey_t * pubkey);
+
+crypto_signature_t * crypto_signature_import(crypto_context_t * crypto, const unsigned char * sig_der, size_t length);
+ssize_t crypto_signature_export(crypto_context_t * crypto, const crypto_signature_t * sig, unsigned char ** p_sig_der);
+void crypto_signature_free(crypto_signature_t * sig);
 
 #ifdef __cplusplus
 }

@@ -185,6 +185,9 @@ typedef struct satoshi_script_data
 ssize_t satoshi_script_data_set(satoshi_script_data_t * sdata, enum satoshi_script_data_type type, const void * data, size_t size);
 void satoshi_script_data_cleanup(satoshi_script_data_t * sdata);
 
+satoshi_script_data_t * satoshi_script_data_new(enum satoshi_script_data_type type, const void * data, size_t size);
+void satoshi_script_data_free(satoshi_script_data_t * sdata);
+
 typedef struct satoshi_script_stack
 {
 	satoshi_script_data_t ** data;		// use array[] to impl.

@@ -9,10 +9,29 @@ extern "C" {
 #include "satoshi-types.h"
 #include "sha.h"
 
-/* 
+/*****************************************
+ * satoshi_tx_sighash_type:
+ * 	sighash_all: 	default type, signs all txins and txouts.
+ * 	sighash_none:	signs all txins, no txouts, allowing anyone to change output amounts. (an Unfilled Signed Cheque).
+ * 	sighash_single: sign all txins and txouts[cur_index] only. to ensure nobody can change txouts[cur_index]
+ * 	
+ * sighash_all    | sighash_anyone_can_pay: signs txins[cur_index] and all txouts, allows anyone to add or remove other inputs.
+ * sighash_none   | sighash_anyone_can_pay: signs txins[cur_index] only, allows anyone to add or remove other inputs or outputs.
+ * sighash_single | sighash_anyone_can_pay:  signs txins[cur_index] and txouts[cur_index]. to ensure nobody can change txouts[cur_index], and allows anyone to add or remove other inputs.
+ * 
+*****************************************/
+enum satoshi_tx_sighash_type
+{
+	satoshi_tx_sighash_all = 1,							
+	satoshi_tx_sighash_none = 2,
+	satoshi_tx_sighash_single = 3,
+	satoshi_tx_sighash_anyone_can_pay = 0x80
+};
+
+/*******************************************
  * satoshi_rawtx:
  * 	generate digest for sign / verify 
- */
+*******************************************/
 typedef struct satoshi_rawtx 
 {
 	satoshi_tx_t * tx;

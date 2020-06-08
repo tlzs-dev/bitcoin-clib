@@ -40,6 +40,10 @@
 #include <inttypes.h>
 #include "satoshi-script.h"
 
+#define dump_line(prefix, data, length) do {							\
+		printf(prefix); dump(data, length); printf("\e[39m\n");	\
+	} while(0)
+
 #define debug_printf(fmt, ...) do { \
 		fprintf(stderr, "\e[33m" "%s@%d::%s(): " fmt "\e[39m\n", 	\
 			__FILE__, __LINE__, __FUNCTION__,						\
@@ -454,12 +458,13 @@ int satoshi_rawtx_get_digest(satoshi_rawtx_t * rawtx,
 		satoshi_txin_t * txins = tx->txins;
 		for(ssize_t i = 0; i < tx->txin_count; ++i)
 		{
+			unsigned char empty_script[1] = { 0 };
 			if(i == cur_index)
 			{
 				txins[i].scripts = utxo->scripts;
 			}else
 			{
-				txins[i].scripts = rawtx->backup[i];
+				txins[i].scripts = (varstr_t *)empty_script;
 			}
 		}
 		
@@ -469,11 +474,14 @@ int satoshi_rawtx_get_digest(satoshi_rawtx_t * rawtx,
 		
 		sha256_update(sha, preimage, cb_image);
 		
+		dump_line("tx-preimage: ", preimage, cb_image); 
+		
+		free(preimage);
+		
 		uint32_t hash_type = txins[cur_index].hash_type;
 		if(0 == hash_type) hash_type = 1;
 		
 		sha256_update(sha, (unsigned char *)&hash_type, sizeof(uint32_t));
-		
 		debug_printf("hash_type: %u\n", hash_type);
 	}
 	
@@ -535,9 +543,7 @@ int crypto_sign_transaction(crypto_context_t * crypto,
 
 
 #if defined(_TEST_SATOSHI_TX) && defined(_STAND_ALONE)
-#define dump_line(prefix, data, length) do {							\
-		printf(prefix); dump(data, length); printf("\e[39m\n");	\
-	} while(0)
+
 
 
 
@@ -924,7 +930,8 @@ int test_p2wpkh(int argc, char **argv)
 }
 
 
-int test_p2sh(int argc, char ** argv)
+// verify p2sh 
+int test_p2sh(int argc, char ** argv)	
 {
 	static const char * tx_hex[2] = { 
 	// txid = LE"a0f1aaa2fb4582c89e0511df0374a5a2833bf95f7314f4a51b55b7b71e90ce0f"
@@ -948,7 +955,7 @@ int test_p2sh(int argc, char ** argv)
 	// txid = LE"4d8eabfc8e6c266fb0ccd815d37dd69246da634df0effd5a5c922e4ec37880f6"
 	"01000000"
 	"03"
-		"a5ee1a0fd80dfbc3142df136ab56e082b799c13aa977c048bdf8f61bd158652c00000000"
+		"a5ee1a0fd80dfbc3142df136ab56e082b799c13aa977c048bdf8f61bd158652c" "00000000"
 		"6b"
 			"48"
 				"3045"
@@ -958,7 +965,7 @@ int test_p2sh(int argc, char ** argv)
 			"21"
 				"024f4102c1f1cf662bf99f2b034eb03edd4e6c96793cb9445ff519aab580649120"
 		"ffffffff"
-		"0fce901eb7b7551ba5f414735ff93b83a2a57403df11059ec88245fba2aaf1a000000000"
+		"0fce901eb7b7551ba5f414735ff93b83a2a57403df11059ec88245fba2aaf1a0" "00000000"
 		"6a"
 			"47"
 				"3044"
@@ -968,9 +975,9 @@ int test_p2sh(int argc, char ** argv)
 			"21"
 				"030644cb394bf381dbec91680bdf1be1986ad93cfb35603697353199fb285a119e"
 		"ffffffff"
-		"0fce901eb7b7551ba5f414735ff93b83a2a57403df11059ec88245fba2aaf1a001000000"
+		"0fce901eb7b7551ba5f414735ff93b83a2a57403df11059ec88245fba2aaf1a0" "01000000"
 		"93"
-			"00"
+			"00"	// p2sh flag
 			"49"
 				"3046"
 					"022100a07b2821f96658c938fa9c68950af0e69f3b2ce5f8258b3a6ad254d4bc73e11e"
@@ -1006,6 +1013,216 @@ int test_p2sh(int argc, char ** argv)
 		printf("tx[%d]: ", i);
 		satoshi_tx_dump(&tx[i]);
 	}
+	
+	int rc = 0;
+	const satoshi_txin_t * p2sh_txin = &tx[1].txins[2];
+	assert(p2sh_txin);
+	assert(p2sh_txin->redeem_scripts && p2sh_txin->cb_redeem_scripts > 0);
+	
+	uint256_t prev_hash;
+	hash256(tx_data[0], tx_sizes[0], (unsigned char *)&prev_hash);
+
+	assert(0 == memcmp(&p2sh_txin->outpoint.prev_hash, &prev_hash, 32));
+	dump_line("prev_hash: ", &prev_hash, 32);
+	
+	uint256_t tx_digest;
+	satoshi_rawtx_t rawtx[1];
+	memset(rawtx, 0, sizeof(rawtx));
+	satoshi_rawtx_prepare(rawtx, &tx[1]);
+	
+	satoshi_txout_t utxo[1];
+	memset(utxo, 0, sizeof(utxo));
+		
+	int utxo_index = p2sh_txin->outpoint.index;
+	utxo->value = tx[0].txouts[utxo_index].value;
+	utxo->scripts = varstr_new(p2sh_txin->redeem_scripts, p2sh_txin->cb_redeem_scripts);
+	
+	dump_line("utxo->scripts: ", utxo->scripts, varstr_size(utxo->scripts));
+	
+	rc = satoshi_rawtx_get_digest(rawtx, 2, utxo, &tx_digest);
+	assert(0 == rc);
+	satoshi_rawtx_final(rawtx);
+	
+	dump_line("\e[33m==== digest: ", &tx_digest, 32);
+	
+	// verify signatures
+	satoshi_script_stack_t * stack = satoshi_script_stack_init(NULL, 0, NULL);
+	
+	unsigned char * p = varstr_getdata_ptr(p2sh_txin->scripts);
+	unsigned char * p_end = p + varstr_length(p2sh_txin->scripts);
+	assert(p < p_end);
+	
+	assert(p[0] == 0);	// has p2sh flag
+	p++;
+	
+	// push data to stack 
+	while(p < p_end)
+	{
+		rc = stack->push(stack, 
+			satoshi_script_data_new(satoshi_script_data_type_uchars, 
+				varstr_getdata_ptr((varstr_t *)p),
+				varstr_length((varstr_t *)p)));
+		assert(0 == rc);
+		
+		p += varstr_size((varstr_t *)p);
+	}
+	assert(p == p_end);
+	
+	// pop redeem_scripts
+	satoshi_script_data_t * sdata = stack->pop(stack);
+
+	unsigned char * redeem_scripts = sdata->data;
+	ssize_t cb_redeem_scripts = sdata->size;
+	satoshi_script_data_free(sdata);
+
+	crypto_context_t * crypto = crypto_context_init(NULL, crypto_backend_libsecp256, NULL);
+	assert(crypto);
+	
+	// step 1. verify utxo's script code 'OP_EQUAL'
+	unsigned char redeem_scripts_hash[20];
+	hash160(redeem_scripts, cb_redeem_scripts, redeem_scripts_hash);
+	dump_line("redeem-scripts hash: ", redeem_scripts_hash, 20);
+	dump_line("utxo.scripts: ", tx[0].txouts[utxo_index].scripts, varstr_size(tx[0].txouts[utxo_index].scripts));
+	assert(0 == memcmp(&redeem_scripts_hash, varstr_getdata_ptr(tx[0].txouts[utxo_index].scripts) + 2, 20));	
+	
+	// step 2. parse redeem scripts
+	dump_line("redeem scripts: ", redeem_scripts, cb_redeem_scripts);
+	
+	p = redeem_scripts;
+	p_end = p + cb_redeem_scripts;
+	
+	while(p < p_end)
+	{
+		unsigned char op_code = *p++;
+		assert(op_code != 0);
+		
+		if(op_code < satoshi_script_opcode_op_pushdata1)
+		{
+			stack->push(stack, 
+				satoshi_script_data_new(satoshi_script_data_type_uchars, p, op_code));
+			p += op_code;
+			continue;
+		}
+		
+		if(op_code >= satoshi_script_opcode_op_1 && op_code <= satoshi_script_opcode_op_16)
+		{
+			unsigned char value = op_code - satoshi_script_opcode_op_1 + 1;
+			stack->push(stack, satoshi_script_data_new(satoshi_script_data_type_uint8, &value, 1));
+			continue;
+		}
+		
+		if(op_code == satoshi_script_opcode_op_checkmultisig)
+		{
+			int m = 0, n = 0;
+			
+			// pop number of pubkeys
+			sdata = stack->pop(stack);
+			assert(sdata && sdata->type == satoshi_script_data_type_uint8);
+			
+			n = sdata->b;
+			assert(n > 0 && n <= 16);
+			satoshi_script_data_free(sdata);
+			
+			// pop pubkeys
+			crypto_pubkey_t ** pubkeys = calloc(m, sizeof(*pubkeys));
+			assert(pubkeys);
+			for(int i = 0; i < n; ++i)
+			{
+				sdata = stack->pop(stack);
+				assert(sdata && sdata->type == satoshi_script_data_type_uchars 
+					&& (sdata->size == 33 || sdata->size == 65)		// pubkey data length
+				);
+				
+				pubkeys[i] = crypto_pubkey_import(crypto, sdata->data, sdata->size);
+				assert(pubkeys[i]);
+				
+				// dump pubkeys
+				{
+					unsigned char * data = NULL;
+					ssize_t cb = crypto_pubkey_export(crypto, pubkeys[i], 1, &data);
+					assert(cb > 0 && data);
+					
+					printf("-- pubkeys[%d]: ", i); dump(data, cb); printf("\n");
+					free(data);
+				}
+				satoshi_script_data_free(sdata);
+			}
+			
+			// pop number of signatures
+			sdata = stack->pop(stack);
+			assert(sdata && sdata->type == satoshi_script_data_type_uint8);
+			m = sdata->b;
+			assert(m > 0 && m <= 16);
+			
+			//~ crypto_signature_t ** sigs = calloc(n, sizeof(*sigs));
+			//~ uint32_t * hash_types = calloc(n, sizeof(*hash_types)); 
+			
+			// pop signatures and verify
+			int verified_count = 0;
+			for(int i = 0; i < m; ++i)
+			{
+				sdata = stack->pop(stack);
+				assert(sdata && sdata->type == satoshi_script_data_type_uchars && sdata->size > 1);
+				
+				unsigned char * sig_der = sdata->data;
+				ssize_t cb_sig_der = sdata->size - 1;
+				uint32_t hash_type = sdata->data[sdata->size - 1];
+				assert(sig_der && cb_sig_der > 0 && hash_type == 1);
+				
+				printf("-- sigs[%d]: ", i); dump(sig_der, cb_sig_der); printf("\n");
+				
+				for(int j = 0; j < n; ++j)
+				{
+					int rc = crypto->verify(crypto, 
+						(unsigned char *)&tx_digest, 32, 
+						pubkeys[j], 
+						sig_der, cb_sig_der);
+					printf("use pubkey[%d] to verify: err_code=%d\n", j, rc);
+					if(0 == rc)
+					{
+						++verified_count;
+						break;
+					}
+				} 
+				
+				satoshi_script_data_free(sdata);
+				if(verified_count >= n) break;	// has enough signatures
+				
+				
+			}
+			
+			printf("verified_count: %d\n", verified_count);
+		
+			
+	//	label_cleanup:
+			//~ free(hash_types);
+			//~ for(int i = 0; i < n; ++i)
+			//~ {
+				//~ crypto_signature_free(sigs[i]);
+			//~ }
+			//~ free(sigs);
+			
+			for(int i = 0; i < m; ++i)
+			{
+				crypto_pubkey_free(pubkeys[i]);
+			}
+			free(pubkeys);
+		
+		}
+		
+		break; // (op_code == satoshi_script_opcode_op_checkmultisig) or (unknown op_code)
+	}
+	
+	assert(p == p_end);
+	
+	crypto_context_cleanup(crypto);
+	free(crypto);
+	
+	
+	
+	
+	
+	
 	
 	return 0;
 }

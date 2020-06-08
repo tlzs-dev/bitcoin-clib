@@ -320,6 +320,15 @@ satoshi_script_data_t * satoshi_script_data_new(enum satoshi_script_data_type ty
 	return sdata;
 }
 
+void satoshi_script_data_free(satoshi_script_data_t * sdata)
+{
+	if(sdata)
+	{
+		satoshi_script_data_cleanup(sdata);
+		free(sdata);
+	}
+}
+
 /*******************************************************
  * satoshi_script_stack
 *******************************************************/

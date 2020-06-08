@@ -59,6 +59,72 @@ struct crypto_pubkey
 	int compressed_flag;
 };
 
+struct crypto_signature
+{
+	secp256k1_ecdsa_signature ecsig[1];
+	unsigned char sig_der[100];
+	ssize_t cb_sig_der;
+};
+
+crypto_signature_t * crypto_signature_import(crypto_context_t * crypto, const unsigned char * sig_der, size_t length)
+{
+	assert(crypto && crypto->priv);
+	assert(sig_der && length > 0);
+	
+	crypto_context_private_t * priv = crypto->priv;
+	secp256k1_context * secp = priv->verify_ctx;
+	assert(secp);
+	
+	crypto_signature_t * sig = calloc(1, sizeof(*sig));
+	assert(sig);
+	
+	int ok = secp256k1_ecdsa_signature_parse_der(secp, sig->ecsig, sig_der, length);
+	if(ok <= 0)
+	{
+		free(sig);
+		return NULL;
+	}
+	return sig;
+}
+
+ssize_t crypto_signature_export(crypto_context_t * crypto, const crypto_signature_t * sig, unsigned char ** p_sig_der)
+{
+	assert(crypto && crypto->priv);
+	assert(sig);
+	
+	crypto_context_private_t * priv = crypto->priv;
+	secp256k1_context * secp = priv->verify_ctx;
+	assert(secp);
+	
+	if(sig->cb_sig_der <= 0)
+	{
+		size_t buf_size = sizeof(sig->sig_der);
+		int ok = secp256k1_ecdsa_signature_serialize_der(secp, (unsigned char *)sig->sig_der, &buf_size, sig->ecsig);
+		if(ok <= 0) return -1;
+		
+		*(ssize_t *)&sig->cb_sig_der = buf_size;	// ignore const modifier
+	}
+	
+	assert(sig->cb_sig_der > 0);
+	if(NULL == p_sig_der) return sig->cb_sig_der;
+	
+	unsigned char * sig_der = *p_sig_der;
+	if(NULL == sig_der) 
+	{
+		sig_der = malloc(sig->cb_sig_der);
+		assert(sig_der);
+		* p_sig_der = sig_der;
+	}
+	
+	memcpy(sig_der, sig->sig_der, sig->cb_sig_der);
+	return sig->cb_sig_der;
+}
+
+void crypto_signature_free(crypto_signature_t * sig)
+{
+	free(sig);
+}
+
 #define PRIVKEY_SIZE (32)
 struct crypto_privkey
 {
