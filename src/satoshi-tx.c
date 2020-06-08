@@ -487,6 +487,53 @@ int satoshi_rawtx_get_digest(satoshi_rawtx_t * rawtx,
 	return 0;
 }
 
+
+typedef struct satoshi_txin_sign_data
+{
+	satoshi_txout_t * utxo;
+	ssize_t keys_count;
+	crypto_privkey_t * const * privkeys;
+}satoshi_txin_sign_data_t;
+
+
+int crypto_sign_transaction(crypto_context_t * crypto, 
+	satoshi_tx_t * tx, 	// ([in] [out]),  [in]: raw transaction, [out]: signed transaction
+	const satoshi_txin_sign_data_t * scripts_data[])
+
+{
+	//~ assert(crypto && tx);
+	//~ assert(utxoes && privkeys);
+	
+	//~ assert(tx->txin_count > 0 && tx->txins);
+	//~ assert(tx->txout_count > 0 && tx->txouts);
+	
+	//~ unsigned char ** signatuers = calloc(tx->txins_count, sizeof(*signatures));
+	
+	//~ for(ssize_t i = 0; i < tx->txin_count; ++i)
+	//~ {
+		//~ // parse utxo type
+		//~ const unsigned char * utxo_script = varstr_getdata_ptr(utxoes[i]->scripts);
+		//~ ssize_t cb_scripts = varstr_length(utxoes[i]->scripts);
+		
+		//~ assert(cb_scripts > 0);
+		//~ unsigned char * p = utxo_script;
+		//~ if(p[0] == 0) // segwit
+		//~ {
+			//~ // 
+		//~ }else
+		//~ {
+			//~ // 
+		//~ }
+	//~ }
+	
+	return 0;
+}
+
+
+
+
+
+
 #if defined(_TEST_SATOSHI_TX) && defined(_STAND_ALONE)
 #define dump_line(prefix, data, length) do {							\
 		printf(prefix); dump(data, length); printf("\e[39m\n");	\
@@ -496,11 +543,14 @@ int satoshi_rawtx_get_digest(satoshi_rawtx_t * rawtx,
 
 int test_copy_sha_ctx();
 int test_p2wpkh();
+int test_p2sh();
 
 int main(int argc, char ** argv)
 {
 //	test_copy_sha_ctx(argc, argv);
-	test_p2wpkh(argc, argv);
+//	test_p2wpkh(argc, argv);
+	
+	test_p2sh(argc, argv);
 	return 0;
 }
 
@@ -595,8 +645,11 @@ void satoshi_tx_dump(const satoshi_tx_t * tx)
 		const satoshi_txin_t * txin = &tx->txins[i];
 		printf("\t== txins[%d] ==\n", (int)i);
 		printf("\t" "outpoint: "); dump(&txin->outpoint.prev_hash, 32); printf(" %.8d\n", (int)txin->outpoint.index);
-		printf("\t" "sig_scripts: (cb=%d)", (int)txin->cb_scripts); dump(txin->scripts, txin->cb_scripts); printf("\n");
+		printf("\t" "sig_scripts: (cb=%d)", (int)txin->cb_scripts); 
+			dump(varstr_getdata_ptr(txin->scripts), txin->cb_scripts); printf("\n");
 		
+		if(!tx->has_flag)	// legacy tx
+		{
 			if(txin->signatures && txin->cb_signatures > 0)
 			{
 				dump_line("\t\tsignatuers: ", txin->signatures, txin->cb_signatures);
@@ -606,6 +659,7 @@ void satoshi_tx_dump(const satoshi_tx_t * tx)
 			{
 				dump_line("redeem scripts: ", txin->redeem_scripts, txin->cb_redeem_scripts);
 			}
+		}
 		
 		printf("\t" "sequence: "); dump(&txin->sequence, 4); printf("\n");
 	}
@@ -648,9 +702,6 @@ void satoshi_tx_dump(const satoshi_tx_t * tx)
 static inline crypto_privkey_t * import_privkey_from_string(crypto_context_t * crypto, const char * secdata_hex)
 {
 	assert(crypto && secdata_hex);
-	
-	if(NULL == crypto) crypto = crypto_context_init(NULL, crypto_backend_libsecp256, NULL);
-	assert(crypto);
 	
 	int cb_hex = strlen(secdata_hex);
 	if(cb_hex != 64) return NULL;
@@ -735,8 +786,6 @@ int test_p2wpkh(int argc, char **argv)
 	satoshi_tx_dump(&tx[0]);
 	satoshi_tx_dump(&tx[1]);
 	
-	
-	
 	satoshi_txout_t utxoes[2];
 	memset(utxoes, 0, sizeof(utxoes));
 	/*
@@ -774,13 +823,15 @@ int test_p2wpkh(int argc, char **argv)
 		[25] = satoshi_script_opcode_op_checksig
 	};
 	unsigned char * pubkey2_data = NULL;
-	ssize_t cb_pubkey = hex2bin("025476c2e83188368da1ff3e292e7acafcdb3566bb0ad253f62fc70f07aeee6357", -1, (void **)&pubkey2_data);
+	ssize_t cb_pubkey = hex2bin("025476c2e83188368da1ff3e292e7acafcdb3566bb0ad253f62fc70f07aeee6357", -1, 
+		(void **)&pubkey2_data);
 	assert(cb_pubkey == 33);
 	hash160(pubkey2_data, cb_pubkey, &p2wpkh_program[4]);
-	dump_line("p2pkh program: ", p2wpkh_program, 25);
+	dump_line("p2pkh program: ", p2wpkh_program, sizeof(p2wpkh_program));
 	
 	unsigned char * script_pubkey_data = NULL;
-	ssize_t cb_pkscript = hex2bin("00141d0f172a0ecb48aee1be1f2687d2963ae33f71a1", -1, (void **)&script_pubkey_data);
+	ssize_t cb_pkscript = hex2bin("00141d0f172a0ecb48aee1be1f2687d2963ae33f71a1", -1, 
+		(void **)&script_pubkey_data);
 	assert(cb_pkscript == 22);
 	
 	assert(0 == memcmp(&p2wpkh_program[4], // hash160(pubkey)
@@ -794,10 +845,6 @@ int test_p2wpkh(int argc, char **argv)
 	utxoes[1].value = 600000000;
 	utxoes[1].scripts = varstr_clone((varstr_t *)p2wpkh_program);
 	assert(utxoes[1].scripts && varstr_size(utxoes[1].scripts) == sizeof(p2wpkh_program));
-	//~ cb = hex2bin("1976a9141d0f172a0ecb48aee1be1f2687d2963ae33f71a188ac", -1, 
-		//~ (void **)&utxoes[1].scripts);
-	//~ assert(utxoes[1].scripts && cb > 0);
-	
 	
 	crypto_context_t * crypto = crypto_context_init(NULL, crypto_backend_libsecp256, NULL);
 	assert(crypto);
@@ -822,7 +869,6 @@ int test_p2wpkh(int argc, char **argv)
 	dump_line("pubkey[0]: ", pubkey_data, cb);
 	dump_line("signatures[0]:", tx[1].txins[0].signatures, tx[1].txins[0].cb_signatures);
 	
-	
 	for(int index = 0; index < tx[1].txin_count; ++index)
 	{
 		satoshi_rawtx_t rawtx[1];
@@ -838,7 +884,7 @@ int test_p2wpkh(int argc, char **argv)
 		rc = satoshi_rawtx_get_digest(rawtx, index, &utxoes[index], hash); assert(0 == rc);
 		printf("digest[%d]: ", index); dump(&hash, 32); printf("\n");
 		
-		// restore tx[1]'s settings before crypto->verify
+		// restore tx's settings before crypto->verify
 		satoshi_rawtx_final(rawtx);	
 		
 		const unsigned char * sig_der = NULL;
@@ -874,6 +920,93 @@ int test_p2wpkh(int argc, char **argv)
 	
 	free(rawtx_data);
 	free(signed_tx_data);
+	return 0;
+}
+
+
+int test_p2sh(int argc, char ** argv)
+{
+	static const char * tx_hex[2] = { 
+	// txid = LE"a0f1aaa2fb4582c89e0511df0374a5a2833bf95f7314f4a51b55b7b71e90ce0f"
+	"01000000"
+	"01"
+		"4ce7153d92e3b24d9eea31f8cf391c3fb4c39f7742b341b2d36c6367e754647400000000"
+		"6c"
+			"49"
+				"3046"
+					"022100c554360535b2ad3b1cb1b966a87807f7a7e45fa485348d662a1e7413dced8471"
+					"022100d6bcfc4385b7ac41ca3968a73c4a28e38879192c3db1286b36e59ec9fce52bbd"
+				"01"
+			"21"
+				"03c96e3a9e63986801269d5f278246ed7cdc2d392595d0a25b102e04598f4b4fa9"
+		"ffffffff"
+	"02"
+		"cb871a0000000000" "1976a914c02ebae82202119f23f330781ff26b303edb7dbd88ac"
+		"8096980000000000" "17a914748284390f9e263a4b766a75d0633c50426eb87587"
+	"00000000",
+	
+	// txid = LE"4d8eabfc8e6c266fb0ccd815d37dd69246da634df0effd5a5c922e4ec37880f6"
+	"01000000"
+	"03"
+		"a5ee1a0fd80dfbc3142df136ab56e082b799c13aa977c048bdf8f61bd158652c00000000"
+		"6b"
+			"48"
+				"3045"
+					"02203b0160de302cded63589a88214fe499a25aa1d86a2ea09129945cd632476a12c"
+					"022100c77727daf0718307e184d55df620510cf96d4b5814ae3258519c0482c1ca82fa"
+				"01"
+			"21"
+				"024f4102c1f1cf662bf99f2b034eb03edd4e6c96793cb9445ff519aab580649120"
+		"ffffffff"
+		"0fce901eb7b7551ba5f414735ff93b83a2a57403df11059ec88245fba2aaf1a000000000"
+		"6a"
+			"47"
+				"3044"
+					"02204089adb8a1de1a9e22aa43b94d54f1e54dc9bea745d57df1a633e03dd9ede3c2"
+					"022037d1e53e911ed7212186028f2e085f70524930e22eb6184af090ba4ab779a5b9"
+				"01"
+			"21"
+				"030644cb394bf381dbec91680bdf1be1986ad93cfb35603697353199fb285a119e"
+		"ffffffff"
+		"0fce901eb7b7551ba5f414735ff93b83a2a57403df11059ec88245fba2aaf1a001000000"
+		"93"
+			"00"
+			"49"
+				"3046"
+					"022100a07b2821f96658c938fa9c68950af0e69f3b2ce5f8258b3a6ad254d4bc73e11e"
+					"022100e82fab8df3f7e7a28e91b3609f91e8ebf663af3a4dc2fd2abd954301a5da67e7"
+				"01"
+			"47"
+				"51"	// OP_1, need at least 1 signature
+				"21022afc20bf379bc96a2f4e9e63ffceb8652b2b6a097f63fbee6ecec2a49a48010e"		// pubkey 1
+				"2103a767c7221e9f15f870f1ad9311f5ab937d79fcaeee15bb2c722bca515581b4c0"		// pubkey 2
+				"52"	// 2 pubkeys
+				"ae"	// OP_CHECKMULTISIG
+		"ffffffff"
+	"02"
+		"a3b81b0000000000" "1976a914ea00917f128f569cbdf79da5efcd9001671ab52c88ac"
+		"8096980000000000" "1976a9143dec0ead289be1afa8da127a7dbdd425a05e25f688ac"
+	"00000000"
+	};
+	
+	unsigned char * tx_data[2] = { NULL };
+	ssize_t tx_sizes[2] = { 0 };
+	
+	satoshi_tx_t tx[2];
+	memset(tx, 0, sizeof(tx));
+	
+	for(int i = 0; i < 2; ++i)
+	{
+		tx_sizes[i] = hex2bin(tx_hex[i], -1, (void **)&tx_data[i]);
+		assert(tx_sizes[i] > 0);
+		
+		ssize_t cb = satoshi_tx_parse(&tx[i], tx_sizes[i], tx_data[i]);
+		assert(cb == tx_sizes[i]);
+		
+		printf("tx[%d]: ", i);
+		satoshi_tx_dump(&tx[i]);
+	}
+	
 	return 0;
 }
 
