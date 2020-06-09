@@ -1043,6 +1043,8 @@ int test_p2sh(int argc, char ** argv)
 	assert(0 == rc);
 	satoshi_rawtx_final(rawtx);
 	
+	satoshi_txout_cleanup(utxo);
+	
 	dump_line("\e[33m==== digest: ", &tx_digest, 32);
 	
 	// verify signatures
@@ -1059,8 +1061,8 @@ int test_p2sh(int argc, char ** argv)
 	while(p < p_end)
 	{
 		rc = stack->push(stack, 
-			satoshi_script_data_new(satoshi_script_data_type_uchars, 
-				varstr_getdata_ptr((varstr_t *)p),
+			satoshi_script_data_new(satoshi_script_data_type_uchars, 	
+				varstr_getdata_ptr((varstr_t *)p),			// re-use the pointer of p2sh_txin->scripts  
 				varstr_length((varstr_t *)p)));
 		assert(0 == rc);
 		
@@ -1071,7 +1073,7 @@ int test_p2sh(int argc, char ** argv)
 	// pop redeem_scripts
 	satoshi_script_data_t * sdata = stack->pop(stack);
 
-	unsigned char * redeem_scripts = sdata->data;
+	unsigned char * redeem_scripts = sdata->data;		// lifetime == (lifetime of p2sh_txin->scripts)
 	ssize_t cb_redeem_scripts = sdata->size;
 	satoshi_script_data_free(sdata);
 
@@ -1107,26 +1109,27 @@ int test_p2sh(int argc, char ** argv)
 		if(op_code >= satoshi_script_opcode_op_1 && op_code <= satoshi_script_opcode_op_16)
 		{
 			unsigned char value = op_code - satoshi_script_opcode_op_1 + 1;
-			stack->push(stack, satoshi_script_data_new(satoshi_script_data_type_uint8, &value, 1));
+			stack->push(stack, 
+				satoshi_script_data_new(satoshi_script_data_type_uint8, &value, 1));
 			continue;
 		}
 		
 		if(op_code == satoshi_script_opcode_op_checkmultisig)
 		{
-			int m = 0, n = 0;
+			int num_pubkeys = 0, num_sigs = 0;
 			
 			// pop number of pubkeys
 			sdata = stack->pop(stack);
 			assert(sdata && sdata->type == satoshi_script_data_type_uint8);
 			
-			n = sdata->b;
-			assert(n > 0 && n <= 16);
+			num_pubkeys = sdata->b;
+			assert(num_pubkeys > 0 && num_pubkeys <= 16);
 			satoshi_script_data_free(sdata);
 			
 			// pop pubkeys
-			crypto_pubkey_t ** pubkeys = calloc(m, sizeof(*pubkeys));
+			crypto_pubkey_t ** pubkeys = calloc(num_pubkeys, sizeof(*pubkeys));
 			assert(pubkeys);
-			for(int i = 0; i < n; ++i)
+			for(int i = 0; i < num_pubkeys; ++i)
 			{
 				sdata = stack->pop(stack);
 				assert(sdata && sdata->type == satoshi_script_data_type_uchars 
@@ -1151,27 +1154,34 @@ int test_p2sh(int argc, char ** argv)
 			// pop number of signatures
 			sdata = stack->pop(stack);
 			assert(sdata && sdata->type == satoshi_script_data_type_uint8);
-			m = sdata->b;
-			assert(m > 0 && m <= 16);
+			num_sigs = sdata->b;
+			assert(num_sigs > 0 && num_sigs <= 16);
+			satoshi_script_data_free(sdata);
 			
 			//~ crypto_signature_t ** sigs = calloc(n, sizeof(*sigs));
 			//~ uint32_t * hash_types = calloc(n, sizeof(*hash_types)); 
 			
+			uint32_t hash_type = 0;
 			// pop signatures and verify
 			int verified_count = 0;
-			for(int i = 0; i < m; ++i)
+			for(int i = 0; i < num_sigs; ++i)
 			{
 				sdata = stack->pop(stack);
 				assert(sdata && sdata->type == satoshi_script_data_type_uchars && sdata->size > 1);
 				
 				unsigned char * sig_der = sdata->data;
-				ssize_t cb_sig_der = sdata->size - 1;
-				uint32_t hash_type = sdata->data[sdata->size - 1];
+				ssize_t cb_sig_der = sdata->size;
+				
+				if(hash_type == 0) 
+				{
+					hash_type = sig_der[--cb_sig_der];
+				}
 				assert(sig_der && cb_sig_der > 0 && hash_type == 1);
 				
 				printf("-- sigs[%d]: ", i); dump(sig_der, cb_sig_der); printf("\n");
+				printf("-- hash_type: %u\n", hash_type);
 				
-				for(int j = 0; j < n; ++j)
+				for(int j = 0; j < num_pubkeys; ++j)
 				{
 					int rc = crypto->verify(crypto, 
 						(unsigned char *)&tx_digest, 32, 
@@ -1186,23 +1196,12 @@ int test_p2sh(int argc, char ** argv)
 				} 
 				
 				satoshi_script_data_free(sdata);
-				if(verified_count >= n) break;	// has enough signatures
-				
-				
+				if(verified_count >= num_sigs) break;	// has enough signatures
 			}
 			
 			printf("verified_count: %d\n", verified_count);
 		
-			
-	//	label_cleanup:
-			//~ free(hash_types);
-			//~ for(int i = 0; i < n; ++i)
-			//~ {
-				//~ crypto_signature_free(sigs[i]);
-			//~ }
-			//~ free(sigs);
-			
-			for(int i = 0; i < m; ++i)
+			for(int i = 0; i < num_pubkeys; ++i)
 			{
 				crypto_pubkey_free(pubkeys[i]);
 			}
@@ -1215,15 +1214,18 @@ int test_p2sh(int argc, char ** argv)
 	
 	assert(p == p_end);
 	
+	satoshi_script_stack_cleanup(stack);
+	free(stack);
+	
+	
+	for(int i = 0; i < 2; ++i) {
+		satoshi_tx_cleanup(&tx[i]);
+		free(tx_data[i]);
+	}
+	
 	crypto_context_cleanup(crypto);
 	free(crypto);
-	
-	
-	
-	
-	
-	
-	
+
 	return 0;
 }
 
