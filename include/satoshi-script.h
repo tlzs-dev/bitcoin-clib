@@ -12,6 +12,8 @@ extern "C" {
 #include <stdint.h>
 #include <stdbool.h>
 
+#include "satoshi-types.h"
+
 enum satoshi_script_data_type
 {
 	satoshi_script_data_type_unknown = -1,
@@ -207,20 +209,29 @@ typedef struct satoshi_script
 {
 	void * user_data;
 	void * priv;
-	satoshi_script_stack_t main[1];
-	satoshi_script_stack_t alt[1];
-	int flags;
+
+	satoshi_script_stack_t main_stack[1];
+	satoshi_script_stack_t alt_stack[1];
 	
-	int (* eval)(struct satoshi_script * scripts);
-	ssize_t (* parse)(struct satoshi_script * scripts, const unsigned char * payload, size_t length);
+	// public data, should be initialized before parse
+	satoshi_tx_t * tx;
+	ssize_t txin_index;
+	const satoshi_txout_t * utxo;
+	const unsigned char * redeem_scripts;		// p2pkh: null or utxo->pkscript
+										// p2sh: txin->redeem_scripts
+										// segwit: segwit_program->get_redeem_scripts
+	
+	// parse scripts of txins or (and) txouts 
+	ssize_t (* parse)(struct satoshi_script * scripts, 
+		const unsigned char * payload, 
+		size_t length);
+
 }satoshi_script_t;
 
 satoshi_script_t * satoshi_script_init(satoshi_script_t * scripts, void * user_data);
 void satoshi_script_reset(satoshi_script_t * scripts);
 void satoshi_script_cleanup(satoshi_script_t * scripts);
 
-//~ int satoshi_script_eval(script_stack_t * op_stack, script_stack_t * params_stack, script_stack_t * alt_stack);
-//~ int satoshi_script_add(satoshi_script_t * script, const unsigned char op_code, const unsigned char * p_start, const unsigned char * p_end);
 
 #ifdef __cplusplus
 }

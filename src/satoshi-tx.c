@@ -1287,8 +1287,7 @@ int verify_p2sh(int argc, char ** argv)
 					"01"
 				"45"
 					"51"
-					"41"
-						"042f90074d7a5bf30c72cf3a8dfd1381bdbd30407010e878f3a11269d5f74a58788505cdca22ea6eab7cfb40dc0e07aba200424ab0d79122a653ad0c7ec9896bdf"
+					"41" "042f90074d7a5bf30c72cf3a8dfd1381bdbd30407010e878f3a11269d5f74a58788505cdca22ea6eab7cfb40dc0e07aba200424ab0d79122a653ad0c7ec9896bdf"
 					"51"
 					"ae"
 			"feffffff"
@@ -1323,8 +1322,7 @@ int verify_p2sh(int argc, char ** argv)
 			//~ "c8cc2b56525e734ff63a13bc6ad06a9e5664df8c67632253a8e36017aee3ee4000000000"
 			//~ "45"
 				//~ "51"
-				//~ "41"
-					//~ "042f90074d7a5bf30c72cf3a8dfd1381bdbd30407010e878f3a11269d5f74a58788505cdca22ea6eab7cfb40dc0e07aba200424ab0d79122a653ad0c7ec9896bdf"
+				//~ "41" "042f90074d7a5bf30c72cf3a8dfd1381bdbd30407010e878f3a11269d5f74a58788505cdca22ea6eab7cfb40dc0e07aba200424ab0d79122a653ad0c7ec9896bdf"
 				//~ "51"
 				//~ "ae"
 			//~ "feffffff"
@@ -1344,16 +1342,15 @@ int verify_p2sh(int argc, char ** argv)
 	
 	satoshi_txout_t utxo[1];
 	memset(utxo, 0, sizeof(utxo));
-	hex2bin("45"
-				"51"
-				"41"
-					"042f90074d7a5bf30c72cf3a8dfd1381bdbd30407010e878f3a11269d5f74a58788505cdca22ea6eab7cfb40dc0e07aba200424ab0d79122a653ad0c7ec9896bdf"
-				"51"
-				"ae",
-			-1,
-			(void **)&utxo->scripts);
+	hex2bin(
+		"45"
+		"51"
+		"41" "042f90074d7a5bf30c72cf3a8dfd1381bdbd30407010e878f3a11269d5f74a58788505cdca22ea6eab7cfb40dc0e07aba200424ab0d79122a653ad0c7ec9896bdf"
+		"51"
+		"ae",
+		-1,
+		(void **)&utxo->scripts);
 	assert(utxo->scripts);
-	
 
 	satoshi_rawtx_get_digest(rawtx, 0, utxo, &digest);
 	dump_line("digest: ", &digest, 32);
@@ -1367,10 +1364,10 @@ int verify_p2sh(int argc, char ** argv)
 	
 	unsigned char * sig_der = NULL;
 	ssize_t cb_sig_der = hex2bin("3045"
-						"022100ad0851c69dd756b45190b5a8e97cb4ac3c2b0fa2f2aae23aed6ca97ab33bf883"
-						"02200b248593abc1259512793e7dea61036c601775ebb23640a0120b0dba2c34b790",
-						-1,
-						(void **)&sig_der);
+		"022100ad0851c69dd756b45190b5a8e97cb4ac3c2b0fa2f2aae23aed6ca97ab33bf883"
+		"02200b248593abc1259512793e7dea61036c601775ebb23640a0120b0dba2c34b790",
+		-1,
+		(void **)&sig_der);
 	assert(sig_der && cb_sig_der > 0);
 	
 	rc = crypto->verify(crypto, (unsigned char *)&digest, 32, 

@@ -663,23 +663,34 @@ static ssize_t scripts_parse(struct satoshi_script * scripts, const unsigned cha
 	const unsigned char * p = payload;
 	const unsigned char * p_end = p + length;
 	
-	satoshi_script_stack_t * main_stack = scripts->main;
-	satoshi_script_stack_t * alt = scripts->alt;
+	satoshi_script_stack_t * main_stack = scripts->main_stack;
+	satoshi_script_stack_t * alt = scripts->alt_stack;
 	
 	assert(main_stack && alt);
+	
+	if(p[0] == 0)	// p2sh 
+	{
+		main_stack->push(main_stack, 
+			satoshi_script_data_new(satoshi_script_data_type_op_code, 
+				p, 1));
+		++p;
+	}
 	
 	while(p < p_end)
 	{
 		int rc = 0;
 		uint8_t op_code = *p++;
 		ssize_t data_size = 0;
-	
+		
+		assert(op_code != 0);
+		
 		if(op_code <= satoshi_script_opcode_op_pushdata4)
 		{
 			data_size = parse_op_push_data(main_stack, op_code, p, p_end);
 			
 			if(data_size < 0) return -1;
 			p += data_size;
+			
 			continue;
 		}
 		
@@ -715,25 +726,27 @@ label_error:
 	return -1;
 }
 
+
 satoshi_script_t * satoshi_script_init(satoshi_script_t * scripts, void * user_data)
 {
 	if(NULL == scripts) scripts = calloc(1, sizeof(*scripts));
 	assert(scripts);
 	
 	scripts->user_data = user_data;
+	
 	scripts->parse = scripts_parse;
 	
-	satoshi_script_stack_t * main_stack = satoshi_script_stack_init(scripts->main, 0, scripts);
-	satoshi_script_stack_t * alt = satoshi_script_stack_init(scripts->alt, 0, scripts);
-	assert(main_stack == scripts->main);
-	assert(alt == scripts->alt);
+	satoshi_script_stack_t * main_stack = satoshi_script_stack_init(scripts->main_stack, 0, scripts);
+	satoshi_script_stack_t * alt = satoshi_script_stack_init(scripts->alt_stack, 0, scripts);
+	assert(main_stack == scripts->main_stack);
+	assert(alt == scripts->alt_stack);
 	
 	return scripts;
 }
 void satoshi_script_reset(satoshi_script_t * scripts)
 {
-	satoshi_script_stack_cleanup(scripts->main);
-	satoshi_script_stack_cleanup(scripts->alt);
+	satoshi_script_stack_cleanup(scripts->main_stack);
+	satoshi_script_stack_cleanup(scripts->alt_stack);
 }
 
 void satoshi_script_cleanup(satoshi_script_t * scripts)
@@ -818,13 +831,6 @@ static const char * s_hex_txns[3] = {
 		printf(prefix); dump(data, length); printf("\e[39m\n");	\
 	} while(0)
 
-struct scripts_data
-{
-	unsigned char * scripts;
-	ssize_t cb_scripts;
-};
-
-
 int main(int argc, char **argv)
 {
 	unsigned char * txns_data[3] = {NULL};
@@ -858,86 +864,51 @@ int main(int argc, char **argv)
 	assert(cb == cb_txns[2]);
 	assert(txns[2].txin_count > 0);
 	
-	
 	uint256_t prev_hash;
 	memset(&prev_hash, 0, sizeof(prev_hash));
 	hash256(txns_data[0], cb_txns[0], (unsigned char *)&prev_hash);
 	dump_line("prev_hash: ", &prev_hash, 32);
 	assert(0 == memcmp(&prev_hash, &txns[1].txins[0].outpoint.prev_hash, 32));	// verify test data
 	
-	int index = txns[1].txins[0].outpoint.index;
-	assert(index == 0);		// verify test data
 	
-	satoshi_tx_t * raw_tx = &txns[1];				// use txns[1] as raw_tx directly
-	satoshi_txin_t * txins = raw_tx->txins;
-	ssize_t txins_count = txns[1].txin_count;
+	satoshi_script_t * scripts = satoshi_script_init(NULL, NULL);
+	assert(scripts);
 	
-	AUTO_FREE_PTR struct scripts_data * scripts_backup = calloc(txins_count, sizeof(*scripts_backup));
-	assert(scripts_backup);
+	// verify txns[1]
+	satoshi_txout_t * utxoes = txns[0].txouts;	
+	satoshi_tx_t * tx = &txns[1];
 	
-	// backup signatures for later use
-	for(ssize_t i = 0; i < txins_count; ++i)
+	scripts->tx = tx;	// attach tx
+	
+	int64_t inputs_amount = 0;
+	for(ssize_t i = 0; i < tx->txin_count; ++i)
 	{
-		assert(!txins[i].is_coinbase);
-		scripts_backup[i].scripts = txins[i].scripts;
-		scripts_backup[i].cb_scripts = txins[i].cb_scripts;
+		satoshi_txin_t * txin = &tx->txins[i];
+		int utxo_index = txin->outpoint.index;
+		satoshi_txout_t * utxo = &utxoes[utxo_index]; // todo: blockchain_db->get_utxo(outpoint);
 		
+		// init scripts data
+		scripts->txin_index = i;
+		scripts->utxo = utxo;
+		
+		assert(utxo->value >= 0);
+		inputs_amount += utxo->value;
+		
+		// parse txin
+		assert(txin->scripts);
+		printf("parse txins[%d] ...\n", (int)i);
+		ssize_t cb_scripts = varstr_length(txin->scripts);
+		ssize_t cb = scripts->parse(scripts, 
+			varstr_getdata_ptr(txin->scripts), 
+			cb_scripts);
+		assert(cb == cb_scripts);
+		
+		
+		cb_scripts = varstr_size(utxo->scripts);
+		cb = scripts->parse(scripts, (unsigned char *)utxo->scripts, cb_scripts);
+		assert(cb == cb_scripts);
 	}
 	
-	satoshi_txout_t * utxoes = txns[0].txouts;		// get utxoes
-	assert(utxoes);
-	
-	// init raw_txins with current data
-	uint32_t hash_type = 0;
-	for(ssize_t i = 0; i < txns[1].txin_count; ++i)
-	{
-		if(i == index) {
-			txins[i].scripts = utxoes[i].scripts;
-			txins[i].cb_scripts = utxoes[i].cb_script;
-			hash_type = txins[i].hash_type;
-		}else
-		{
-			txins[i].scripts = NULL;
-			txins[i].cb_scripts = 0;
-		}
-	}
-	
-	AUTO_FREE_PTR unsigned char * rawtx_data = NULL;
-	ssize_t cb_rawtx = satoshi_tx_serialize(raw_tx, NULL);	// calc raw_tx data size
-	assert(cb_rawtx);
-	
-	rawtx_data = malloc(cb_rawtx + sizeof(uint32_t));	// append (uint32_t)hash_type at the end of serialized rawtx_data
-	assert(rawtx_data);
-	
-	cb = satoshi_tx_serialize(raw_tx, &rawtx_data);
-	assert(cb == cb_rawtx);
-	*(uint32_t *)(rawtx_data + cb_rawtx) = hash_type;
-	
-	uint256_t rawtx_hash;	// msg
-	hash256(rawtx_data, cb_rawtx + sizeof(uint32_t), (unsigned char *)&rawtx_hash);	// msg = hash256(rawtx);  
-	
-	printf("rawtx_hash: ");
-	dump(&rawtx_hash, 32);
-	printf("\n");
-	
-	// todo: parse scripts and secp256k1_ecdsa_verify(sig, pubkey, msg)
-	
-	// restore signatures
-	for(ssize_t i = 0; i < txins_count; ++i)
-	{
-		assert(!txins[i].is_coinbase);
-		txins[i].scripts = scripts_backup[i].scripts;
-		txins[i].cb_scripts = scripts_backup[i].cb_scripts;
-	}
-	
-	satoshi_tx_cleanup(raw_tx);
-	satoshi_tx_cleanup(&txns[0]);
-	satoshi_tx_cleanup(&txns[1]);
-	satoshi_tx_cleanup(&txns[2]);
-	
-	free(txns_data[0]);
-	free(txns_data[1]);
-	free(txns_data[2]);
 	return 0;
 }
 #endif
