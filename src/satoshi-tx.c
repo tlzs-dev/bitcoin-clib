@@ -550,13 +550,16 @@ int crypto_sign_transaction(crypto_context_t * crypto,
 int test_copy_sha_ctx();
 int test_p2wpkh();
 int test_p2sh();
+int verify_p2sh();
 
 int main(int argc, char ** argv)
 {
 //	test_copy_sha_ctx(argc, argv);
 //	test_p2wpkh(argc, argv);
 	
-	test_p2sh(argc, argv);
+//	test_p2sh(argc, argv);
+	
+	verify_p2sh(argc, argv);
 	return 0;
 }
 
@@ -1229,6 +1232,158 @@ int test_p2sh(int argc, char ** argv)
 	return 0;
 }
 
+static inline crypto_pubkey_t * crypto_pubkey_import_from_string(crypto_context_t * crypto, 
+	const char * pubkey_hex)
+{
+	assert(crypto && pubkey_hex);
+	int cb_hex = strlen(pubkey_hex);
+	assert(cb_hex == 66 || cb_hex == 130);
+	
+	unsigned char pubkey_data[65] = {0};
+	void * p_data = pubkey_data;
+	ssize_t cb_pubkey = hex2bin(pubkey_hex, cb_hex, (void **)&p_data);
+	assert(cb_pubkey == 33 || cb_pubkey == 65);
+	
+	return crypto_pubkey_import(crypto, pubkey_data, cb_pubkey);
+}
+int verify_p2sh(int argc, char ** argv)
+{
+	/*
+	 *  https://en.bitcoin.it/wiki/Pay_to_script_hash
+	 * Example
+	 * 	tx[0] : txid = (LE)40eee3ae1760e3a8532263678cdf64569e6ad06abc133af64f735e52562bccc8 
+	 *		paid to P2SH address 3P14159f73E4gFr7JterCCQh9QjiTjiZrG. 
+	 * 
+	 * 	tx[1]: txid = (LE)7edb32d4ffd7a385b763c7a8e56b6358bcd729e747290624e18acdbe6209fc45 
+	 * 		which spends that output
+	*/
+	
+	static const char * tx_data_hex[2] = {
+		[0] = "01000000"
+		"01"
+			"da75479f893cccfaa8e4558b28ec7cb4309954389f251f2212eabad7d7fda34200000000"
+			"6a"
+				"47"
+					"3044"
+						"022048d1468895910edafe53d4ec4209192cc3a8f0f21e7b9811f83b5e419bfb57e0"
+						"02203fef249b56682dbbb1528d4338969abb14583858488a3a766f609185efe68bca"
+					"01"
+				"21"
+					"031a455dab5e1f614e574a2f4f12f22990717e93899695fb0d81e4ac2dcfd25d00"
+			"ffffffff"
+		"01"
+			"301b0f0000000000" "17a914e9c3dd0c07aac76179ebc76a6c78d4d67c6c160a87"
+		"00000000",
+		
+		[1] = "01000000"
+		"01"
+			"c8cc2b56525e734ff63a13bc6ad06a9e5664df8c67632253a8e36017aee3ee4000000000"
+			"90"
+				"00"
+				"48"
+					"3045"
+						"022100ad0851c69dd756b45190b5a8e97cb4ac3c2b0fa2f2aae23aed6ca97ab33bf883"
+						"02200b248593abc1259512793e7dea61036c601775ebb23640a0120b0dba2c34b790"
+					"01"
+				"45"
+					"51"
+					"41"
+						"042f90074d7a5bf30c72cf3a8dfd1381bdbd30407010e878f3a11269d5f74a58788505cdca22ea6eab7cfb40dc0e07aba200424ab0d79122a653ad0c7ec9896bdf"
+					"51"
+					"ae"
+			"feffffff"
+		"01"
+			"20f40e0000000000" "1976a9141d30342095961d951d306845ef98ac08474b36a088ac"
+		"a7270400"
+	};
+	
+	unsigned char * tx_data[2] = { NULL };
+	ssize_t tx_sizes[2] = { 0 };
+	satoshi_tx_t tx[2];
+	memset(tx, 0, sizeof(tx));
+	
+	for(int i = 0; i < 2; ++i)
+	{
+		tx_sizes[i] = hex2bin(tx_data_hex[i], -1, (void **)&tx_data[i]);
+		assert(tx_sizes[i] > 0);
+	
+		ssize_t cb = satoshi_tx_parse(&tx[i], tx_sizes[i], tx_data[i]);
+		assert(cb == tx_sizes[i]);
+		
+		satoshi_tx_dump(&tx[i]);
+	}
+	
+	crypto_context_t * crypto = crypto_context_init(NULL, crypto_backend_libsecp256, NULL);
+	assert(crypto);
+	
+	uint256_t digest;
+	//~ unsigned char * preimage = NULL;
+	//~ ssize_t cb_preimage = hex2bin("01000000"
+		//~ "01"
+			//~ "c8cc2b56525e734ff63a13bc6ad06a9e5664df8c67632253a8e36017aee3ee4000000000"
+			//~ "45"
+				//~ "51"
+				//~ "41"
+					//~ "042f90074d7a5bf30c72cf3a8dfd1381bdbd30407010e878f3a11269d5f74a58788505cdca22ea6eab7cfb40dc0e07aba200424ab0d79122a653ad0c7ec9896bdf"
+				//~ "51"
+				//~ "ae"
+			//~ "feffffff"
+		//~ "01"
+			//~ "20f40e0000000000" "1976a9141d30342095961d951d306845ef98ac08474b36a088ac"
+		//~ "a7270400"
+		//~ "01000000",
+		//~ -1,
+		//~ (void ** )&preimage);
+	//~ assert(preimage && cb_preimage > 0);
+	//~ hash256(preimage, cb_preimage, (unsigned char *)&digest);
+	//~ dump_line("digest: ", &digest, 32);
+	
+	satoshi_rawtx_t rawtx[1];
+	memset(rawtx, 0, sizeof(rawtx));
+	satoshi_rawtx_prepare(rawtx, &tx[1]);
+	
+	satoshi_txout_t utxo[1];
+	memset(utxo, 0, sizeof(utxo));
+	hex2bin("45"
+				"51"
+				"41"
+					"042f90074d7a5bf30c72cf3a8dfd1381bdbd30407010e878f3a11269d5f74a58788505cdca22ea6eab7cfb40dc0e07aba200424ab0d79122a653ad0c7ec9896bdf"
+				"51"
+				"ae",
+			-1,
+			(void **)&utxo->scripts);
+	assert(utxo->scripts);
+	
+
+	satoshi_rawtx_get_digest(rawtx, 0, utxo, &digest);
+	dump_line("digest: ", &digest, 32);
+	satoshi_rawtx_final(rawtx);
+	satoshi_txout_cleanup(utxo);
+	
+	int rc = 0;
+	
+	crypto_pubkey_t * pubkey = crypto_pubkey_import_from_string(crypto, 
+		"042f90074d7a5bf30c72cf3a8dfd1381bdbd30407010e878f3a11269d5f74a58788505cdca22ea6eab7cfb40dc0e07aba200424ab0d79122a653ad0c7ec9896bdf");
+	
+	unsigned char * sig_der = NULL;
+	ssize_t cb_sig_der = hex2bin("3045"
+						"022100ad0851c69dd756b45190b5a8e97cb4ac3c2b0fa2f2aae23aed6ca97ab33bf883"
+						"02200b248593abc1259512793e7dea61036c601775ebb23640a0120b0dba2c34b790",
+						-1,
+						(void **)&sig_der);
+	assert(sig_der && cb_sig_der > 0);
+	
+	rc = crypto->verify(crypto, (unsigned char *)&digest, 32, 
+		pubkey,
+		sig_der, cb_sig_der);
+	
+	printf("[%s]\n", (0 == rc)?"OK":"NG");	
+	
+	crypto_context_cleanup(crypto);
+	free(crypto);
+	
+	return 0;
+}
 
 
 /*************************************************
