@@ -40,15 +40,19 @@
 #include <inttypes.h>
 #include "satoshi-script.h"
 
+#ifndef dump_line
 #define dump_line(prefix, data, length) do {							\
 		printf(prefix); dump(data, length); printf("\e[39m\n");	\
 	} while(0)
+#endif
 
+#ifndef debug_printf
 #define debug_printf(fmt, ...) do { \
 		fprintf(stderr, "\e[33m" "%s@%d::%s(): " fmt "\e[39m\n", 	\
 			__FILE__, __LINE__, __FUNCTION__,						\
 			##__VA_ARGS__);											\
 	} while(0)
+#endif
 
 #define debug_dump(prefix, data, length) do {						\
 		fprintf(stderr, "\e[33m" "%s: ",	prefix);				\
@@ -224,66 +228,53 @@ struct scripts_data
 	ssize_t cb_scripts;
 };
 
-int satoshi_tx_get_digest(const satoshi_tx_t * tx,
-	int cur_index,
-	const satoshi_txout_t * utxo, 
+int satoshi_tx_get_digest(
+	satoshi_tx_t * tx, 
+	int txin_index, 
+	uint32_t hash_type,
+	const satoshi_txout_t * utxo,
 	uint256_t * hash)
 {
 	if(tx->has_flag && tx->flag[0] == 0 && tx->flag[1] == 1) // segwit_v0
 	{
-		return segwit_v0_tx_get_digest(tx, cur_index, utxo, hash);
+		return segwit_v0_tx_get_digest(tx, txin_index, utxo, hash);
 	}
-	
-	varstr_t ** backup_scripts = NULL;
-	backup_scripts = calloc(tx->txin_count, sizeof(*backup_scripts));
-	assert(backup_scripts);
-	
+
 	satoshi_txin_t * txins = (satoshi_txin_t *)tx->txins;
+	assert(txins);
+	varstr_t * scripts_backup = txins[txin_index].scripts;	// save the pointer of cur_txin.scripts 
+	txins[txin_index].scripts = utxo->scripts;
+	
 	for(ssize_t i = 0; i < tx->txin_count; ++i)
 	{
-		*(unsigned char *)txins[i].scripts = 0;		// set txin's script length to zero
-		backup_scripts[i] = txins[i].scripts;
-
-		if(i == cur_index)
-		{
-			txins[i].scripts = utxo->scripts;
-		}
+		// set all txins's script length to zero except current txin
+		if(i != txin_index) varint_set((varint_t *)txins[i].scripts, 0);
 	}
 	
 	unsigned char * preimage = NULL;
 	ssize_t cb_image = satoshi_tx_serialize(tx, NULL);	// get buffer size
 	assert(cb_image > 0);
-	preimage = malloc(cb_image + sizeof(uint32_t));	// preimage | sequence
+	preimage = malloc(cb_image + sizeof(uint32_t));	// preimage | hash_type
 	assert(preimage);
-	ssize_t cb = satoshi_tx_serialize(tx, &preimage);	
+	ssize_t cb = satoshi_tx_serialize(tx, &preimage);
 	assert(cb == cb_image);
 	
-	*(uint32_t *)(preimage + cb_image) = txins[cur_index].sequence;
+	*(uint32_t *)(preimage + cb_image) = hash_type;
 	hash256(preimage, cb_image + sizeof(uint32_t), (unsigned char *)hash);
 	free(preimage);
 
+	// restore scripts of txins
+	txins[txin_index].scripts = scripts_backup;
+	
 	for(ssize_t i = 0; i < tx->txin_count; ++i)
 	{
-		txins[i].scripts = backup_scripts[i];
-		varint_set((varint_t *)txins[i].scripts, txins[i].cb_scripts);	// restore script length
+		// restore all txins's script length 
+		if(i != txin_index) varint_set((varint_t *)txins[i].scripts, txins[i].cb_scripts);
 	}
-	free(backup_scripts);
+
 	return 0;
 }
 
-
-
-//~ typedef struct satoshi_rawtx 
-//~ {
-	//~ satoshi_tx_t * tx;
-	//~ // backup
-	//~ unsigned char ** scripts;
-	//~ ssize_t * cb_scripts;
-	
-	//~ // internal states
-	//~ sha256_ctx_t sha[1];
-	//~ unsigned char hash[32];
-//~ }satoshi_rawtx_t;
 satoshi_rawtx_t * satoshi_rawtx_prepare(satoshi_rawtx_t * rawtx, satoshi_tx_t * tx)
 {
 	assert(tx && tx->txin_count > 0 && tx->txins);

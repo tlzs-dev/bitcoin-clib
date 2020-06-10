@@ -42,6 +42,13 @@ typedef struct satoshi_rawtx
 satoshi_rawtx_t * satoshi_rawtx_prepare(satoshi_rawtx_t * rawtx, satoshi_tx_t * tx);
 void satoshi_rawtx_final(satoshi_rawtx_t * rawtx);
 
+
+int satoshi_tx_get_digest(
+	satoshi_tx_t * tx, 
+	int txin_index, 
+	uint32_t hash_type,
+	const satoshi_txout_t * utxo,
+	uint256_t * hash);
 #ifdef __cplusplus
 }
 #endif

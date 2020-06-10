@@ -445,6 +445,8 @@ ssize_t satoshi_txin_parse(satoshi_txin_t * txin, ssize_t length, const void * p
 	
 	txin->scripts = varstr_clone((varstr_t *)p);
 	assert(txin->scripts && varstr_size(txin->scripts) == vstr_size);
+	
+	txin->cb_scripts = varstr_length(txin->scripts);
 	p += vstr_size;
 
 	// step 3. parse sequence

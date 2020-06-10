@@ -37,6 +37,16 @@ typedef char * string;
 		value;															\
 	})
 
+#ifdef _DEBUG
+#define debug_printf(fmt, ...) do {	\
+		fprintf(stderr, "\e[33m" "%s@%d::%s(): " fmt " \e[39m\n",	\
+			__FILE__, __LINE__, __FUNCTION__,						\
+			##__VA_ARGS__);											\
+	} while(0)
+#else
+#define debug_printf(fmt, ...) do { } while(0)
+#endif
+
 
 #ifdef __cplusplus
 }

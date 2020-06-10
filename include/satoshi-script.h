@@ -13,6 +13,7 @@ extern "C" {
 #include <stdbool.h>
 
 #include "satoshi-types.h"
+#include "crypto.h"
 
 enum satoshi_script_data_type
 {
@@ -26,10 +27,10 @@ enum satoshi_script_data_type
 	satoshi_script_data_type_uint16,
 	satoshi_script_data_type_uint32,
 	satoshi_script_data_type_uint64,
-	satoshi_script_data_type_hash256,
-	satoshi_script_data_type_hash160,
-	satoshi_script_data_type_uchars,	// array, no-free
-	satoshi_script_data_type_pointer,	// need free
+	satoshi_script_data_type_hash256,	// 9
+	satoshi_script_data_type_hash160,	// 10
+	satoshi_script_data_type_uchars,	// 11, array, no-free
+	satoshi_script_data_type_pointer,	// 12, need free
 };
 
 enum satoshi_script_opcode
@@ -213,6 +214,7 @@ typedef struct satoshi_script
 	satoshi_script_stack_t main_stack[1];
 	satoshi_script_stack_t alt_stack[1];
 	
+	crypto_context_t * crypto;
 	// public data, should be initialized before parse
 	satoshi_tx_t * tx;
 	ssize_t txin_index;
@@ -230,7 +232,9 @@ typedef struct satoshi_script
 
 }satoshi_script_t;
 
-satoshi_script_t * satoshi_script_init(satoshi_script_t * scripts, void * user_data);
+satoshi_script_t * satoshi_script_init(satoshi_script_t * scripts, 
+	crypto_context_t * crypto, 
+	void * user_data);
 void satoshi_script_reset(satoshi_script_t * scripts);
 void satoshi_script_cleanup(satoshi_script_t * scripts);
 
