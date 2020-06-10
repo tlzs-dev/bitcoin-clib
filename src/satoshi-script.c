@@ -653,7 +653,9 @@ label_error:
 }
 
 
-static ssize_t scripts_parse(struct satoshi_script * scripts, const unsigned char * payload, size_t length)
+static ssize_t scripts_parse(struct satoshi_script * scripts, 
+	int is_txin_scripts, 	// if is_txin, only allows opcode < OP_PUSHDATA4
+	const unsigned char * payload, size_t length)
 {
 	assert(scripts && payload && (length > 0));
 	bitcoin_blockchain_t * chain = scripts->user_data;
@@ -668,13 +670,17 @@ static ssize_t scripts_parse(struct satoshi_script * scripts, const unsigned cha
 	
 	assert(main_stack && alt);
 	
-	if(p[0] == 0)	// p2sh 
+	int p2sh_flag = 0;
+	int segwit_flag = 0;
+	if(p[0] == 0)
 	{
-		main_stack->push(main_stack, 
-			satoshi_script_data_new(satoshi_script_data_type_op_code, 
-				p, 1));
+		if(is_txin_scripts) p2sh_flag = 1;
+		else segwit_flag = 1;
+		
 		++p;
 	}
+	
+	(void)((segwit_flag));	// todo: ...
 	
 	while(p < p_end)
 	{
@@ -682,16 +688,22 @@ static ssize_t scripts_parse(struct satoshi_script * scripts, const unsigned cha
 		uint8_t op_code = *p++;
 		ssize_t data_size = 0;
 		
-		assert(op_code != 0);
-		
 		if(op_code <= satoshi_script_opcode_op_pushdata4)
 		{
+			assert(op_code < satoshi_script_opcode_op_pushdata4); // LIMIT the scripts length can not exceed 65535 bytes
 			data_size = parse_op_push_data(main_stack, op_code, p, p_end);
 			
 			if(data_size < 0) return -1;
 			p += data_size;
 			
 			continue;
+		}
+		
+		if(is_txin_scripts) { // only allows push-data opcodes
+			scripts_parser_error_handler("parse txin scripts failed(opcode=0x%.2x): %s",
+				op_code,
+				"not a push data opcode.");
+			return -1;
 		}
 		
 		switch(op_code)
@@ -709,6 +721,7 @@ static ssize_t scripts_parse(struct satoshi_script * scripts, const unsigned cha
 		case satoshi_script_opcode_op_equalverify:
 			rc = parse_op_equalverify(main_stack);
 			break;
+
 		case satoshi_script_opcode_op_checksig:
 			rc = parse_op_checksig(main_stack, scripts);
 			break;
@@ -719,7 +732,28 @@ static ssize_t scripts_parse(struct satoshi_script * scripts, const unsigned cha
 		
 	}
 	
-	assert(p <= p_end);
+	assert(p == p_end);
+	if(is_txin_scripts && p2sh_flag == 1)	
+	{
+		// pop redeem scripts --> parse --> push(hash256(redeem_scripts))
+		satoshi_script_data_t * sdata = main_stack->pop(main_stack);
+		assert(sdata && sdata->data && sdata->size > 0);
+		
+		unsigned char * redeem_scripts = sdata->data;
+		ssize_t cb_redeem_scripts = sdata->size;
+		
+		// todo: verify redeem scripts
+		// verify_redeem_scripts(redeem_scripts, cb_redeem_scripts, tx, utxo);
+		
+		// push redeem_scripts_hash
+		unsigned char hash[32] = { 0 };
+		hash160(redeem_scripts, cb_redeem_scripts, hash);
+		main_stack->push(main_stack, 
+			satoshi_script_data_new(satoshi_script_data_type_hash160, hash, 32));
+		satoshi_script_data_free(sdata);
+	}
+	
+	
 	return (p_end - payload);
 	
 label_error:
@@ -895,18 +929,51 @@ int main(int argc, char **argv)
 		inputs_amount += utxo->value;
 		
 		// parse txin
-		assert(txin->scripts);
+		unsigned char * payload = varstr_getdata_ptr(txin->scripts);
+		ssize_t cb_payload = varstr_length(txin->scripts);
+		assert(payload && cb_payload > 0);
+		
 		printf("parse txins[%d] ...\n", (int)i);
-		ssize_t cb_scripts = varstr_length(txin->scripts);
+		
+		if(payload[0] == 0)		// check p2sh flags
+		{
+			txin->is_p2sh = 1;
+			++payload;
+		}
+		
 		ssize_t cb = scripts->parse(scripts, 
-			varstr_getdata_ptr(txin->scripts), 
-			cb_scripts);
-		assert(cb == cb_scripts);
+			1,
+			payload, cb_payload);
+		assert(cb == cb_payload);
 		
+	
 		
-		cb_scripts = varstr_size(utxo->scripts);
-		cb = scripts->parse(scripts, (unsigned char *)utxo->scripts, cb_scripts);
-		assert(cb == cb_scripts);
+		if(txin->is_p2sh)
+		{
+			/*
+			 * Parse redeem scripts:
+			 * 	pop redeem scripts 
+			 * 		--> parse 
+			 * 		--> push hash256(redeem scripts) to main_stack
+			*/
+			satoshi_script_stack_t * stack = scripts->main_stack;
+			assert(stack->count > 0);
+			
+			satoshi_script_data_t * sdata = stack->pop(stack);
+			assert(sdata && sdata->data && sdata->size 
+				&& ( (sdata->type == satoshi_script_data_type_pointer)
+					|| (sdata->type == satoshi_script_data_type_uchars))
+			);
+
+			dump_line("p2sh redeem scripts: ", sdata->data, sdata->size);
+			satoshi_script_data_free(sdata);
+			
+		}
+		
+		cb_payload = varstr_length(utxo->scripts);
+		cb = scripts->parse(scripts, 0, 
+			varstr_getdata_ptr(utxo->scripts), cb_payload);
+		assert(cb == cb_payload);
 	}
 	
 	return 0;

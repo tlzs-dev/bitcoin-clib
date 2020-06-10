@@ -223,8 +223,10 @@ typedef struct satoshi_script
 	
 	// parse scripts of txins or (and) txouts 
 	ssize_t (* parse)(struct satoshi_script * scripts, 
+		int is_txin_scripts, 	// if is_txin, only allows opcode < OP_PUSHDATA4
 		const unsigned char * payload, 
 		size_t length);
+		
 
 }satoshi_script_t;
 

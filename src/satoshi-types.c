@@ -354,6 +354,52 @@ static const satoshi_outpoint_t s_coinbase_outpoint[1] = {{
 }};
 
 
+/** 
+ * parse_varint:
+ * 	@return 
+ * 		next offset on success, 
+ * 		NULL on error.
+ */
+static inline const unsigned char * parse_varint(
+	const unsigned char * p, 
+	const unsigned char * p_end,
+	ssize_t * value)
+{
+	assert(value);
+	
+	if(p >= p_end) return NULL;
+	
+	size_t vint_size = varint_size((varint_t *)p);
+	if((p + vint_size) > p_end) return NULL;
+	
+	*value = varint_get((varint_t *)p);
+	return (p + vint_size);
+}
+
+
+/** 
+ * parse_varstr:
+ * 	@return 
+ * 		next offset on success, 
+ * 		NULL on error.
+ */
+static inline const unsigned char * parse_varstr(
+	const unsigned char * p, 
+	const unsigned char * p_end,
+	varstr_t ** p_dst)
+{
+	assert(p_dst);
+	if(p >= p_end) return NULL;
+	
+	size_t vstr_size = varstr_size((varstr_t *)p);
+	if((p + vstr_size) > p_end) return NULL;
+	
+	*p_dst = varstr_clone((varstr_t *)p);
+	return (p + vstr_size);
+}
+
+
+
 static inline int verify_sig_hashtype_format(varstr_t * vsig_hashtype)
 {
 	unsigned char * p = varstr_getdata_ptr(vsig_hashtype);
@@ -376,57 +422,6 @@ label_error:
 	return -1;
 }
 
-static int parse_sig_scripts(satoshi_txin_t * txin)
-{
-	assert(txin && txin->scripts);
-	if(txin->is_coinbase) return 0;	// no additional parsing
-	
-	const unsigned char * p = varstr_getdata_ptr(txin->scripts);
-	const unsigned char * p_end = p + varstr_length(txin->scripts);
-	
-	if(p == p_end) return 0;	// no sig scripts
-	
-	// step 1. check p2sh flags
-	if(p[0] == 0) {
-		txin->is_p2sh = 1;
-		++p;
-	};
-	
-	/**
-	 * step 2. parse sig_scripts:
-	 * Format:
-	 * 	vstr = varstr( 
-	 * 		(op_0) 
-	 * 		| varstr(signatures | hash_type ) 
-	 * 		| varstr(redeem_scripts) 
-	 * )
-	 * 
-	**/
-	varstr_t * vsig_hashtype = (varstr_t *)p;
-	p += varstr_size(vsig_hashtype);
-	
-	if(p < p_end)	// has redeem scripts
-	{
-		varstr_t * vredeem_scripts = (varstr_t *)p;
-		p += varstr_size(vredeem_scripts);
-		
-		txin->cb_redeem_scripts = varstr_length(vredeem_scripts);
-		txin->redeem_scripts = varstr_getdata_ptr(vredeem_scripts);
-	}
-	assert(p == p_end);
-	
-	int rc = verify_sig_hashtype_format(vsig_hashtype);
-	if(rc) return -1;
-	
-	ssize_t cb_sig_hashtype = varstr_length(vsig_hashtype);
-	if(cb_sig_hashtype < 1) return -1;
-	
-	txin->cb_signatures = cb_sig_hashtype - 1;
-	txin->signatures = varstr_getdata_ptr(vsig_hashtype);
-	txin->hash_type = txin->signatures[txin->cb_signatures];
-	
-	return 0;
-}
 
 ssize_t satoshi_txin_parse(satoshi_txin_t * txin, ssize_t length, const void * payload)
 {
@@ -452,15 +447,6 @@ ssize_t satoshi_txin_parse(satoshi_txin_t * txin, ssize_t length, const void * p
 	assert(txin->scripts && varstr_size(txin->scripts) == vstr_size);
 	p += vstr_size;
 
-	txin->cb_scripts = varstr_length(txin->scripts);
-	if(!txin->is_coinbase && txin->cb_scripts)
-	{
-		int rc = parse_sig_scripts(txin);
-		if(rc) {
-			message_parser_error_handler("parse sig_scripts failed: %s", "invalid payload data.");
-		}
-	}
-	
 	// step 3. parse sequence
 	if((p + sizeof(uint32_t)) > p_end) {
 		message_parser_error_handler("parse sequence failed: %s.", "invalid payload length");
@@ -614,6 +600,16 @@ void satoshi_txout_cleanup(satoshi_txout_t * txout)
 	
 //~ }satoshi_tx_t;
 
+#define parse_data(p, p_end, data_type, dst) ({	\
+		const unsigned char * ret = NULL;		\
+		if((p + sizeof(data_type)) <= p_end) {	\
+			dst = *(data_type *)p;				\
+			p += sizeof(data_type);				\
+			ret = p;							\
+		}										\
+		ret;									\
+	})
+
 
 ssize_t satoshi_tx_parse(satoshi_tx_t * tx, ssize_t length, const void * payload)
 {
@@ -624,11 +620,10 @@ ssize_t satoshi_tx_parse(satoshi_tx_t * tx, ssize_t length, const void * payload
 	const unsigned char * p_end = p + length;
 	
 	// parse version
-	if((p + sizeof(int32_t)) > p_end) {
+	p = parse_data(p, p_end, int32_t, tx->version);
+	if(NULL == p) {
 		message_parser_error_handler("parse version failed: %s", "invalid payload length");
 	}
-	tx->version = *(int32_t *)p;
-	p += sizeof(int32_t);
 	
 	// parse witness flag, If present, always 0001, and indicates the presence of witness data
 	if((p + 2) > p_end){
@@ -648,10 +643,11 @@ ssize_t satoshi_tx_parse(satoshi_tx_t * tx, ssize_t length, const void * payload
 	// parse txins
 	if(p >= p_end) message_parser_error_handler("parse txins failed: %s", "invalid payload length");
 	
-	ssize_t vint_size = varint_size((varint_t *)p);
-	if((p + vint_size) >= p_end) message_parser_error_handler("parse txin_count failed: %s", "invalid payload length");
-	tx->txin_count = varint_get((varint_t *)p);
-	p += vint_size;
+	p = parse_varint(p, p_end, &tx->txin_count);
+	if(NULL == p)
+	{
+		message_parser_error_handler("parse txin_count failed: %s", "invalid payload length");
+	}
 	if(tx->txin_count <= 0) message_parser_error_handler("invalid txins count: %d", (int)tx->txin_count);
 	
 	satoshi_txin_t * txins = calloc(tx->txin_count, sizeof(*txins));
@@ -666,11 +662,9 @@ ssize_t satoshi_tx_parse(satoshi_tx_t * tx, ssize_t length, const void * payload
 	}
 	
 	// parse txouts
-	if(p >= p_end) message_parser_error_handler("parse txout failed: %s", "invalid payload length");
-	vint_size = varint_size((varint_t *)p);
-	if((p + vint_size) >= p_end) message_parser_error_handler("parse txout_count failed: %s", "invalid payload length");
-	tx->txout_count = varint_get((varint_t *)p);
-	p += vint_size;
+	p = parse_varint(p, p_end, &tx->txout_count);
+	if(NULL == p) message_parser_error_handler("parse txout failed: %s", "invalid payload length");
+	
 	if(tx->txout_count <= 0) message_parser_error_handler("invalid txouts count: %d", (int)tx->txout_count);
 	
 	satoshi_txout_t * txouts = calloc(tx->txout_count, sizeof(*txouts));
@@ -707,10 +701,15 @@ ssize_t satoshi_tx_parse(satoshi_tx_t * tx, ssize_t length, const void * payload
 		{
 			if(p >= p_end) message_parser_error_handler("parse witness data failed: %s.", "invalid payload length");
 			
-			ssize_t num_items = varint_get((varint_t *)p);
-			p += varint_size((varint_t *)p);
+			ssize_t num_items = 0;
+			p = parse_varint(p, p_end, &num_items);
+			if(NULL == p) {
+				message_parser_error_handler("parse witness data failed: %s.", 
+					"invalid payload length");
+			}
 			
 			witnesses[i].num_items = num_items;
+			
 			if(num_items > 0)
 			{
 				varstr_t ** items = calloc(num_items, sizeof(*items));
@@ -719,11 +718,18 @@ ssize_t satoshi_tx_parse(satoshi_tx_t * tx, ssize_t length, const void * payload
 				
 				for(ssize_t item_index = 0; item_index < num_items; ++item_index)
 				{
-					if(p >= p_end) message_parser_error_handler("parse witness data failed: %s.", "invalid payload length");
-					items[item_index] = varstr_clone((varstr_t *)p);
-					assert(items[item_index]);
-					p += varstr_size((varstr_t *)p);
+					if(p >= p_end) {
+						message_parser_error_handler("parse witness data failed: %s.", 
+							"invalid payload length");
+					}
+					
+					p = parse_varstr(p, p_end, &items[item_index]);
+					if(NULL == p) {
+						message_parser_error_handler("parse witness data failed: %s.", 
+							"invalid payload length");
+					}
 				}
+				
 			}
 		}
 		tx->cb_witnesses = p - p_witnesses;
@@ -918,7 +924,6 @@ ssize_t satoshi_tx_serialize(const satoshi_tx_t * tx, unsigned char ** p_data)
 	assert((p - payload) == tx_size);
 	return tx_size;
 }
-
 
 ssize_t satoshi_block_parse(satoshi_block_t * block, ssize_t length, const void * payload)
 {
