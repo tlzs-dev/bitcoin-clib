@@ -800,6 +800,7 @@ static inline int parse_op_checkmultisig(satoshi_script_stack_t * stack, satoshi
 		
 
 		// verify signature
+		rc = -1;
 		for(; pubkey_index < num_pubkeys; ++pubkey_index)
 		{
 			rc = crypto->verify(crypto, (unsigned char *)&digest, 32,
@@ -810,6 +811,7 @@ static inline int parse_op_checkmultisig(satoshi_script_stack_t * stack, satoshi
 				break;
 			}
 		}
+		printf("\t\t\t ==> verify sig[%d] = %d\n", (int)i, rc);
 		free(sig_der);
 	}
 	
@@ -964,7 +966,7 @@ static ssize_t scripts_parse(struct satoshi_script * scripts,
 		tx->txins[txin_index].is_p2sh = 1;
 		
 		satoshi_script_data_t * sdata = NULL;
-		int rc = 0;
+		ssize_t cb = 0;
 		// parse redeem scripts;
 		sdata = main_stack->pop(main_stack);
 		if(NULL == sdata || sdata->type < satoshi_script_data_type_varstr)
@@ -974,21 +976,24 @@ static ssize_t scripts_parse(struct satoshi_script * scripts,
 			return -1;
 		}
 		
-		debug_printf("parse redeem_scripts ...");
+		debug_printf("parse redeem_scripts %p, length=%ld...", sdata->data, (long)sdata->size);
 		dump_line("redeem scripts: ", sdata->data, sdata->size);
 		
-		rc = scripts->parse(scripts, 
+		tx->txins[txin_index].redeem_scripts = varstr_new(sdata->data, sdata->size);
+		
+		cb = scripts->parse(scripts, 
 			satoshi_tx_script_type_p2sh_redeem_scripts, 
 			sdata->data, sdata->size);
 		
-		if(0 == rc) // if ok, push back redeem_scripts
+		if(cb == sdata->size) // if parsed ok, push back redeem_scripts
 		{
 			main_stack->push(main_stack, sdata);
 		}else
 		{
 			satoshi_script_data_free(sdata);
+			scripts_parser_error_handler("parse redeem scripts failed");
 		}
-		if(rc) scripts_parser_error_handler("parse redeem scripts failed");
+		
 	}
 	
 	return (p_end - payload);
