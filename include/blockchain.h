@@ -20,8 +20,8 @@ struct db_record_utxo_data
 	uint256_t block_hash;			// secondary key
 	// satoshi_txout_t txout;
 	int64_t value;	// little-endian
-	uint32_t cb_script;
-	unsigned char pk_scripts[0];	// variable length data
+	uint32_t cb_scripts;
+	unsigned char scripts[0];	// variable length data
 }__attribute__((packed));
 struct db_record_utxo
 {
@@ -37,8 +37,8 @@ struct db_record_utxo
 			uint256_t block_hash;			// secondary key
 			// satoshi_txout_t txout;
 			int64_t value;	// little-endian
-			uint32_t cb_script;
-			unsigned char pk_scripts[0];	// variable length data
+			uint32_t cb_scripts;
+			unsigned char scripts[0];	// variable length data
 		}__attribute__((packed));
 	};
 }__attribute__((packed));
@@ -47,7 +47,7 @@ struct db_record_utxo * db_record_utxo_new(
 	const satoshi_outpoint_t *outpoint, 
 	const satoshi_txout_t * txout);
 void db_record_utxo_free(struct db_record_utxo * utxo);
-#define db_record_utxo_size(utxo)  (sizeof(struct db_record_utxo) + (utxo?utxo->cb_script:0))
+#define db_record_utxo_size(utxo)  (sizeof(struct db_record_utxo) + (utxo?utxo->cb_scripts:0))
 
 typedef struct bitcoin_utxo_db
 {

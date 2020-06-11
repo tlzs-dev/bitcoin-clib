@@ -22,13 +22,13 @@ enum satoshi_script_data_type
 	satoshi_script_data_type_bool,
 	satoshi_script_data_type_op_code,
 	satoshi_script_data_type_varint,
-	satoshi_script_data_type_varstr,
 	satoshi_script_data_type_uint8,
 	satoshi_script_data_type_uint16,
 	satoshi_script_data_type_uint32,
 	satoshi_script_data_type_uint64,
-	satoshi_script_data_type_hash256,	// 9
-	satoshi_script_data_type_hash160,	// 10
+	satoshi_script_data_type_hash256,	// 8
+	satoshi_script_data_type_hash160,	// 9
+	satoshi_script_data_type_varstr,	// 10
 	satoshi_script_data_type_uchars,	// 11, array, no-free
 	satoshi_script_data_type_pointer,	// 12, need free
 };
@@ -206,6 +206,15 @@ typedef struct satoshi_script_stack
 satoshi_script_stack_t * satoshi_script_stack_init(satoshi_script_stack_t * stack, ssize_t size, void * user_data);
 void satoshi_script_stack_cleanup(satoshi_script_stack_t * stack);
 
+
+enum satoshi_tx_script_type
+{
+	satoshi_tx_script_type_unknown = 0,
+	satoshi_tx_script_type_txin = 1,
+	satoshi_tx_script_type_txout = 2,
+	satoshi_tx_script_type_p2sh_redeem_scripts = 3,
+};
+
 typedef struct satoshi_script
 {
 	void * user_data;
@@ -225,10 +234,11 @@ typedef struct satoshi_script
 	
 	// parse scripts of txins or (and) txouts 
 	ssize_t (* parse)(struct satoshi_script * scripts, 
-		int is_txin_scripts, 	// if is_txin, only allows opcode < OP_PUSHDATA4
+		enum satoshi_tx_script_type type, 
 		const unsigned char * payload, 
 		size_t length);
-		
+	
+	int (* verify)(struct satoshi_script * scripts);
 
 }satoshi_script_t;
 

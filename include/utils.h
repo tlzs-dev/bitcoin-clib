@@ -12,6 +12,7 @@ ssize_t bin2hex(const void * data, size_t length, char ** p_hex);
 ssize_t hex2bin(const char * hex, size_t length, void ** p_data);
 void dump2(FILE * fp, const void * data, ssize_t length);
 #define dump(data, length) dump2(stdout, data, length)
+#define dump_line(prefix, data, length) do { printf("%s", prefix); dump(data, length); printf("\n"); } while(0)
 
 void hash256(const void * data, size_t length, uint8_t hash[32]);
 void hash160(const void * data, size_t length, uint8_t hash[20]);

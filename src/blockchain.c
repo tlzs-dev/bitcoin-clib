@@ -199,20 +199,21 @@ struct db_record_utxo * db_record_utxo_new(
 	const satoshi_outpoint_t *outpoint, 
 	const satoshi_txout_t * txout)
 {
-	uint32_t cb_script = txout?txout->cb_script:0;
+	assert(txout);
+	uint32_t cb_scripts = varstr_length(txout->scripts);
+	
+	
 	struct db_record_utxo * utxo = calloc(
-		sizeof(*utxo) + cb_script, // allocate additional size for scripts data
+		sizeof(*utxo) + cb_scripts, // allocate additional size for scripts data
 		1); 
 	assert(utxo);
+
+	utxo->cb_scripts = cb_scripts;
+	utxo->value = txout->value;
 	
-	utxo->cb_script = cb_script;
-	if(txout)
+	if(cb_scripts > 0)
 	{
-		utxo->value = txout->value;
-		if(cb_script && txout->scripts)
-		{
-			memcpy(utxo->pk_scripts, txout->scripts, cb_script);
-		}
+		memcpy(utxo->scripts, varstr_getdata_ptr(txout->scripts), cb_scripts);
 	}
 
 	if(outpoint)
@@ -417,7 +418,7 @@ int utxo_db_find(struct bitcoin_utxo_db * db, const satoshi_outpoint_t * outpoin
 	
 	struct db_record_utxo_data * utxo = value.data;
 	uint32_t data_size = value.size;
-	assert(data_size == (sizeof(*utxo) + utxo->cb_script));
+	assert(data_size == (sizeof(*utxo) + utxo->cb_scripts));
 	
 	if(block_hash)
 	{
@@ -427,15 +428,7 @@ int utxo_db_find(struct bitcoin_utxo_db * db, const satoshi_outpoint_t * outpoin
 	if(txout)
 	{
 		txout->value = utxo->value;
-		txout->cb_script = utxo->cb_script;
-		if(utxo->cb_script > 0)
-		{
-			unsigned char * pk_scripts = realloc(txout->scripts, utxo->cb_script);
-			txout->scripts = pk_scripts;
-			assert(pk_scripts);
-			
-			memcpy(pk_scripts, utxo->pk_scripts, utxo->cb_script);
-		}
+		txout->scripts = varstr_new(utxo->scripts, utxo->cb_scripts);
 	}
 	
 	free(utxo);
@@ -889,12 +882,12 @@ void test_utxoes(bitcoin_utxo_db_t * utxo_db, const char * db_home)
 	outpoints[1].index = 456;
 	
 	txouts[0].value = 10000;
-	txouts[0].cb_script = 4;
+	txouts[0].cb_scripts = 4;
 	txouts[0].scripts = calloc(4, 1);
 	*(uint32_t *)txouts[0].scripts = 0x11223344;
 	
 	txouts[1].value = 20000;
-	txouts[1].cb_script = 4;
+	txouts[1].cb_scripts = 4;
 	txouts[1].scripts = calloc(4, 1);
 	*(uint32_t *)txouts[1].scripts = 0xabababab;
 	

@@ -40,10 +40,15 @@
 #include <inttypes.h>
 #include "satoshi-script.h"
 
-#ifndef dump_line
-#define dump_line(prefix, data, length) do {							\
-		printf(prefix); dump(data, length); printf("\e[39m\n");	\
+#ifdef _DEBUG
+#define debug_dump_line(prefix, data, length) do {				\
+		fprintf(stderr, "\e[33m%s@%d::%s()::%s:", 				\
+			__FILE__, __LINE__, __FUNCTION__, prefix); 			\
+		dump2(stderr, data, length); 							\
+		fprintf(stderr, "\e[39m\n");							\
 	} while(0)
+#else
+#define debug_dump_line(prefix, data, length) do { } while(0)
 #endif
 
 #ifndef debug_printf
@@ -227,12 +232,6 @@ int segwit_v0_tx_get_digest(const satoshi_tx_t * tx,
 	return 0;
 }
 
-struct scripts_data
-{
-	unsigned char * scripts;
-	ssize_t cb_scripts;
-};
-
 int satoshi_tx_get_digest(
 	satoshi_tx_t * tx, 
 	int txin_index, 
@@ -296,31 +295,26 @@ satoshi_rawtx_t * satoshi_rawtx_prepare(satoshi_rawtx_t * rawtx, satoshi_tx_t * 
 	assert(rawtx);
 	rawtx->tx = tx;
 	
-	rawtx->backup = calloc(tx->txin_count, sizeof(*rawtx->backup));
-	assert(rawtx->backup);
-	
-	// backup scripts
-	satoshi_txin_t * txins = tx->txins;
-	for(ssize_t i = 0; i < tx->txin_count; ++i)
-	{
-		*(unsigned char *)txins[i].scripts = 0;	// set length to zero
-		rawtx->backup[i] = txins[i].scripts;
-		
-	}
-	
 	sha256_ctx_t temp_sha[1];
 	unsigned char hash[32];
 	sha256_init(rawtx->sha);
 	
-	if(tx->has_flag)
+	// set all txins' script_length to zero
+	satoshi_txin_t * txins = tx->txins;
+	for(ssize_t i = 0; i < tx->txin_count; ++i)
+	{
+		if(NULL == txins[i].scripts) txins[i].scripts = varstr_new(NULL, 0);
+		else varint_set((varint_t *)txins[i].scripts, 0);
+	}
+	
+	if(tx->has_flag)	// segwit 
 	{
 		assert(tx->flag[0] == 0 && tx->flag[1] == 1);	// support segwit_v0 only
 		// pre-hash common data to internal SHA context (step 1, 2, 3, 8)
 
 		// 1. nVersion of the transaction (4-byte little endian)
 		sha256_update(rawtx->sha, (unsigned char *)&tx->version, sizeof(uint32_t));
-		
-		printf("---- 1. hash version: %u\n", tx->version);
+		debug_printf("---- 1. hash version: %u", tx->version);
 		
 		// 2. hashPrevouts (32-byte hash)	( sha256(sha256(outpoints[])) )
 		const satoshi_txin_t * txins = tx->txins;
@@ -335,7 +329,7 @@ satoshi_rawtx_t * satoshi_rawtx_prepare(satoshi_rawtx_t * rawtx, satoshi_tx_t * 
 		sha256_final(temp_sha, hash);	// calc hash256() result 
 		
 		sha256_update(rawtx->sha, (unsigned char *)hash, 32);
-		printf("---- 2. hashPrevouts: "); dump(hash, 32); printf("\n");
+		debug_dump_line("---- 2. hashPrevouts: ", hash, 32); 
 		
 		
 		// 3. hashSequence (32-byte hash)
@@ -350,7 +344,7 @@ satoshi_rawtx_t * satoshi_rawtx_prepare(satoshi_rawtx_t * rawtx, satoshi_tx_t * 
 		sha256_final(temp_sha, hash);	// write hash256() result 
 		
 		sha256_update(rawtx->sha, (unsigned char *)hash, 32);
-		printf("---- 2. hashSequence: "); dump(hash, 32); printf("\n");
+		debug_dump_line("---- 3. hashSequence: ", hash, 32); 
 		
 		//  8. hashOutputs (32-byte hash)
 		const satoshi_txout_t * txouts = tx->txouts;
@@ -367,31 +361,24 @@ satoshi_rawtx_t * satoshi_rawtx_prepare(satoshi_rawtx_t * rawtx, satoshi_tx_t * 
 		sha256_init(temp_sha);
 		sha256_update(temp_sha, hash, 32);
 		sha256_final(temp_sha, rawtx->txouts_hash);	// write hash256() result 
-		printf("---- 8. hashOutputs: "); dump(hash, 32); printf("\n");
-		
-		
+		debug_dump_line("---- 8. hashOutputs: ", hash, 32); 
 	}
 	return rawtx;
 }
 
 void satoshi_rawtx_final(satoshi_rawtx_t * rawtx)
 {
-	if(NULL == rawtx || NULL == rawtx->backup) return;
+	if(NULL == rawtx) return;
 	
+	// restore all txins' script_length
 	satoshi_tx_t * tx = rawtx->tx;
-	assert(tx);
-	
-	if(rawtx->backup) // legacy tx
+	if(tx)
 	{
 		satoshi_txin_t * txins = tx->txins;
 		for(ssize_t i = 0; i < tx->txin_count; ++i)
 		{
-			txins[i].scripts = rawtx->backup[i];
 			varint_set((varint_t *)txins[i].scripts, txins[i].cb_scripts);
 		}
-		
-		free(rawtx->backup);
-		rawtx->backup = NULL;
 	}
 	
 	rawtx->tx = NULL;
@@ -460,26 +447,23 @@ int satoshi_rawtx_get_digest(satoshi_rawtx_t * rawtx,
 	}else
 	{
 		satoshi_txin_t * txins = tx->txins;
-		for(ssize_t i = 0; i < tx->txin_count; ++i)
-		{
-			unsigned char empty_script[1] = { 0 };
-			if(i == cur_index)
-			{
-				txins[i].scripts = utxo->scripts;
-			}else
-			{
-				txins[i].scripts = (varstr_t *)empty_script;
-			}
-		}
+		satoshi_txin_t * cur_txin = &txins[cur_index];
+		
+		// replace cur_txin's scripts with redeem_scripts
+		varstr_t * scripts_backup = cur_txin->scripts;
+		cur_txin->scripts = cur_txin->is_p2sh?cur_txin->redeem_scripts:utxo->scripts;
+		assert(cur_txin->scripts);
 		
 		unsigned char * preimage = NULL;
 		ssize_t cb_image = satoshi_tx_serialize(tx, &preimage);
 		assert(preimage && cb_image > 0);
 		
+		// restore cur_txin.scripts
+		cur_txin->scripts = scripts_backup;
+		
 		sha256_update(sha, preimage, cb_image);
 		
-		dump_line("tx-preimage: ", preimage, cb_image); 
-		
+		debug_dump_line("tx-preimage: ", preimage, cb_image); 
 		free(preimage);
 		
 		if(0 == hash_type) hash_type = 1;
@@ -497,51 +481,6 @@ int satoshi_rawtx_get_digest(satoshi_rawtx_t * rawtx,
 	
 	return 0;
 }
-
-
-typedef struct satoshi_txin_sign_data
-{
-	satoshi_txout_t * utxo;
-	ssize_t keys_count;
-	crypto_privkey_t * const * privkeys;
-}satoshi_txin_sign_data_t;
-
-
-int crypto_sign_transaction(crypto_context_t * crypto, 
-	satoshi_tx_t * tx, 	// ([in] [out]),  [in]: raw transaction, [out]: signed transaction
-	const satoshi_txin_sign_data_t * scripts_data[])
-
-{
-	//~ assert(crypto && tx);
-	//~ assert(utxoes && privkeys);
-	
-	//~ assert(tx->txin_count > 0 && tx->txins);
-	//~ assert(tx->txout_count > 0 && tx->txouts);
-	
-	//~ unsigned char ** signatuers = calloc(tx->txins_count, sizeof(*signatures));
-	
-	//~ for(ssize_t i = 0; i < tx->txin_count; ++i)
-	//~ {
-		//~ // parse utxo type
-		//~ const unsigned char * utxo_script = varstr_getdata_ptr(utxoes[i]->scripts);
-		//~ ssize_t cb_scripts = varstr_length(utxoes[i]->scripts);
-		
-		//~ assert(cb_scripts > 0);
-		//~ unsigned char * p = utxo_script;
-		//~ if(p[0] == 0) // segwit
-		//~ {
-			//~ // 
-		//~ }else
-		//~ {
-			//~ // 
-		//~ }
-	//~ }
-	
-	return 0;
-}
-
-
-
 
 
 

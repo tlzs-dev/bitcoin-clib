@@ -60,7 +60,7 @@ static void auto_free_ptr(void * ptr)
 /*******************************************************
  * satoshi_script_data
  *******************************************************/
- 
+
 ssize_t scripts_data_get_ptr(const satoshi_script_data_t * sdata, void ** p_data)
 {
 	if(sdata->type == satoshi_script_data_type_unknown) return -1;
@@ -72,8 +72,9 @@ ssize_t scripts_data_get_ptr(const satoshi_script_data_t * sdata, void ** p_data
 	case satoshi_script_data_type_pointer:
 	case satoshi_script_data_type_uchars:
 		*p_data = (void *)sdata->data;
+		break;
 	default: 
-		*p_data = (void *)sdata->h256;	
+		*p_data = (void *)&sdata->u64;
 		break;
 	}
 	return sdata->size;
@@ -87,6 +88,9 @@ int satoshi_script_data_compare(const satoshi_script_data_t * sdata1, const sato
 	
 	ssize_t cb_data1 = scripts_data_get_ptr(sdata1, &data1);
 	ssize_t cb_data2 = scripts_data_get_ptr(sdata2, &data2);
+	
+	dump_line("\t--> data1: ", data1, cb_data1);
+	dump_line("\t--> data2: ", data2, cb_data2);
 	
 	if(cb_data1 <= 0 || cb_data2 <= 0 || cb_data1 != cb_data2) return -1;
 	
@@ -365,6 +369,10 @@ static int stack_push(struct satoshi_script_stack * stack, satoshi_script_data_t
 		sdata->type,
 		sdata->size,
 		(int)stack->count);
+		
+	dump_line("\t\t --> data pushed: ", 
+		(sdata->type >= satoshi_script_data_type_varstr)?sdata->data:sdata->h256, 
+		sdata->size);
 	return 0;
 }
 
@@ -376,10 +384,13 @@ satoshi_script_data_t * stack_pop(struct satoshi_script_stack * stack)
 	stack->data[stack->count] = NULL;
 	
 	
-	fprintf(stderr, "\t --> stack_pop()::data_type=%d, size=%zd, stack.count=%d\n",
+	printf("\t --> stack_pop()::data_type=%d, size=%zd, stack.count=%d\n",
 		sdata->type,
 		sdata->size,
 		(int)stack->count);
+	dump_line("\t\t --> data popped: ", 
+		(sdata->type >= satoshi_script_data_type_varstr)?sdata->data:sdata->h256, 
+		sdata->size);
 		
 	return sdata;
 }
@@ -540,9 +551,11 @@ static inline ssize_t parse_op_push_data(satoshi_script_stack_t * stack, uint8_t
 	if((p + data_size) > p_end) {
 		scripts_parser_error_handler("invalid payload length.");
 	}
+	
+	dump_line("\t\t--> push_data: ", p, data_size);
 			
 	rc = stack->push(stack, 
-		satoshi_script_data_new(satoshi_script_data_type_uchars, // no-copy, reuse current buffer directly (txins->scripts)
+		satoshi_script_data_new(satoshi_script_data_type_pointer, 
 			p, data_size)
 	);
 	assert(0 == rc);
@@ -590,6 +603,14 @@ label_error:
 	return -1;
 }
 
+static inline int parse_op_equal(satoshi_script_stack_t * stack)
+{
+	int rc = parse_op_equalverify(stack);
+	int8_t ok = (0 == rc);
+	
+	debug_printf("is_equal() = [%s]", ok?"True":"False");
+	return stack->push(stack, satoshi_script_data_new(satoshi_script_data_type_bool, &ok, 1));
+}
 
 static inline int parse_op_checksig(satoshi_script_stack_t * stack, satoshi_script_t * scripts)
 {
@@ -650,6 +671,10 @@ static inline int parse_op_checksig(satoshi_script_stack_t * stack, satoshi_scri
 	rc = crypto->verify(crypto, (unsigned char *)&digest, 32,
 		pubkey, 
 		sig_der, cb_sig_der);
+		
+	int8_t ok = (0 == rc);
+	stack->push(stack, satoshi_script_data_new(satoshi_script_data_type_bool, 
+		&ok, 1));
 
 	if(rc)
 	{
@@ -657,6 +682,7 @@ static inline int parse_op_checksig(satoshi_script_stack_t * stack, satoshi_scri
 	}else
 	{
 		debug_printf("verify ok");
+		
 	}
 	
 	if(pubkey) crypto_pubkey_free(pubkey);
@@ -670,65 +696,152 @@ label_error:
 	return -1;
 }
 
-static int verify_redeem_scripts(
-	satoshi_script_stack_t * stack,
-	const unsigned char * redeem_scripts, ssize_t cb_redeem_scripts, 
-	const satoshi_tx_t * tx, int txin_index)
+static inline int parse_op_checkmultisig(satoshi_script_stack_t * stack, satoshi_script_t * scripts)
 {
-	assert(stack && tx && txin_index >= 0 && txin_index < tx->txin_count);
-	assert(redeem_scripts && cb_redeem_scripts > 0);
-	const unsigned char * p = redeem_scripts;
-	const unsigned char * p_end = p + cb_redeem_scripts;
+	int rc = -1;
+	int num_pubkeys = 0, num_sigs = 0;
 	
-	while(p < p_end)
-	{
-		unsigned char op_code = *p++;
-		if(op_code >= satoshi_script_opcode_op_1 && 
-			op_code <= satoshi_script_opcode_op_16)
-		{
-			op_code -= (satoshi_script_opcode_op_1 - 1);
-			stack->push(stack, 
-				satoshi_script_data_new(satoshi_script_data_type_uint8, &op_code, 1)
-			);
-			continue;
-		}
-		
-		if(op_code <= satoshi_script_opcode_op_pushdata4)
-		{
-			ssize_t cb = parse_op_push_data(stack, op_code, p, p_end);
-			if(cb <= 0) {
-				scripts_parser_error_handler("parse redeem scripts failed: %s",
-					"push data failed");
-			}
-			p += cb;
-			continue;
-		}
-		
-		switch(op_code)
-		{
-		case satoshi_script_opcode_op_checkmultisig:
-			// todo
-			break;
-		case satoshi_script_opcode_op_if:
-		case satoshi_script_opcode_op_else:
-		case satoshi_script_opcode_op_endif:
-			// todo
-			break;
-		default:
-			scripts_parser_error_handler(
-				"parse redeem scripts failed: unsupported opcode(0x%.2x)", op_code);
-		}
-		
+	satoshi_tx_t * tx = scripts->tx;
+	ssize_t txin_index = scripts->txin_index;
+	assert(tx && txin_index >= 0 && txin_index < tx->txin_count);
+	
+	satoshi_script_data_t * sdata = NULL;
+	crypto_pubkey_t ** pubkeys = NULL;
+	crypto_signature_t ** sigs = NULL;
+	crypto_context_t * crypto = scripts->crypto;
+	assert(crypto);
+	
+	// pop num_pubkeys
+	sdata = stack->pop(stack);
+	if(NULL == sdata) {
+		scripts_parser_error_handler("pop num_pubkeys failed.");
 	}
 	
-
-label_error:
-	return -1;
-}
+	num_pubkeys = sdata->b;
+	satoshi_script_data_free(sdata);
 	
+	if(num_pubkeys < 1 || num_pubkeys > 16) {
+		scripts_parser_error_handler("invalid operation: stack empty.");
+	}
+	
+	// pop pubkeys
+	pubkeys = calloc(num_pubkeys, sizeof(*pubkeys));
+	assert(pubkeys);
+	
+	for(int i = 0; i < num_pubkeys; ++i)
+	{
+		sdata = stack->pop(stack);
+		if(NULL == sdata || !(sdata->size == 33 || sdata->size ==65) ) {
+			scripts_parser_error_handler("stack empty or invalid pubkey data.");
+		}
+		
+		pubkeys[i] = crypto_pubkey_import(crypto, sdata->data, sdata->size);
+		satoshi_script_data_free(sdata);
+		
+		if(NULL == pubkeys[i]) {
+			scripts_parser_error_handler("import pubkeys[%d] failed.", i);
+		}
+	}
+	
+	// pop num_sigs
+	sdata = stack->pop(stack);
+	if(NULL == sdata) {
+		scripts_parser_error_handler("pop num_sigs failed");
+	}
+	
+	num_sigs = sdata->b;
+	satoshi_script_data_free(sdata);
+	
+	if(num_sigs < 0 || num_sigs > num_pubkeys) {
+		scripts_parser_error_handler("invalid num_siganatures.");
+	}
+	
+	// pop sigs
+	sigs = calloc(num_sigs, sizeof(*sigs));
+	assert(sigs);
+	
+	uint32_t prev_sighash_type = 0;
+	uint256_t digest;
+	int num_verified = 0;
+	int pubkey_index = 0;
+	
+	for(int i = 0; i < num_sigs; ++i)
+	{
+		sdata = stack->pop(stack);
+		if(NULL == sdata || sdata->size < 1 ) {
+			scripts_parser_error_handler("stack empty or invalid sig data.");
+		}
+		
+		unsigned char * sig_der = NULL;
+		ssize_t cb_sig_der = sdata->size - 1;
+		uint32_t sighash_type = sdata->data[cb_sig_der];
+		
+		// verify signature format
+		sigs[i] = crypto_signature_import(crypto, sdata->data, cb_sig_der);
+		satoshi_script_data_free(sdata);
+		if(NULL == sigs[i]) {
+			scripts_parser_error_handler("import sigs[%d] failed.", i);
+		}
+		
+		// get DER format signature
+		cb_sig_der = crypto_signature_export(crypto, sigs[i], &sig_der); 
+		assert(cb_sig_der > 0);
+		
+		// recalulate tx_digest if need
+		if(sighash_type != prev_sighash_type)
+		{
+			rc = satoshi_tx_get_digest(tx, txin_index, sighash_type, 
+				scripts->utxo, &digest);
+			if(rc){
+				scripts_parser_error_handler("get tx_digest failed.");
+			}
+			prev_sighash_type = sighash_type;
+		}
+		
+
+		// verify signature
+		for(; pubkey_index < num_pubkeys; ++pubkey_index)
+		{
+			rc = crypto->verify(crypto, (unsigned char *)&digest, 32,
+				pubkeys[pubkey_index],
+				sig_der, cb_sig_der);
+			if(0 == rc) {
+				++num_verified;
+				break;
+			}
+		}
+		free(sig_der);
+	}
+	
+	int8_t ok = (num_verified == num_sigs);
+	rc= stack->push(stack, 
+		satoshi_script_data_new(satoshi_script_data_type_bool, &ok, 1));
+	
+label_error:
+	if(pubkeys)
+	{
+		for(int i = 0; i < num_pubkeys; ++i)
+		{
+			crypto_pubkey_free(pubkeys[i]);
+		}
+		free(pubkeys);
+	}
+	
+	if(sigs)
+	{
+		for(int i = 0; i < num_sigs; ++i)
+		{
+			crypto_signature_free(sigs[i]);
+		}
+		free(sigs);
+	}
+	
+	return rc;
+}
+
 
 static ssize_t scripts_parse(struct satoshi_script * scripts, 
-	int is_txin_scripts, 	// if is_txin, only allows opcode < OP_PUSHDATA4
+	enum satoshi_tx_script_type type, 	// if is_txin, only allows opcode < OP_PUSHDATA4
 	const unsigned char * payload, size_t length)
 {
 	assert(scripts && payload && (length > 0));
@@ -744,13 +857,18 @@ static ssize_t scripts_parse(struct satoshi_script * scripts,
 	
 	assert(main_stack && alt);
 	
-	int p2sh_flag = 0;
+	
+	
+	int is_p2sh = 0;
 	int segwit_flag = 0;
 	if(p[0] == 0)
 	{
-		if(is_txin_scripts) p2sh_flag = 1;
-		else segwit_flag = 1;
-		
+		if(type == satoshi_tx_script_type_txin) {
+			is_p2sh = 1;
+		}else
+		{
+			segwit_flag = 1;
+		}
 		++p;
 	}
 	
@@ -769,19 +887,28 @@ static ssize_t scripts_parse(struct satoshi_script * scripts,
 			debug_printf("parse op_pushdata (0x%.2x)", op_code);
 			data_size = parse_op_push_data(main_stack, op_code, p, p_end);
 			
-			
-			
 			if(data_size < 0) return -1;
 			p += data_size;
 			
 			continue;
 		}
 		
-		if(is_txin_scripts) { // only allows push-data opcodes
+		if(type == satoshi_tx_script_type_txin) { // only allows push-data opcodes
 			scripts_parser_error_handler("parse txin scripts failed(opcode=0x%.2x): %s",
 				op_code,
 				"not a push data opcode.");
 			return -1;
+		}
+		
+		if(op_code >= satoshi_script_opcode_op_1 && 
+			op_code <= satoshi_script_opcode_op_16)
+		{
+			debug_printf("parse op_1 .. op_16 (0x%.2x)", op_code);
+			op_code -= (satoshi_script_opcode_op_1 - 1);
+			main_stack->push(main_stack, 
+				satoshi_script_data_new(satoshi_script_data_type_uint8, &op_code, 1)
+			);
+			continue;
 		}
 		
 		switch(op_code)
@@ -802,11 +929,21 @@ static ssize_t scripts_parse(struct satoshi_script * scripts,
 			debug_printf("parse op_equalverify (0x%.2x)", op_code);
 			rc = parse_op_equalverify(main_stack);
 			break;
+		case satoshi_script_opcode_op_equal:
+			debug_printf("parse op_equalverify (0x%.2x)", op_code);
+			rc = parse_op_equal(main_stack);
+			break;
 
 		case satoshi_script_opcode_op_checksig:
 			debug_printf("parse op_checksig (0x%.2x)", op_code);
 			rc = parse_op_checksig(main_stack, scripts);
 			break;
+		case satoshi_script_opcode_op_checkmultisig:
+			debug_printf("parse op_checkmultisig (0x%.2x)", op_code);
+			rc = parse_op_checkmultisig(main_stack, scripts);
+			// todo
+			break;
+			
 		default:
 			debug_printf("unsupporting op_code (0x%.2x)", op_code);
 			goto label_error;	// parse failed
@@ -819,36 +956,39 @@ static ssize_t scripts_parse(struct satoshi_script * scripts,
 		scripts_parser_error_handler("parse scripts failed or invalid payload length");
 	}
 	
-	if(is_txin_scripts && p2sh_flag == 1)
+	if(type == satoshi_tx_script_type_txin && is_p2sh)
 	{
-		// pop redeem scripts --> parse --> push(hash256(redeem_scripts))
-		satoshi_script_data_t * sdata = main_stack->pop(main_stack);
-		assert(sdata && sdata->data && sdata->size > 0);
-		
-		unsigned char * redeem_scripts = sdata->data;
-		ssize_t cb_redeem_scripts = sdata->size;
-		
 		satoshi_tx_t * tx = scripts->tx;
 		int txin_index = scripts->txin_index;
+		assert(tx && txin_index >= 0 && txin_index < tx->txin_count);
+		tx->txins[txin_index].is_p2sh = 1;
 		
-		// todo: verify redeem scripts
-		int rc = verify_redeem_scripts(main_stack, 
-			redeem_scripts, cb_redeem_scripts, 
-			tx, txin_index);
-		if(rc) {
-			scripts_parser_error_handler("verify redeem scripts failed.");
+		satoshi_script_data_t * sdata = NULL;
+		int rc = 0;
+		// parse redeem scripts;
+		sdata = main_stack->pop(main_stack);
+		if(NULL == sdata || sdata->type < satoshi_script_data_type_varstr)
+		{
+			fprintf(stderr, "invalid redeem scripts\n");
+			satoshi_script_data_free(sdata);
+			return -1;
 		}
 		
+		debug_printf("parse redeem_scripts ...");
+		dump_line("redeem scripts: ", sdata->data, sdata->size);
 		
-		// set to cur_txin->redeem_scripts 
-		tx->txins[txin_index].redeem_scripts = varstr_new(redeem_scripts, cb_redeem_scripts);
+		rc = scripts->parse(scripts, 
+			satoshi_tx_script_type_p2sh_redeem_scripts, 
+			sdata->data, sdata->size);
 		
-		// push redeem_scripts_hash
-		unsigned char hash[32] = { 0 };
-		hash160(redeem_scripts, cb_redeem_scripts, hash);
-		main_stack->push(main_stack, 
-			satoshi_script_data_new(satoshi_script_data_type_hash160, hash, 32));
-		satoshi_script_data_free(sdata);
+		if(0 == rc) // if ok, push back redeem_scripts
+		{
+			main_stack->push(main_stack, sdata);
+		}else
+		{
+			satoshi_script_data_free(sdata);
+		}
+		if(rc) scripts_parser_error_handler("parse redeem scripts failed");
 	}
 	
 	return (p_end - payload);
@@ -857,6 +997,24 @@ label_error:
 	return -1;
 }
 
+
+static int scripts_verify(satoshi_script_t * scripts)
+{
+	debug_printf("txin_index: %d", (int)scripts->txin_index);
+	
+	satoshi_script_stack_t * stack = scripts->main_stack;
+	if(NULL == stack || stack->count <= 0) return -1;
+	
+	satoshi_script_data_t * sdata = stack->pop(stack);
+	if(NULL == sdata) return -1;
+	
+	int8_t ok = (sdata->type == satoshi_script_data_type_bool)?sdata->b:0;
+	satoshi_script_data_free(sdata);
+	
+	if(!ok) return -1;
+
+	return 0;
+}
 
 satoshi_script_t * satoshi_script_init(satoshi_script_t * scripts, 
 	crypto_context_t * crypto, 
@@ -876,8 +1034,8 @@ satoshi_script_t * satoshi_script_init(satoshi_script_t * scripts,
 		}
 	}
 	scripts->crypto = crypto;
-
 	scripts->parse = scripts_parse;
+	scripts->verify = scripts_verify;
 	
 	satoshi_script_stack_t * main_stack = satoshi_script_stack_init(scripts->main_stack, 0, scripts);
 	satoshi_script_stack_t * alt = satoshi_script_stack_init(scripts->alt_stack, 0, scripts);
@@ -933,15 +1091,15 @@ static const char * s_hex_txns[3] = {
 "01000000"
 "01"
 	"da75479f893cccfaa8e4558b28ec7cb4309954389f251f2212eabad7d7fda342"
-	"00000000"
+	"00000000"		// txns[0].txouts[0]
 	"6a"
-	"47"
-	"3044"
-	"022048d1468895910edafe53d4ec4209192cc3a8f0f21e7b9811f83b5e419bfb57e0"
-	"02203fef249b56682dbbb1528d4338969abb14583858488a3a766f609185efe68bca"
-	"01"
-	"21"
-	"031a455dab5e1f614e574a2f4f12f22990717e93899695fb0d81e4ac2dcfd25d00"
+		"47"
+			"3044"
+				"022048d1468895910edafe53d4ec4209192cc3a8f0f21e7b9811f83b5e419bfb57e0"
+				"02203fef249b56682dbbb1528d4338969abb14583858488a3a766f609185efe68bca"
+			"01"
+		"21"
+			"031a455dab5e1f614e574a2f4f12f22990717e93899695fb0d81e4ac2dcfd25d00"
 	"ffffffff"
 "01"
 	"301b0f0000000000"
@@ -954,34 +1112,86 @@ static const char * s_hex_txns[3] = {
 "01000000"
 "01"
 	"c8cc2b56525e734ff63a13bc6ad06a9e5664df8c67632253a8e36017aee3ee40" // big-endian
-	"00000000"
+	"00000000"		// txns[1].txouts[0]
 	"90"
-	"00"
-	"48"
-	"3045"
-	"022100ad0851c69dd756b45190b5a8e97cb4ac3c2b0fa2f2aae23aed6ca97ab33bf883"
-	"02200b248593abc1259512793e7dea61036c601775ebb23640a0120b0dba2c34b790"
-	"01"
-	"45"
-	"51"
-	"41"
-	"042f90074d7a5bf30c72cf3a8dfd1381bdbd30407010e878f3a11269d5f74a58788505cdca22ea6eab7cfb40dc0e07aba200424ab0d79122a653ad0c7ec9896bdf"
-	"51"
-	"ae"
+		"00"		// p2sh flag
+		"48"
+			"3045"
+				"022100ad0851c69dd756b45190b5a8e97cb4ac3c2b0fa2f2aae23aed6ca97ab33bf883"	// 	r
+				"02200b248593abc1259512793e7dea61036c601775ebb23640a0120b0dba2c34b790"		//	s
+			"01"	// hash_type = satoshi_tx_sighash_all
+		"45"
+			"51"	// op_1: num signatures = 1
+			"41" "042f90074d7a5bf30c72cf3a8dfd1381bdbd30407010e878f3a11269d5f74a58788505cdca22ea6eab7cfb40dc0e07aba200424ab0d79122a653ad0c7ec9896bdf"
+			"51"	// op_1: num_pubkeys = 1
+			"ae"	// satoshi_script_opcode_op_checkmultisig
 	"feffffff"
 "01"
-	"20f40e0000000000"
-	"1976a9141d30342095961d951d306845ef98ac08474b36a0"
-	"88ac"
+	"20f40e0000000000" "1976a9141d30342095961d951d306845ef98ac08474b36a088ac"
 "a7270400"
 };
 
 /********************************************************/
 
+int verify_tx(satoshi_script_t * scripts, 
+	satoshi_tx_t * tx, 
+	satoshi_txout_t ** utxoes)
+{
+	int rc = 0;
+	scripts->tx = tx;	// attach tx
+	
+	int64_t inputs_amount = 0;		// sum(utxoes[].value)
+	int64_t outputs_amount = 0;		// sum(tx.txouts[].value)
+	// verify tx
+	for(ssize_t i = 0; i < tx->txin_count; ++i)
+	{
+		satoshi_txin_t * txin = &tx->txins[i];
+		int utxo_index = txin->outpoint.index;
+		satoshi_txout_t * utxo = utxoes[utxo_index]; // todo: blockchain_db->get_utxo(outpoint);
+		
+		// init scripts' public data
+		scripts->txin_index = i;
+		scripts->utxo = utxo;
+		
+		ssize_t cb = -1;
+		unsigned char * payload = varstr_getdata_ptr(txin->scripts);
+		ssize_t cb_payload = varstr_length(txin->scripts);
+		cb = scripts->parse(scripts, 1, payload, cb_payload);
+		assert(cb == cb_payload);
 
-#define dump_line(prefix, data, length) do {							\
-		printf(prefix); dump(data, length); printf("\e[39m\n");	\
-	} while(0)
+		// parse utxo scripts
+		payload = varstr_getdata_ptr(utxo->scripts);
+		cb_payload = varstr_length(utxo->scripts);
+		
+		dump_line("parse txout: ", payload, cb_payload);
+		cb = scripts->parse(scripts, 0, payload, cb_payload);
+		assert(cb == cb_payload);
+		
+		// check scripts->stack
+		rc = scripts->verify(scripts);
+		assert(0 == rc);
+		
+		// sum inputs.amount
+		assert(utxo->value >= 0);
+		inputs_amount += utxo->value;
+	}
+	int64_t fees = 0;
+	for(ssize_t i = 0; i < tx->txout_count; ++i)
+	{
+		outputs_amount += tx->txouts[i].value;
+	}
+#ifndef COIN
+#define COIN (100000000)
+#endif
+	fees =  inputs_amount - outputs_amount;
+	printf("inputs: %ld.%.8ld BTC, outputs: %ld.%.8ld BTC, fees: %ld.%.8ld BTC\n", 
+		(long)(inputs_amount / COIN), (long)(inputs_amount % COIN),
+		(long)(outputs_amount / COIN), (long)(outputs_amount % COIN),
+		(long)(fees / COIN), (long)(fees % COIN));
+	
+	return 0;
+}
+
 
 int main(int argc, char **argv)
 {
@@ -1022,55 +1232,42 @@ int main(int argc, char **argv)
 	dump_line("prev_hash: ", &prev_hash, 32);
 	assert(0 == memcmp(&prev_hash, &txns[1].txins[0].outpoint.prev_hash, 32));	// verify test data
 	
-	
+	int rc = 0;
 	satoshi_script_t * scripts = satoshi_script_init(NULL, NULL, NULL);
 	assert(scripts);
 	
-	// verify txns[1]
-	satoshi_txout_t * utxoes = txns[0].txouts;	
+	// 1. verify p2pkh:  tx = &txns[1]
 	satoshi_tx_t * tx = &txns[1];
+	assert(tx->txin_count > 0);
 	
-	scripts->tx = tx;	// attach tx
+	// init utxoes array[], 
+	satoshi_txout_t ** utxoes = calloc(tx->txin_count, sizeof(*utxoes));
+	utxoes[0] = &txns[0].txouts[0];	// todo: utxoes[i] = blockchain_db->get_utxo(tx->txins[i].outpoint);
 	
-	int64_t inputs_amount = 0;
-	for(ssize_t i = 0; i < tx->txin_count; ++i)
-	{
-		satoshi_txin_t * txin = &tx->txins[i];
-		int utxo_index = txin->outpoint.index;
-		satoshi_txout_t * utxo = &utxoes[utxo_index]; // todo: blockchain_db->get_utxo(outpoint);
-		
-		// init scripts' public data
-		scripts->txin_index = i;
-		scripts->utxo = utxo;
-		
-		assert(utxo->value >= 0);
-		inputs_amount += utxo->value;
-		
-		// parse txin
-		unsigned char * payload = varstr_getdata_ptr(txin->scripts);
-		ssize_t cb_payload = varstr_length(txin->scripts);
-		assert(payload && cb_payload > 0);
-		
-		printf("parse txins[%d] ...\n", (int)i);
-		if(payload[0] == 0)		// check p2sh flags
-		{
-			txin->is_p2sh = 1;
-			++payload;
-			--cb_payload;
-		}
-		ssize_t cb = -1;
-		cb = scripts->parse(scripts, 1, payload, cb_payload);
-		assert(cb == cb_payload);
-
-		// parse utxo scripts
-		payload = varstr_getdata_ptr(utxo->scripts);
-		cb_payload = varstr_length(utxo->scripts);
-		
-		dump_line("parse txout: ", payload, cb_payload);
-		cb = scripts->parse(scripts, 0, payload, cb_payload);
-		assert(cb == cb_payload);
-	}
+	printf("==== verify p2sh ...\n");
+	rc = verify_tx(scripts, tx, utxoes);
+	assert(0 == rc);
+	free(utxoes);	// todo:  for each utxo in utxoes --> free(utxo);  free(utxoes);
+	satoshi_script_cleanup(scripts);
 	
+	// 2. verify p2sh:  tx = &txns[2]
+	
+	satoshi_script_init(scripts, NULL, NULL);
+	tx = &txns[2];
+	assert(tx->txin_count > 0);
+	
+	// init utxoes array[], 
+	utxoes = calloc(tx->txin_count, sizeof(*utxoes));
+	utxoes[0] = &txns[1].txouts[0];	// todo: utxoes[i] = blockchain_db->get_utxo(tx->txins[i].outpoint);
+	
+	printf("==== verify p2sh ...\n");
+	rc = verify_tx(scripts, tx, utxoes);
+	assert(0 == rc);
+	
+	
+	// cleanup
+	satoshi_script_cleanup(scripts);
+	free(scripts);
 	return 0;
 }
 #endif
