@@ -83,6 +83,7 @@ A new transaction digest algorithm is defined, but only applicable to sigops in 
 
 static ssize_t segwit_v0_generate_preimage(const satoshi_tx_t * tx, 
 	int cur_index, 	// current txin index
+	uint32_t hash_type,
 	const satoshi_txout_t * utxo, // prevout
 	unsigned char ** p_image)
 {
@@ -192,14 +193,17 @@ static ssize_t segwit_v0_generate_preimage(const satoshi_tx_t * tx,
     
     // 10. sighash type of the signature (4-byte little endian)
     
-    uint32_t hash_type = txins[cur_index].hash_type;
-	if(0 == hash_type) hash_type = 1;
-    
+    assert( (hash_type & 0x7f) >= 1 // satoshi_tx_sighash_all
+		&& (hash_type & 0x7f) <= 3	// satoshi_tx_sighash_single 
+	);
+	
+#if defined(_DEBUG) && defined(_TEST_SATOSHI_TX)
+	assert( hash_type == satoshi_tx_sighash_all); // test sighash_all only
+#endif
+
 	*(uint32_t *)p = hash_type;
 	debug_dump("hash_type", p, 4);
 	p += sizeof(uint32_t);
-	
-	
 	
 	assert(p == p_end);
 	return cb_image;
@@ -207,12 +211,13 @@ static ssize_t segwit_v0_generate_preimage(const satoshi_tx_t * tx,
 
 int segwit_v0_tx_get_digest(const satoshi_tx_t * tx, 
 	int cur_index, 		// txin index
+	uint32_t hash_type,
 	const satoshi_txout_t * utxo, // prevout
 	uint256_t * hash
 )
 {
 	unsigned char * preimage = NULL;
-	ssize_t cb_image = segwit_v0_generate_preimage(tx, cur_index, utxo, &preimage);
+	ssize_t cb_image = segwit_v0_generate_preimage(tx, cur_index, hash_type, utxo, &preimage);
 	assert(cb_image > 0 && preimage);
 	
 	debug_printf("preimage length: %ld", (long)cb_image);
@@ -237,13 +242,21 @@ int satoshi_tx_get_digest(
 {
 	if(tx->has_flag && tx->flag[0] == 0 && tx->flag[1] == 1) // segwit_v0
 	{
-		return segwit_v0_tx_get_digest(tx, txin_index, utxo, hash);
+		return segwit_v0_tx_get_digest(tx, txin_index, hash_type, utxo, hash);
 	}
 
 	satoshi_txin_t * txins = (satoshi_txin_t *)tx->txins;
 	assert(txins);
+	
 	varstr_t * scripts_backup = txins[txin_index].scripts;	// save the pointer of cur_txin.scripts 
-	txins[txin_index].scripts = utxo->scripts;
+	
+	// replace current txin's scripts with redeem_scripts (p2sh) or utxo->pkscripts (p2phk)
+	if(txins[txin_index].is_p2sh) { 
+		txins[txin_index].scripts = txins->redeem_scripts; 
+	}else { 
+		txins[txin_index].scripts = utxo->scripts;
+	}
+	assert(txins[txin_index].scripts);
 	
 	for(ssize_t i = 0; i < tx->txin_count; ++i)
 	{
@@ -388,6 +401,7 @@ void satoshi_rawtx_final(satoshi_rawtx_t * rawtx)
 
 int satoshi_rawtx_get_digest(satoshi_rawtx_t * rawtx, 
 	int cur_index, 
+	uint32_t hash_type,
 	const satoshi_txout_t * utxo,
 	uint256_t * hash)
 {
@@ -435,7 +449,6 @@ int satoshi_rawtx_get_digest(satoshi_rawtx_t * rawtx,
 		cb_image += 4;
 		
 		// 10. sighash type of the signature (4-byte little endian)
-		uint32_t hash_type = txins[cur_index].hash_type;
 		if(0 == hash_type) hash_type = 1;
 		
 		sha256_update(sha, (unsigned char *)&hash_type, sizeof(uint32_t));
@@ -469,7 +482,6 @@ int satoshi_rawtx_get_digest(satoshi_rawtx_t * rawtx,
 		
 		free(preimage);
 		
-		uint32_t hash_type = txins[cur_index].hash_type;
 		if(0 == hash_type) hash_type = 1;
 		
 		sha256_update(sha, (unsigned char *)&hash_type, sizeof(uint32_t));
@@ -648,18 +660,24 @@ void satoshi_tx_dump(const satoshi_tx_t * tx)
 		printf("\t" "sig_scripts: (cb=%d)", (int)txin->cb_scripts); 
 			dump(varstr_getdata_ptr(txin->scripts), txin->cb_scripts); printf("\n");
 		
-		if(!tx->has_flag)	// legacy tx
+		if(txin->signatures)
 		{
-			if(txin->signatures && txin->cb_signatures > 0)
+			printf("\t" "-- num_signatures: %Zd\n", txin->num_signatures);
+			for(ssize_t i = 0; i < txin->num_signatures; ++i)
 			{
-				dump_line("\t\tsignatuers: ", txin->signatures, txin->cb_signatures);
-			}
-			printf("\t\thash_type: %u\n", (txin->hash_type > 0)?txin->hash_type:1);
-			if(txin->redeem_scripts && txin->cb_redeem_scripts > 0)
-			{
-				dump_line("redeem scripts: ", txin->redeem_scripts, txin->cb_redeem_scripts);
+				printf("\t\tsig[%d]: ", (int)i); 
+				dump(txin->signatures[i], varstr_size(txin->signatures[i]));
+				printf("\n");
 			}
 		}
+		
+		if(txin->redeem_scripts)
+		{
+			ssize_t cb_scripts = varstr_length(txin->redeem_scripts);
+			printf("\t-- redeem_scripts: (cb=%d): ", (int)cb_scripts);
+			dump(varstr_getdata_ptr(txin->redeem_scripts), cb_scripts); 
+		}
+		
 		
 		printf("\t" "sequence: "); dump(&txin->sequence, 4); printf("\n");
 	}
@@ -867,8 +885,13 @@ int test_p2wpkh(int argc, char **argv)
 	assert(cb > 0 && cb <= 65);
 	
 	dump_line("pubkey[0]: ", pubkey_data, cb);
-	dump_line("signatures[0]:", tx[1].txins[0].signatures, tx[1].txins[0].cb_signatures);
 	
+	varstr_t * signature = tx[1].txins[0].signatures[0];
+	assert(signature);
+	dump_line("txin[0].signature:", 
+		signature, varstr_size(signature));
+	
+	uint32_t hash_type = 1;
 	for(int index = 0; index < tx[1].txin_count; ++index)
 	{
 		satoshi_rawtx_t rawtx[1];
@@ -881,7 +904,7 @@ int test_p2wpkh(int argc, char **argv)
 		satoshi_rawtx_prepare(rawtx, &tx[index]);
 
 		// get digests - method-1: use struct satoshi_rawtx
-		rc = satoshi_rawtx_get_digest(rawtx, index, &utxoes[index], hash); assert(0 == rc);
+		rc = satoshi_rawtx_get_digest(rawtx, index, hash_type, &utxoes[index], hash); assert(0 == rc);
 		printf("digest[%d]: ", index); dump(&hash, 32); printf("\n");
 		
 		// restore tx's settings before crypto->verify
@@ -891,8 +914,8 @@ int test_p2wpkh(int argc, char **argv)
 		ssize_t cb_sig = 0;
 		
 		bitcoin_tx_witness_t * witness = &tx[1].witnesses[index];
-		sig_der = tx[1].txins[index].signatures;
-		cb_sig  = tx[1].txins[index].cb_signatures;
+		sig_der = varstr_getdata_ptr(tx[1].txins[index].signatures[0]);
+		cb_sig  = varstr_length(tx[1].txins[index].signatures[0]);
 		if(witness->num_items == 2)
 		{
 			sig_der = varstr_getdata_ptr(witness->items[0]);
@@ -959,7 +982,7 @@ int test_p2sh(int argc, char ** argv)
 			"21"
 				"024f4102c1f1cf662bf99f2b034eb03edd4e6c96793cb9445ff519aab580649120"
 		"ffffffff"
-		"0fce901eb7b7551ba5f414735ff93b83a2a57403df11059ec88245fba2aaf1a0" "00000000"
+		"0fce901eb7b7551ba5f414735ff93b83a2a57403df11059ec88245fba2aaf1a0" "00000000"  // tx[0].txouts[0]
 		"6a"
 			"47"
 				"3044"
@@ -969,7 +992,7 @@ int test_p2sh(int argc, char ** argv)
 			"21"
 				"030644cb394bf381dbec91680bdf1be1986ad93cfb35603697353199fb285a119e"
 		"ffffffff"
-		"0fce901eb7b7551ba5f414735ff93b83a2a57403df11059ec88245fba2aaf1a0" "01000000"
+		"0fce901eb7b7551ba5f414735ff93b83a2a57403df11059ec88245fba2aaf1a0" "01000000" // tx[0].txouts[1]
 		"93"
 			"00"	// p2sh flag
 			"49"
@@ -1008,214 +1031,66 @@ int test_p2sh(int argc, char ** argv)
 		satoshi_tx_dump(&tx[i]);
 	}
 	
-	int rc = 0;
-	const satoshi_txin_t * p2sh_txin = &tx[1].txins[2];
-	assert(p2sh_txin);
-	assert(p2sh_txin->redeem_scripts && p2sh_txin->cb_redeem_scripts > 0);
+	assert(tx[0].txout_count == 2);
+	assert(tx[1].txin_count == 3);
 	
-	uint256_t prev_hash;
-	hash256(tx_data[0], tx_sizes[0], (unsigned char *)&prev_hash);
-
-	assert(0 == memcmp(&p2sh_txin->outpoint.prev_hash, &prev_hash, 32));
-	dump_line("prev_hash: ", &prev_hash, 32);
+	satoshi_txin_t * txins = tx[1].txins;
 	
-	uint256_t tx_digest;
-	satoshi_rawtx_t rawtx[1];
-	memset(rawtx, 0, sizeof(rawtx));
-	satoshi_rawtx_prepare(rawtx, &tx[1]);
-	
-	satoshi_txout_t utxo[1];
-	memset(utxo, 0, sizeof(utxo));
-		
-	int utxo_index = p2sh_txin->outpoint.index;
-	utxo->value = tx[0].txouts[utxo_index].value;
-	utxo->scripts = varstr_new(p2sh_txin->redeem_scripts, p2sh_txin->cb_redeem_scripts);
-	
-	dump_line("utxo->scripts: ", utxo->scripts, varstr_size(utxo->scripts));
-	
-	rc = satoshi_rawtx_get_digest(rawtx, 2, utxo, &tx_digest);
-	assert(0 == rc);
-	satoshi_rawtx_final(rawtx);
-	
-	satoshi_txout_cleanup(utxo);
-	
-	dump_line("\e[33m==== digest: ", &tx_digest, 32);
-	
-	// verify signatures
-	satoshi_script_stack_t * stack = satoshi_script_stack_init(NULL, 0, NULL);
-	
-	unsigned char * p = varstr_getdata_ptr(p2sh_txin->scripts);
-	unsigned char * p_end = p + varstr_length(p2sh_txin->scripts);
-	assert(p < p_end);
-	
-	assert(p[0] == 0);	// has p2sh flag
-	p++;
-	
-	// push data to stack 
-	while(p < p_end)
-	{
-		rc = stack->push(stack, 
-			satoshi_script_data_new(satoshi_script_data_type_uchars, 	
-				varstr_getdata_ptr((varstr_t *)p),			// re-use the pointer of p2sh_txin->scripts  
-				varstr_length((varstr_t *)p)));
-		assert(0 == rc);
-		
-		p += varstr_size((varstr_t *)p);
-	}
-	assert(p == p_end);
-	
-	// pop redeem_scripts
-	satoshi_script_data_t * sdata = stack->pop(stack);
-
-	unsigned char * redeem_scripts = sdata->data;		// lifetime == (lifetime of p2sh_txin->scripts)
-	ssize_t cb_redeem_scripts = sdata->size;
-	satoshi_script_data_free(sdata);
-
 	crypto_context_t * crypto = crypto_context_init(NULL, crypto_backend_libsecp256, NULL);
-	assert(crypto);
+	satoshi_script_t * scripts = satoshi_script_init(NULL, crypto, NULL);
+	assert(crypto && scripts);
 	
-	// step 1. verify utxo's script code 'OP_EQUAL'
-	unsigned char redeem_scripts_hash[20];
-	hash160(redeem_scripts, cb_redeem_scripts, redeem_scripts_hash);
-	dump_line("redeem-scripts hash: ", redeem_scripts_hash, 20);
-	dump_line("utxo.scripts: ", tx[0].txouts[utxo_index].scripts, varstr_size(tx[0].txouts[utxo_index].scripts));
-	assert(0 == memcmp(&redeem_scripts_hash, varstr_getdata_ptr(tx[0].txouts[utxo_index].scripts) + 2, 20));	
+	scripts->tx = &tx[1];
 	
-	// step 2. parse redeem scripts
-	dump_line("redeem scripts: ", redeem_scripts, cb_redeem_scripts);
+	/**
+	 *  tests:
+	 * 	 1. p2pkh:  tx[0].txouts[0]  -->  tx[1].txins[1]
+	 *   2. p2sh:   tx[0].txouts[1]  -->  tx[1].txins[2]
+	 */
+	// 1. test p2pkh:  utxo = tx[0].txouts[0],  txin = tx[1].txins[1]
+	scripts->utxo = &tx[0].txouts[0];
+	scripts->txin_index = 1;
+	ssize_t cb_scripts = varstr_length(txins[scripts->txin_index].scripts);
+	ssize_t cb = scripts->parse(scripts, 
+		1,	// parse txin
+		varstr_getdata_ptr(txins[scripts->txin_index].scripts), cb_scripts);
+	assert(cb == cb_scripts);
 	
-	p = redeem_scripts;
-	p_end = p + cb_redeem_scripts;
-	
-	while(p < p_end)
-	{
-		unsigned char op_code = *p++;
-		assert(op_code != 0);
-		
-		if(op_code < satoshi_script_opcode_op_pushdata1)
-		{
-			stack->push(stack, 
-				satoshi_script_data_new(satoshi_script_data_type_uchars, p, op_code));
-			p += op_code;
-			continue;
-		}
-		
-		if(op_code >= satoshi_script_opcode_op_1 && op_code <= satoshi_script_opcode_op_16)
-		{
-			unsigned char value = op_code - satoshi_script_opcode_op_1 + 1;
-			stack->push(stack, 
-				satoshi_script_data_new(satoshi_script_data_type_uint8, &value, 1));
-			continue;
-		}
-		
-		if(op_code == satoshi_script_opcode_op_checkmultisig)
-		{
-			int num_pubkeys = 0, num_sigs = 0;
-			
-			// pop number of pubkeys
-			sdata = stack->pop(stack);
-			assert(sdata && sdata->type == satoshi_script_data_type_uint8);
-			
-			num_pubkeys = sdata->b;
-			assert(num_pubkeys > 0 && num_pubkeys <= 16);
-			satoshi_script_data_free(sdata);
-			
-			// pop pubkeys
-			crypto_pubkey_t ** pubkeys = calloc(num_pubkeys, sizeof(*pubkeys));
-			assert(pubkeys);
-			for(int i = 0; i < num_pubkeys; ++i)
-			{
-				sdata = stack->pop(stack);
-				assert(sdata && sdata->type == satoshi_script_data_type_uchars 
-					&& (sdata->size == 33 || sdata->size == 65)		// pubkey data length
-				);
-				
-				pubkeys[i] = crypto_pubkey_import(crypto, sdata->data, sdata->size);
-				assert(pubkeys[i]);
-				
-				// dump pubkeys
-				{
-					unsigned char * data = NULL;
-					ssize_t cb = crypto_pubkey_export(crypto, pubkeys[i], 1, &data);
-					assert(cb > 0 && data);
-					
-					printf("-- pubkeys[%d]: ", i); dump(data, cb); printf("\n");
-					free(data);
-				}
-				satoshi_script_data_free(sdata);
-			}
-			
-			// pop number of signatures
-			sdata = stack->pop(stack);
-			assert(sdata && sdata->type == satoshi_script_data_type_uint8);
-			num_sigs = sdata->b;
-			assert(num_sigs > 0 && num_sigs <= 16);
-			satoshi_script_data_free(sdata);
-			
-			//~ crypto_signature_t ** sigs = calloc(n, sizeof(*sigs));
-			//~ uint32_t * hash_types = calloc(n, sizeof(*hash_types)); 
-			
-			uint32_t hash_type = 0;
-			// pop signatures and verify
-			int verified_count = 0;
-			for(int i = 0; i < num_sigs; ++i)
-			{
-				sdata = stack->pop(stack);
-				assert(sdata && sdata->type == satoshi_script_data_type_uchars && sdata->size > 1);
-				
-				unsigned char * sig_der = sdata->data;
-				ssize_t cb_sig_der = sdata->size;
-				
-				if(hash_type == 0) 
-				{
-					hash_type = sig_der[--cb_sig_der];
-				}
-				assert(sig_der && cb_sig_der > 0 && hash_type == 1);
-				
-				printf("-- sigs[%d]: ", i); dump(sig_der, cb_sig_der); printf("\n");
-				printf("-- hash_type: %u\n", hash_type);
-				
-				for(int j = 0; j < num_pubkeys; ++j)
-				{
-					int rc = crypto->verify(crypto, 
-						(unsigned char *)&tx_digest, 32, 
-						pubkeys[j], 
-						sig_der, cb_sig_der);
-					printf("use pubkey[%d] to verify: err_code=%d\n", j, rc);
-					if(0 == rc)
-					{
-						++verified_count;
-						break;
-					}
-				} 
-				
-				satoshi_script_data_free(sdata);
-				if(verified_count >= num_sigs) break;	// has enough signatures
-			}
-			
-			printf("verified_count: %d\n", verified_count);
-		
-			for(int i = 0; i < num_pubkeys; ++i)
-			{
-				crypto_pubkey_free(pubkeys[i]);
-			}
-			free(pubkeys);
-		
-		}
-		
-		break; // (op_code == satoshi_script_opcode_op_checkmultisig) or (unknown op_code)
-	}
-	
-	assert(p == p_end);
-	
-	satoshi_script_stack_cleanup(stack);
-	free(stack);
+	cb_scripts = varstr_length(scripts->utxo->scripts);
+	cb = scripts->parse(scripts,
+		0, // parse txout
+		varstr_getdata_ptr(scripts->utxo->scripts),
+		cb_scripts);
+	assert(cb == cb_scripts);
 	
 	
+	// 2. test p2sh:
+	scripts->utxo = &tx[0].txouts[1];
+	scripts->txin_index = 2;
+	
+	cb_scripts = varstr_length(txins[scripts->txin_index].scripts);
+	cb = scripts->parse(scripts, 
+		1,	// parse txin
+		varstr_getdata_ptr(txins[scripts->txin_index].scripts), cb_scripts);
+	assert(cb == cb_scripts);
+	
+	cb_scripts = varstr_length(scripts->utxo->scripts);
+	cb = scripts->parse(scripts,
+		0, // parse txout
+		varstr_getdata_ptr(scripts->utxo->scripts),
+		cb_scripts);
+	assert(cb == cb_scripts);
+	
+	
+	
+	// cleanup
 	for(int i = 0; i < 2; ++i) {
 		satoshi_tx_cleanup(&tx[i]);
 		free(tx_data[i]);
 	}
+	
+	satoshi_script_cleanup(scripts);
+	free(scripts);
 	
 	crypto_context_cleanup(crypto);
 	free(crypto);
@@ -1331,6 +1206,7 @@ int verify_p2sh(int argc, char ** argv)
 	memset(rawtx, 0, sizeof(rawtx));
 	satoshi_rawtx_prepare(rawtx, &tx[1]);
 	
+	uint32_t hash_type = 1;
 	satoshi_txout_t utxo[1];
 	memset(utxo, 0, sizeof(utxo));
 	hex2bin(
@@ -1343,7 +1219,7 @@ int verify_p2sh(int argc, char ** argv)
 		(void **)&utxo->scripts);
 	assert(utxo->scripts);
 
-	satoshi_rawtx_get_digest(rawtx, 0, utxo, &digest);
+	satoshi_rawtx_get_digest(rawtx, 0, hash_type, utxo, &digest);
 	dump_line("digest: ", &digest, 32);
 	satoshi_rawtx_final(rawtx);
 	satoshi_txout_cleanup(utxo);

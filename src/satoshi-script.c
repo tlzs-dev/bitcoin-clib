@@ -542,7 +542,8 @@ static inline ssize_t parse_op_push_data(satoshi_script_stack_t * stack, uint8_t
 	}
 			
 	rc = stack->push(stack, 
-		satoshi_script_data_new(satoshi_script_data_type_pointer, p, data_size)
+		satoshi_script_data_new(satoshi_script_data_type_uchars, // no-copy, reuse current buffer directly (txins->scripts)
+			p, data_size)
 	);
 	assert(0 == rc);
 	return (offset + data_size);
@@ -650,7 +651,13 @@ static inline int parse_op_checksig(satoshi_script_stack_t * stack, satoshi_scri
 		pubkey, 
 		sig_der, cb_sig_der);
 
-	
+	if(rc)
+	{
+		scripts_parser_error_handler("verify signature failed.");
+	}else
+	{
+		debug_printf("verify ok");
+	}
 	
 	if(pubkey) crypto_pubkey_free(pubkey);
 	if(sig) crypto_signature_free(sig);
@@ -831,6 +838,10 @@ static ssize_t scripts_parse(struct satoshi_script * scripts,
 		if(rc) {
 			scripts_parser_error_handler("verify redeem scripts failed.");
 		}
+		
+		
+		// set to cur_txin->redeem_scripts 
+		tx->txins[txin_index].redeem_scripts = varstr_new(redeem_scripts, cb_redeem_scripts);
 		
 		// push redeem_scripts_hash
 		unsigned char hash[32] = { 0 };

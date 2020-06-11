@@ -138,19 +138,20 @@ typedef struct satoshi_txin
 	satoshi_outpoint_t outpoint;
 	int is_coinbase;	// coinbase flag
 	int is_p2sh;		// p2sh flag
-	
+
 	varstr_t * scripts;
 	ssize_t cb_scripts;	// hold scripts length
-	
-	// for standard txins
-	ssize_t cb_signatures;
-	const unsigned char * signatures;
-	uint32_t hash_type;
-	
-	ssize_t cb_redeem_scripts;	// pubkey or redeem script
-	const unsigned char * redeem_scripts;
-
 	uint32_t sequence;
+	
+	// The following fields will be set during satoshi_script->parse()
+	ssize_t num_signatures;	
+	varstr_t ** signatures;
+
+	//~ ssize_t cb_redeem_scripts;	// pubkey or redeem script
+	//~ const unsigned char * redeem_scripts;
+	varstr_t * redeem_scripts; 	// { (varint_length) , (pubkey or redeem script) }
+
+	
 }satoshi_txin_t;
 
 ssize_t satoshi_txin_parse(satoshi_txin_t * txin, ssize_t length, const void * payload);

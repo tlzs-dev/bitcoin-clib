@@ -508,8 +508,23 @@ void satoshi_txin_cleanup(satoshi_txin_t * txin)
 	if(txin) {
 		if(txin->scripts)
 		{
-			free(txin->scripts);
+			varstr_free(txin->scripts);
 			txin->scripts = NULL;
+		}
+		
+		if(txin->signatures)
+		{
+			for(ssize_t i = 0; i < txin->num_signatures; ++i)
+			{
+				varstr_free(txin->signatures[i]);
+			}
+			free(txin->signatures);
+		}
+		
+		if(txin->redeem_scripts)
+		{
+			varstr_free(txin->redeem_scripts);
+			txin->redeem_scripts = NULL;
 		}
 	}
 	return;
