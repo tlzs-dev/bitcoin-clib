@@ -452,6 +452,7 @@ typedef struct satoshi_script_private
 	
 	enum satoshi_tx_script_type type;
 	int if_statement_depth;		// 0 == top_level
+#define MAX_IF_STATEMENT_DEPTH	(256)
 }satoshi_script_private_t;
 
 static inline int parse_op_hash(satoshi_script_stack_t * stack, uint8_t op_code, const unsigned char * p, const unsigned char * p_end)
@@ -851,6 +852,14 @@ static ssize_t parse_op_if_notif(satoshi_script_stack_t * stack, satoshi_script_
 	assert(op_code == satoshi_script_opcode_op_if || op_code == satoshi_script_opcode_op_notif);
 	satoshi_script_private_t * priv = scripts->priv;
 	
+	if(depth > MAX_IF_STATEMENT_DEPTH) 
+	{
+		// should not happen,  
+		// unless it is a malicious script or an ill-formated script
+		scripts_parser_error_handler("if-statement depth exceeds the limits.");
+		return -1;
+	}
+	assert(depth <= MAX_IF_STATEMENT_DEPTH);
 	if(depth < 1)
 	{
 		scripts_parser_error_handler("if / endif mismathed.");
@@ -913,7 +922,9 @@ static ssize_t parse_op_if_notif(satoshi_script_stack_t * stack, satoshi_script_
 		if(op <= satoshi_script_opcode_op_pushdata4)	// only need to parse op_pushdata to get data_size
 		{
 			uint32_t data_size = 0;
-			if(op < satoshi_script_opcode_op_pushdata1) data_size = op;
+			if(op < satoshi_script_opcode_op_pushdata1) {
+				data_size = op;
+			}
 			else { // Make sure there are enough bytes available to get data_size
 				if(op == satoshi_script_opcode_op_pushdata1) {
 					if((p + 1) > p_end) return -1;	// ensure buffer size
@@ -928,19 +939,19 @@ static ssize_t parse_op_if_notif(satoshi_script_stack_t * stack, satoshi_script_
 					data_size = *(uint32_t *)p;
 					p += 4;
 				}
-				p += data_size;
 			}
+			p += data_size;
 		}
 	} // end while(p < p_end)
 	
-	if(NULL == p_endif || p >= p_end) return -1;
+	if(NULL == p_endif || p > p_end) return -1;
 	
-	rc = -1;
 	p_end = p_endif - 1; // point to 'op_endif" 
 	if(condition_matched) 
 	{
 		// parse current if-block, parse_op_if_notif() function might be called recursively.
 		// get current if-block's end position
+		p = payload;
 		if(p_else) p_end = (p_else - 1);	// point to 'op_else' 
 
 	}else
@@ -952,10 +963,11 @@ static ssize_t parse_op_if_notif(satoshi_script_stack_t * stack, satoshi_script_
 	if(p)	// if-block or (p_else != NULL)
 	{
 		ssize_t cb_scripts = p_end - p;
-		rc = scripts->parse(scripts, satoshi_tx_script_type_unknown, p, cb_scripts);
+		ssize_t cb = scripts->parse(scripts, satoshi_tx_script_type_unknown, p, cb_scripts);
+		
+		if(cb != cb_scripts) return -1;
 	}
-	if(0 == rc) return (p_endif - payload);
-	
+	return (p_endif - payload);
 label_error:
 	return -1;
 }
@@ -1230,6 +1242,8 @@ satoshi_script_t * satoshi_script_init(satoshi_script_t * scripts,
 	assert(priv);
 	scripts->priv = priv;
 	
+	if(NULL == crypto) crypto = scripts->crypto;	// if scripts->crypto has already been set
+	
 	if(NULL == crypto)
 	{
 		if(!priv->crypto_init_flags)
@@ -1414,8 +1428,63 @@ int verify_tx(satoshi_script_t * scripts,
 }
 
 
+//~ satoshi_script_opcode_op_if = 0x63,
+//~ satoshi_script_opcode_op_notif = 0x64,
+//~ satoshi_script_opcode_op_else = 0x67,
+//~ satoshi_script_opcode_op_endif = 0x68,
+void test_op_if_notif(void)
+{
+	satoshi_script_t * scripts = satoshi_script_init(NULL, NULL, NULL);
+	unsigned char payload[] = {
+		0x63,	// op_if
+		0x08, 	// push data (8 bytes)
+		0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38,	// "12345678"
+		0x67,	// op_else
+		0x05, 	// push data (5 bytes)
+		0x41,0x42,0x43,0x44,0x45, 	// "ABCDE"
+		0x68	// op_endif
+	};
+	ssize_t cb_payload = sizeof(payload);
+	
+	satoshi_script_data_t * sdata_true = satoshi_script_data_new(satoshi_script_data_type_bool, &(int8_t){1}, 1);
+	satoshi_script_data_t * sdata_false = satoshi_script_data_new(satoshi_script_data_type_bool, &(int8_t){0}, 1);
+	
+	satoshi_script_stack_t * stack = scripts->main_stack;
+	int rc = 0;
+	
+	// test if-branch
+	rc = stack->push(stack, sdata_true);
+	assert(0 == rc);
+	
+	ssize_t cb = scripts->parse(scripts, satoshi_tx_script_type_unknown, 
+		payload, cb_payload);
+	assert(cb == cb_payload);
+	
+	assert(stack->count == 1);
+	assert(0 == memcmp(stack->data[0]->data, "12345678", 8));
+	printf("\e[32m ==> test 'IF' [OK]\e[39m\n");
+	satoshi_script_data_free(stack->pop(stack));
+		
+	// test else-branch
+	rc = stack->push(stack, sdata_false);
+	assert(0 == rc);
+	
+	cb = scripts->parse(scripts, satoshi_tx_script_type_unknown, 
+		payload, cb_payload);
+	assert(cb == cb_payload);
+	
+	assert(stack->count == 1);
+	assert(0 == memcmp(stack->data[0]->data, "ABCDE", 5));
+	printf("\e[32m ==> test 'ELSE' [OK]\e[39m\n");
+	satoshi_script_data_free(stack->pop(stack));
+	
+	exit(0);
+}
+
 int main(int argc, char **argv)
 {
+	test_op_if_notif();
+	
 	unsigned char * txns_data[3] = {NULL};
 	ssize_t cb_txns[3] = { 0 };
 	
