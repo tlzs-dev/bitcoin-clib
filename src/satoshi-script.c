@@ -435,17 +435,6 @@ void satoshi_script_stack_cleanup(satoshi_script_stack_t * stack)
 /***********************************************
  * satoshi_script
 ***********************************************/
-//~ typedef struct satoshi_script
-//~ {
-	//~ void * user_data;
-	//~ void * priv;
-	//~ script_stack_t main[1];
-	//~ script_stack_t alt[1];
-	//~ int flags;
-	
-	//~ int (* eval)(struct satoshi_script * scripts);
-	//~ ssize_t (* parse)(struct satoshi_script * scripts, const unsigned char * payload, size_t length);
-//~ }satoshi_script_t;
 
 #define scripts_parser_error_handler(fmt, ...) do {	\
 		fprintf(stderr, "\e[33m" "%s@%d::%s(): " fmt "\e[39m" "\n",	\
@@ -455,6 +444,14 @@ void satoshi_script_stack_cleanup(satoshi_script_stack_t * stack)
 		goto label_error;							\
 	} while(0)
 
+
+typedef struct satoshi_script_private
+{
+	crypto_context_t crypto[1]; 
+	int crypto_init_flags;	
+	
+	int if_statement_depth;		// 0 == top_level
+}satoshi_script_private_t;
 
 static inline int parse_op_hash(satoshi_script_stack_t * stack, uint8_t op_code, const unsigned char * p, const unsigned char * p_end)
 {
@@ -522,7 +519,7 @@ static inline ssize_t parse_op_push_data(satoshi_script_stack_t * stack, uint8_t
 {
 	assert(op_code <= satoshi_script_opcode_op_pushdata4);
 	int rc = 0;
-	ssize_t data_size = op_code;
+	uint32_t data_size = op_code;
 	ssize_t offset = 0;
 
 	switch(op_code)
@@ -548,6 +545,8 @@ static inline ssize_t parse_op_push_data(satoshi_script_stack_t * stack, uint8_t
 	}
 
 	p += offset;
+	data_size = le32toh(data_size);	// to support big-endian system ( every integer in bitcoin system is little-endian )
+	
 	if((p + data_size) > p_end) {
 		scripts_parser_error_handler("invalid payload length.");
 	}
@@ -841,6 +840,35 @@ label_error:
 	return rc;
 }
 
+static ssize_t parse_op_if_notif(satoshi_script_stack_t * stack, satoshi_script_t * scripts, 
+	int depth, // depth of if/notif branch, 0 == top-level 
+	unsigned char op_code, 
+	const unsigned char * p, 
+	const unsigned char *p_end)
+{
+	assert(op_code == satoshi_script_opcode_op_if || op_code == satoshi_script_opcode_op_notif);
+	
+	// pop top item and check value
+	int8_t ok = 1;
+	int rc = scripts->verify(scripts);	// 0 == ok (no error).
+	if(rc) ok = 0;
+	
+	/**
+	 *  Check if the conditions are met
+	 *  (op_code == op_if) and (0 == rc)
+	 *  (op_code == op_notif) and (0 != rc)
+	 */ 
+	//~ int condition = ( ((0 == rc) && (op_code == satoshi_script_opcode_op_if))
+		//~ || (rc && (op_code == satoshi_script_opcode_op_notif) ));
+	int condition_matched = ((op_code - satoshi_script_opcode_op_if) ^ ok );  // xor 
+	
+	if(condition_matched)
+	{
+		// todo
+	}
+	
+	return -1;	// todo
+}
 
 static ssize_t scripts_parse(struct satoshi_script * scripts, 
 	enum satoshi_tx_script_type type, 	// if is_txin, only allows opcode < OP_PUSHDATA4
@@ -875,12 +903,12 @@ static ssize_t scripts_parse(struct satoshi_script * scripts,
 	}
 	
 	(void)((segwit_flag));	// todo: ...
-	
+	ssize_t data_size = 0;
 	while(p < p_end)
 	{
 		int rc = 0;
 		uint8_t op_code = *p++;
-		ssize_t data_size = 0;
+		
 		
 		if(op_code <= satoshi_script_opcode_op_pushdata4)
 		{
@@ -945,12 +973,75 @@ static ssize_t scripts_parse(struct satoshi_script * scripts,
 			rc = parse_op_checkmultisig(main_stack, scripts);
 			// todo
 			break;
+		
+		// Flow control
+		case satoshi_script_opcode_op_nop:	// = 0x61, Does nothing.
+			continue;
 			
+		case satoshi_script_opcode_op_if: 		// = 0x63,
+		case satoshi_script_opcode_op_notif: 	// = 0x64,
+			data_size = parse_op_if_notif(main_stack, scripts, 
+				0, // depth of if/notif branch, 0 == top-level 
+				op_code, p, p_end);
+			if(data_size < 0) return -1;
+			p += data_size;
+			break;
+		case satoshi_script_opcode_op_else:		// = 0x67,
+		case satoshi_script_opcode_op_endif:	// = 0x68,
+			// op_else/op_endif should only be processed within parse_op_if_notif() function, with depth >= 0
+			scripts_parser_error_handler("invalid op_code(0x%.2x), op_if / op_notif was not found.\n", op_code);
+			return -1;
+		
+		case satoshi_script_opcode_op_verify: // = 0x69,
+			rc = scripts->verify(scripts);
+			break;
+		case satoshi_script_opcode_op_return: // = 0x6a,
+		/**
+			 * https://en.bitcoin.it/wiki/Script
+			 * Marks transaction as invalid. 
+			 * Since bitcoin 0.9, a standard way of attaching extra data to transactions is 
+			 * to add a zero-value output with a scriptPubKey consisting of OP_RETURN followed by data. 
+			 * Such outputs are provably unspendable and specially discarded from storage in the UTXO set, 
+			 * reducing their cost to the network. 
+			 * Since 0.12, standard relay rules allow a single output with OP_RETURN, 
+			 * that contains any sequence of push statements (or OP_RESERVED[1]) 
+			 * after the OP_RETURN provided the total scriptPubKey length is at most 83 bytes.
+		 */
+		// todo:
+			continue;
+
+		/**
+		 * ignores:
+		 * 	OP_NOP1, OP_NOP4-OP_NOP10	176, 179-185	0xb0, 0xb3-0xb9	
+		 * 	The word is ignored. 
+		 * 	Does not mark transaction as invalid.
+		 */
+		case satoshi_script_opcode_op_nop1:
+		case satoshi_script_opcode_op_nop4:
+		case satoshi_script_opcode_op_nop5:
+		case satoshi_script_opcode_op_nop6:
+		case satoshi_script_opcode_op_nop7:
+		case satoshi_script_opcode_op_nop8:
+		case satoshi_script_opcode_op_nop9:
+		case satoshi_script_opcode_op_nop10:
+			continue;
+		
+		/**
+		 * Reserved words: 
+		 *  Any opcode not assigned is also reserved. 
+		 *  Using an unassigned opcode makes the transaction invalid.
+		 */
+		case satoshi_script_opcode_op_reserved:
+		case satoshi_script_opcode_op_ver:
+		case satoshi_script_opcode_op_verif:	// = 0x65,
+		case satoshi_script_opcode_op_vernotif: // = 0x66,
+		case satoshi_script_opcode_op_reserved1:
+		case satoshi_script_opcode_op_reserved2:
 		default:
 			debug_printf("unsupporting op_code (0x%.2x)", op_code);
 			goto label_error;	// parse failed
 		}
-		if(rc < 0) goto label_error;
+		if(rc) goto label_error;
 		
 	}
 	
@@ -1039,15 +1130,23 @@ satoshi_script_t * satoshi_script_init(satoshi_script_t * scripts,
 {
 	if(NULL == scripts) scripts = calloc(1, sizeof(*scripts));
 	assert(scripts);
-	
 	scripts->user_data = user_data;
+	
+	satoshi_script_private_t * priv = calloc(1, sizeof(*priv));
+	assert(priv);
+	scripts->priv = priv;
+	
 	if(NULL == crypto)
 	{
-		if(NULL == scripts->priv)
+		if(!priv->crypto_init_flags)
 		{
-			crypto = crypto_context_init(NULL, crypto_backend_libsecp256, scripts);
+			crypto = crypto_context_init(priv->crypto, crypto_backend_libsecp256, scripts);
 			assert(crypto);
-			scripts->priv = crypto;
+			
+			priv->crypto_init_flags = 1;
+		}else
+		{
+			crypto = priv->crypto;
 		}
 	}
 	scripts->crypto = crypto;
@@ -1071,11 +1170,18 @@ void satoshi_script_cleanup(satoshi_script_t * scripts)
 {
 	if(NULL == scripts) return;
 	
-	if(scripts->priv)
+	satoshi_script_private_t * priv = scripts->priv;
+	if(priv)
 	{
-		crypto_context_cleanup((crypto_context_t * )scripts->priv);
-		free(scripts->priv);
-		
+		if(scripts->crypto == priv->crypto) 
+		{
+			scripts->crypto = NULL;
+		}
+		if(priv->crypto_init_flags) {
+			crypto_context_cleanup(priv->crypto);
+			priv->crypto_init_flags = 0;
+		}
+		free(priv);
 		scripts->priv = NULL;
 	}
 	
@@ -1164,7 +1270,7 @@ int verify_tx(satoshi_script_t * scripts,
 	{
 		satoshi_txin_t * txin = &tx->txins[i];
 		int utxo_index = txin->outpoint.index;
-		satoshi_txout_t * utxo = utxoes[utxo_index]; // todo: blockchain_db->get_utxo(outpoint);
+		satoshi_txout_t * utxo = utxoes[utxo_index]; 
 		
 		// init scripts' public data
 		scripts->txin_index = i;
@@ -1173,7 +1279,9 @@ int verify_tx(satoshi_script_t * scripts,
 		ssize_t cb = -1;
 		unsigned char * payload = varstr_getdata_ptr(txin->scripts);
 		ssize_t cb_payload = varstr_length(txin->scripts);
-		cb = scripts->parse(scripts, 1, payload, cb_payload);
+		cb = scripts->parse(scripts, 
+			satoshi_tx_script_type_txin, 
+			payload, cb_payload);
 		assert(cb == cb_payload);
 
 		// parse utxo scripts
@@ -1181,7 +1289,9 @@ int verify_tx(satoshi_script_t * scripts,
 		cb_payload = varstr_length(utxo->scripts);
 		
 		dump_line("parse txout: ", payload, cb_payload);
-		cb = scripts->parse(scripts, 0, payload, cb_payload);
+		cb = scripts->parse(scripts, 
+			satoshi_tx_script_type_txout, 
+			payload, cb_payload);
 		assert(cb == cb_payload);
 		
 		// check scripts->stack
@@ -1261,7 +1371,7 @@ int main(int argc, char **argv)
 	satoshi_txout_t ** utxoes = calloc(tx->txin_count, sizeof(*utxoes));
 	utxoes[0] = &txns[0].txouts[0];	// todo: utxoes[i] = blockchain_db->get_utxo(tx->txins[i].outpoint);
 	
-	printf("==== verify p2sh ...\n");
+	printf("==== verify p2pkh ...\n");
 	rc = verify_tx(scripts, tx, utxoes);
 	assert(0 == rc);
 	free(utxoes);	// todo:  for each utxo in utxoes --> free(utxo);  free(utxoes);
