@@ -851,7 +851,7 @@ static ssize_t parse_op_if_notif(satoshi_script_stack_t * stack, satoshi_script_
 	assert(op_code == satoshi_script_opcode_op_if || op_code == satoshi_script_opcode_op_notif);
 	satoshi_script_private_t * priv = scripts->priv;
 	
-	if(depth < 0)
+	if(depth < 1)
 	{
 		scripts_parser_error_handler("if / endif mismathed.");
 	}
@@ -861,8 +861,8 @@ static ssize_t parse_op_if_notif(satoshi_script_stack_t * stack, satoshi_script_
 	
 	// pop top item and check value
 	int8_t ok = 1;
-	int rc = scripts->verify(scripts);	// 0 == ok (no error).
-	if(rc) ok = 0;
+	int rc = scripts->verify(scripts);	// (0 == rc)  <==>  (no error).
+	if(rc) ok = 0;		// if verify failed, set 'ok' to  0(false)
 	
 	/**
 	 *  Check if the conditions are met
@@ -871,6 +871,20 @@ static ssize_t parse_op_if_notif(satoshi_script_stack_t * stack, satoshi_script_
 	 */ 
 	//~ int condition = ( ((0 == rc) && (op_code == satoshi_script_opcode_op_if))
 		//~ || (rc && (op_code == satoshi_script_opcode_op_notif) ));
+		
+	/**
+	 * 	XOR:
+	 * 	C = op_code - satoshi_script_opcode_op_if;
+	 *  |------------------------------------|
+	 *  | op_code  |  C   |  ok  |  (result) |
+	 *  |----------|-------------|-----------|
+	 *  | op_if    |  0   |  0   | 0 (FALSE) |
+	 *  | op_if    |  0   |  1   | 1 (TRUE)  |
+	 *  |----------|-------------|-----------|
+	 *  | op_notif |  1   |  0   | 1 (TRUE)  |
+	 *  | op_motif |  1   |  1   | 0 (FALSE) |
+	 *  |------------------------------------|
+	 */
 	int condition_matched = ((op_code - satoshi_script_opcode_op_if) ^ ok );  // xor 
 	
 	const unsigned char * p = payload;
@@ -884,11 +898,13 @@ static ssize_t parse_op_if_notif(satoshi_script_stack_t * stack, satoshi_script_
 		if(op == satoshi_script_opcode_op_else)
 		{
 			assert(NULL == p_else);	// there should be only one 'else' for the current level if-elseif-endif block. NEED confirm
-			if(NULL == p_else) p_else = p;	// the end-position of current if block 
+			if(NULL == p_else) p_else = p;	// point to the next uchar just after 'op_else' 
+			
+			continue;
 		}
 		if(op == satoshi_script_opcode_op_endif)
 		{
-			p_endif = p;
+			p_endif = p;		// point to the next uchar just after 'op_endif'
 			break;
 		}
 		
@@ -920,26 +936,25 @@ static ssize_t parse_op_if_notif(satoshi_script_stack_t * stack, satoshi_script_
 	if(NULL == p_endif || p >= p_end) return -1;
 	
 	rc = -1;
-	if(condition_matched)
+	p_end = p_endif - 1; // point to 'op_endif" 
+	if(condition_matched) 
 	{
 		// parse current if-block, parse_op_if_notif() function might be called recursively.
-		p_end = p_else?p_else:p_endif;	// get current if-block's end position
-		
-		ssize_t cb_scripts = p_end - p;
-		rc = scripts->parse(scripts, priv->type, p, cb_scripts);
-		
-		
+		// get current if-block's end position
+		if(p_else) p_end = (p_else - 1);	// point to 'op_else' 
+
 	}else
 	{
-		if(p_else) // the first 'else', and there should be at most one 'else' 
-		{
-			ssize_t cb_scripts = p_end - p;
-			
-			// parse current else-block, parse_op_if_notif() function might be called recursively.
-			rc = scripts->parse(scripts, priv->type, p_else, cb_scripts);
-		}
+		// parse current else-block, parse_op_if_notif() function might be called recursively.
+		p = p_else;
 	}
-	if(0 == rc) return ((p_endif + 1) - p);	// skip opcode op_endif
+	
+	if(p)	// if-block or (p_else != NULL)
+	{
+		ssize_t cb_scripts = p_end - p;
+		rc = scripts->parse(scripts, satoshi_tx_script_type_unknown, p, cb_scripts);
+	}
+	if(0 == rc) return (p_endif - payload);
 	
 label_error:
 	return -1;
