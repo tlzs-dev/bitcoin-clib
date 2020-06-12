@@ -450,6 +450,7 @@ typedef struct satoshi_script_private
 	crypto_context_t crypto[1]; 
 	int crypto_init_flags;	
 	
+	enum satoshi_tx_script_type type;
 	int if_statement_depth;		// 0 == top_level
 }satoshi_script_private_t;
 
@@ -843,10 +844,20 @@ label_error:
 static ssize_t parse_op_if_notif(satoshi_script_stack_t * stack, satoshi_script_t * scripts, 
 	int depth, // depth of if/notif branch, 0 == top-level 
 	unsigned char op_code, 
-	const unsigned char * p, 
+	const unsigned char * payload, 
 	const unsigned char *p_end)
 {
+	assert(scripts && scripts->priv);
 	assert(op_code == satoshi_script_opcode_op_if || op_code == satoshi_script_opcode_op_notif);
+	satoshi_script_private_t * priv = scripts->priv;
+	
+	if(depth < 0)
+	{
+		scripts_parser_error_handler("if / endif mismathed.");
+	}
+	--priv->if_statement_depth;	// decrease depths count
+	assert(priv->if_statement_depth >= 0);	
+	
 	
 	// pop top item and check value
 	int8_t ok = 1;
@@ -862,20 +873,88 @@ static ssize_t parse_op_if_notif(satoshi_script_stack_t * stack, satoshi_script_
 		//~ || (rc && (op_code == satoshi_script_opcode_op_notif) ));
 	int condition_matched = ((op_code - satoshi_script_opcode_op_if) ^ ok );  // xor 
 	
+	const unsigned char * p = payload;
+	const unsigned char * p_else = NULL;
+	const unsigned char * p_endif = NULL;
+	
+	// scan script_code and find op_else and op_endif
+	while(p < p_end)
+	{
+		unsigned char op = *p++;
+		if(op == satoshi_script_opcode_op_else)
+		{
+			assert(NULL == p_else);	// there should be only one 'else' for the current level if-elseif-endif block. NEED confirm
+			if(NULL == p_else) p_else = p;	// the end-position of current if block 
+		}
+		if(op == satoshi_script_opcode_op_endif)
+		{
+			p_endif = p;
+			break;
+		}
+		
+		if(0 == op) return -1;	// invalid op_code
+		
+		if(op <= satoshi_script_opcode_op_pushdata4)	// only need to parse op_pushdata to get data_size
+		{
+			uint32_t data_size = 0;
+			if(op < satoshi_script_opcode_op_pushdata1) data_size = op;
+			else { // Make sure there are enough bytes available to get data_size
+				if(op == satoshi_script_opcode_op_pushdata1) {
+					if((p + 1) > p_end) return -1;	// ensure buffer size
+					data_size = *p++;
+				}else if(op == satoshi_script_opcode_op_pushdata2) {
+					if((p + 2) > p_end) return -1;	// ensure buffer size
+					data_size = *(uint16_t *)p;
+					p += 2;
+				}else if(satoshi_script_opcode_op_pushdata4)
+				{
+					if((p + 4) > p_end) return -1;	// ensure buffer size
+					data_size = *(uint32_t *)p;
+					p += 4;
+				}
+				p += data_size;
+			}
+		}
+	} // end while(p < p_end)
+	
+	if(NULL == p_endif || p >= p_end) return -1;
+	
+	rc = -1;
 	if(condition_matched)
 	{
-		// todo
+		// parse current if-block, parse_op_if_notif() function might be called recursively.
+		p_end = p_else?p_else:p_endif;	// get current if-block's end position
+		
+		ssize_t cb_scripts = p_end - p;
+		rc = scripts->parse(scripts, priv->type, p, cb_scripts);
+		
+		
+	}else
+	{
+		if(p_else) // the first 'else', and there should be at most one 'else' 
+		{
+			++p_else;	// move to the else-block's payload
+			ssize_t cb_scripts = p_end - p;
+			
+			// parse current else-block, parse_op_if_notif() function might be called recursively.
+			rc = scripts->parse(scripts, priv->type, p_else, cb_scripts);
+		}
 	}
+	if(0 == rc) return ((p_endif + 1) - p);	// skip opcode op_endif
 	
-	return -1;	// todo
+label_error:
+	return -1;
 }
 
 static ssize_t scripts_parse(struct satoshi_script * scripts, 
 	enum satoshi_tx_script_type type, 	// if is_txin, only allows opcode < OP_PUSHDATA4
 	const unsigned char * payload, size_t length)
 {
-	assert(scripts && payload && (length > 0));
+	assert(scripts && scripts->priv && payload && (length > 0));
 	bitcoin_blockchain_t * chain = scripts->user_data;
+	
+	satoshi_script_private_t * priv = scripts->priv;
+	priv->type = type;
 	
 	UNUSED(chain);
 	
@@ -981,8 +1060,9 @@ static ssize_t scripts_parse(struct satoshi_script * scripts,
 		case satoshi_script_opcode_op_if: 		// = 0x63,
 		case satoshi_script_opcode_op_notif: 	// = 0x64,
 			data_size = parse_op_if_notif(main_stack, scripts, 
-				0, // depth of if/notif branch, 0 == top-level 
-				op_code, p, p_end);
+				++priv->if_statement_depth, // depth of if/notif branch, 0 == top-level 
+				op_code, 
+				p, p_end);
 			if(data_size < 0) return -1;
 			p += data_size;
 			break;
