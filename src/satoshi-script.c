@@ -987,6 +987,18 @@ static ssize_t scripts_parse(struct satoshi_script * scripts,
 		
 		if(cb == sdata->size) // if parsed ok, push back redeem_scripts
 		{
+			/**
+			 * There might be a bug on p2sh design:
+			 * By definition, the last op_code(OP_CHECKMULTISIG) will push a 'true/false' value to the stack, 
+			 * but nowhere else can this value be used.
+			 * It might be more reasonable if OP_CHECKMULTISIGVERIFY is used here.
+			 * 
+			 * so, when we are processing the txin scripts, 
+			 * we need to manually pop this extra value from the stack before push back redeem scripts
+			 */
+			satoshi_script_data_free(main_stack->pop(main_stack));
+			
+			// push back redeem_scripts
 			main_stack->push(main_stack, sdata);
 		}else
 		{
@@ -1268,6 +1280,8 @@ int main(int argc, char **argv)
 	printf("==== verify p2sh ...\n");
 	rc = verify_tx(scripts, tx, utxoes);
 	assert(0 == rc);
+	
+	printf("num_items left on the stack: %ld\n", scripts->main_stack->count);
 	
 	
 	// cleanup
