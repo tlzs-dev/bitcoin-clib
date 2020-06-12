@@ -933,7 +933,6 @@ static ssize_t parse_op_if_notif(satoshi_script_stack_t * stack, satoshi_script_
 	{
 		if(p_else) // the first 'else', and there should be at most one 'else' 
 		{
-			++p_else;	// move to the else-block's payload
 			ssize_t cb_scripts = p_end - p;
 			
 			// parse current else-block, parse_op_if_notif() function might be called recursively.
