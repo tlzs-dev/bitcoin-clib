@@ -60,6 +60,23 @@ static void auto_free_ptr(void * ptr)
 /*******************************************************
  * satoshi_script_data
  *******************************************************/
+static satoshi_script_data_t s_sdata_true[1] = {{
+	.type = satoshi_script_data_type_bool,
+	.b = 1,
+	.size = 1,
+}};
+
+static satoshi_script_data_t s_sdata_false[1] = {{
+	.type = satoshi_script_data_type_bool,
+	.b = 0,
+	.size = 1,
+}};
+
+satoshi_script_data_t * satoshi_script_data_new_boolean(int value)
+{
+	if(!value) return s_sdata_false;
+	return s_sdata_true;
+}
 
 ssize_t scripts_data_get_ptr(const satoshi_script_data_t * sdata, void ** p_data)
 {
@@ -324,7 +341,7 @@ satoshi_script_data_t * satoshi_script_data_new(enum satoshi_script_data_type ty
 
 void satoshi_script_data_free(satoshi_script_data_t * sdata)
 {
-	if(sdata)
+	if(sdata && sdata != s_sdata_true && sdata != s_sdata_false)
 	{
 		satoshi_script_data_cleanup(sdata);
 		free(sdata);
@@ -365,14 +382,14 @@ static int stack_push(struct satoshi_script_stack * stack, satoshi_script_data_t
 	
 	stack->data[stack->count++] = sdata;
 	
-	fprintf(stderr, "\t --> stack_push()::data_type=%d, size=%zd, stack.count=%d\n",
-		sdata->type,
-		sdata->size,
-		(int)stack->count);
+	//~ fprintf(stderr, "\t --> stack_push()::data_type=%d, size=%zd, stack.count=%d\n",
+		//~ sdata->type,
+		//~ sdata->size,
+		//~ (int)stack->count);
 		
-	dump_line("\t\t --> data pushed: ", 
-		(sdata->type >= satoshi_script_data_type_varstr)?sdata->data:sdata->h256, 
-		sdata->size);
+	//~ dump_line("\t\t --> data pushed: ", 
+		//~ (sdata->type >= satoshi_script_data_type_varstr)?sdata->data:sdata->h256, 
+		//~ sdata->size);
 	return 0;
 }
 
@@ -384,13 +401,13 @@ satoshi_script_data_t * stack_pop(struct satoshi_script_stack * stack)
 	stack->data[stack->count] = NULL;
 	
 	
-	printf("\t --> stack_pop()::data_type=%d, size=%zd, stack.count=%d\n",
-		sdata->type,
-		sdata->size,
-		(int)stack->count);
-	dump_line("\t\t --> data popped: ", 
-		(sdata->type >= satoshi_script_data_type_varstr)?sdata->data:sdata->h256, 
-		sdata->size);
+	//~ printf("\t --> stack_pop()::data_type=%d, size=%zd, stack.count=%d\n",
+		//~ sdata->type,
+		//~ sdata->size,
+		//~ (int)stack->count);
+	//~ dump_line("\t\t --> data popped: ", 
+		//~ (sdata->type >= satoshi_script_data_type_varstr)?sdata->data:sdata->h256, 
+		//~ sdata->size);
 		
 	return sdata;
 }
@@ -553,12 +570,9 @@ static inline ssize_t parse_op_push_data(satoshi_script_stack_t * stack, uint8_t
 		scripts_parser_error_handler("invalid payload length.");
 	}
 	
-	dump_line("\t\t--> push_data: ", p, data_size);
+//	dump_line("\t\t--> push_data: ", p, data_size);
 			
-	rc = stack->push(stack, 
-		satoshi_script_data_new(satoshi_script_data_type_pointer, 
-			p, data_size)
-	);
+	rc = stack->push(stack, satoshi_script_data_new_ptr(p, data_size));
 	assert(0 == rc);
 	return (offset + data_size);
 label_error:
@@ -607,10 +621,9 @@ label_error:
 static inline int parse_op_equal(satoshi_script_stack_t * stack)
 {
 	int rc = parse_op_equalverify(stack);
-	int8_t ok = (0 == rc);
 	
-	debug_printf("is_equal() = [%s]", ok?"True":"False");
-	return stack->push(stack, satoshi_script_data_new(satoshi_script_data_type_bool, &ok, 1));
+	debug_printf("is_equal() = [%s]", (0 == rc)?"True":"False");
+	return stack->push(stack, satoshi_script_data_new_boolean((0 == rc)));
 }
 
 static inline int parse_op_checksig(satoshi_script_stack_t * stack, satoshi_script_t * scripts)
@@ -672,10 +685,8 @@ static inline int parse_op_checksig(satoshi_script_stack_t * stack, satoshi_scri
 	rc = crypto->verify(crypto, (unsigned char *)&digest, 32,
 		pubkey, 
 		sig_der, cb_sig_der);
-		
-	int8_t ok = (0 == rc);
-	stack->push(stack, satoshi_script_data_new(satoshi_script_data_type_bool, 
-		&ok, 1));
+	
+	stack->push(stack, satoshi_script_data_new_boolean((0 == rc)));
 
 	if(rc)
 	{
@@ -683,7 +694,6 @@ static inline int parse_op_checksig(satoshi_script_stack_t * stack, satoshi_scri
 	}else
 	{
 		debug_printf("verify ok");
-		
 	}
 	
 	if(pubkey) crypto_pubkey_free(pubkey);
@@ -817,8 +827,7 @@ static inline int parse_op_checkmultisig(satoshi_script_stack_t * stack, satoshi
 	}
 	
 	int8_t ok = (num_verified == num_sigs);
-	rc= stack->push(stack, 
-		satoshi_script_data_new(satoshi_script_data_type_bool, &ok, 1));
+	rc= stack->push(stack, satoshi_script_data_new_boolean(ok));
 	
 label_error:
 	if(pubkeys)
@@ -1446,14 +1455,14 @@ void test_op_if_notif(void)
 	};
 	ssize_t cb_payload = sizeof(payload);
 	
-	satoshi_script_data_t * sdata_true = satoshi_script_data_new(satoshi_script_data_type_bool, &(int8_t){1}, 1);
-	satoshi_script_data_t * sdata_false = satoshi_script_data_new(satoshi_script_data_type_bool, &(int8_t){0}, 1);
+	//~ satoshi_script_data_t * sdata_true = satoshi_script_data_new(satoshi_script_data_type_bool, &(int8_t){1}, 1);
+	//~ satoshi_script_data_t * sdata_false = satoshi_script_data_new(satoshi_script_data_type_bool, &(int8_t){0}, 1);
 	
 	satoshi_script_stack_t * stack = scripts->main_stack;
 	int rc = 0;
 	
 	// test if-branch
-	rc = stack->push(stack, sdata_true);
+	rc = stack->push(stack, s_sdata_true);
 	assert(0 == rc);
 	
 	ssize_t cb = scripts->parse(scripts, satoshi_tx_script_type_unknown, 
@@ -1464,9 +1473,9 @@ void test_op_if_notif(void)
 	assert(0 == memcmp(stack->data[0]->data, "12345678", 8));
 	printf("\e[32m ==> test 'IF' [OK]\e[39m\n");
 	satoshi_script_data_free(stack->pop(stack));
-		
+	
 	// test else-branch
-	rc = stack->push(stack, sdata_false);
+	rc = stack->push(stack, s_sdata_false);
 	assert(0 == rc);
 	
 	cb = scripts->parse(scripts, satoshi_tx_script_type_unknown, 
@@ -1477,6 +1486,36 @@ void test_op_if_notif(void)
 	assert(0 == memcmp(stack->data[0]->data, "ABCDE", 5));
 	printf("\e[32m ==> test 'ELSE' [OK]\e[39m\n");
 	satoshi_script_data_free(stack->pop(stack));
+	
+	
+	
+	// test notif-branch
+	payload[0] = satoshi_script_opcode_op_notif;	// set opcode to op_notif
+	
+	rc = stack->push(stack, s_sdata_false);
+	assert(0 == rc);
+	cb = scripts->parse(scripts, satoshi_tx_script_type_unknown, 
+		payload, cb_payload);
+	assert(cb == cb_payload);
+	
+	assert(stack->count == 1);
+	assert(0 == memcmp(stack->data[0]->data, "12345678", 8));
+	printf("\e[32m ==> test 'NOTIF' [OK]\e[39m\n");
+	satoshi_script_data_free(stack->pop(stack));
+	
+	// test notif else-branch
+	rc = stack->push(stack, s_sdata_true);
+	assert(0 == rc);
+	
+	cb = scripts->parse(scripts, satoshi_tx_script_type_unknown, 
+		payload, cb_payload);
+	assert(cb == cb_payload);
+	
+	assert(stack->count == 1);
+	assert(0 == memcmp(stack->data[0]->data, "ABCDE", 5));
+	printf("\e[32m ==> test 'NOTIF ELSE' [OK]\e[39m\n");
+	satoshi_script_data_free(stack->pop(stack));
+	
 	
 	exit(0);
 }

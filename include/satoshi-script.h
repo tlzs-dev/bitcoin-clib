@@ -191,6 +191,10 @@ void satoshi_script_data_cleanup(satoshi_script_data_t * sdata);
 satoshi_script_data_t * satoshi_script_data_new(enum satoshi_script_data_type type, const void * data, size_t size);
 void satoshi_script_data_free(satoshi_script_data_t * sdata);
 
+satoshi_script_data_t * satoshi_script_data_new_boolean(int value);
+#define satoshi_script_data_new_ptr(ptr, size) satoshi_script_data_new(satoshi_script_data_type_pointer, ptr, size)
+
+
 typedef struct satoshi_script_stack
 {
 	satoshi_script_data_t ** data;		// use array[] to impl.
