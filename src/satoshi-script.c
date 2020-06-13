@@ -861,6 +861,9 @@ static ssize_t parse_op_if_notif(satoshi_script_stack_t * stack, satoshi_script_
 	assert(op_code == satoshi_script_opcode_op_if || op_code == satoshi_script_opcode_op_notif);
 	satoshi_script_private_t * priv = scripts->priv;
 	
+	debug_printf("depth=%d", depth);
+	printf("\tpayload(cb=%Zd): ", (p_end - payload)); dump(payload, (p_end - payload)); printf("\n");
+	
 	if(depth > MAX_IF_STATEMENT_DEPTH) 
 	{
 		// should not happen,  
@@ -873,9 +876,6 @@ static ssize_t parse_op_if_notif(satoshi_script_stack_t * stack, satoshi_script_
 	{
 		scripts_parser_error_handler("if / endif mismathed.");
 	}
-	--priv->if_statement_depth;	// decrease depths count
-	assert(priv->if_statement_depth >= 0);	
-	
 	
 	// pop top item and check value
 	int8_t ok = 1;
@@ -905,25 +905,40 @@ static ssize_t parse_op_if_notif(satoshi_script_stack_t * stack, satoshi_script_
 	 */
 	int condition_matched = ((op_code - satoshi_script_opcode_op_if) ^ ok );  // xor 
 	
+	debug_printf("condition_matched=%d\n", condition_matched);
+	
 	const unsigned char * p = payload;
 	const unsigned char * p_else = NULL;
 	const unsigned char * p_endif = NULL;
 	
 	// scan script_code and find op_else and op_endif
+	
+	--depth;
+	int current_level = depth;
 	while(p < p_end)
 	{
 		unsigned char op = *p++;
+		if(op == satoshi_script_opcode_op_if)
+		{
+			++depth; 
+			continue;
+		}
+		
 		if(op == satoshi_script_opcode_op_else)
 		{
-			assert(NULL == p_else);	// there should be only one 'else' for the current level if-elseif-endif block. NEED confirm
-			if(NULL == p_else) p_else = p;	// point to the next uchar just after 'op_else' 
+			if(depth == current_level) p_else = p;	// find 'else' corresponding to the current level if-statement
 			
 			continue;
 		}
 		if(op == satoshi_script_opcode_op_endif)
 		{
-			p_endif = p;		// point to the next uchar just after 'op_endif'
-			break;
+			if(depth == current_level)
+			{
+				p_endif = p;		// find 'endif' corresponding to the current level if-statement
+				break;
+			}
+			--depth;
+			continue;
 		}
 		
 		if(0 == op) return -1;	// invalid op_code
@@ -972,10 +987,17 @@ static ssize_t parse_op_if_notif(satoshi_script_stack_t * stack, satoshi_script_
 	if(p)	// if-block or (p_else != NULL)
 	{
 		ssize_t cb_scripts = p_end - p;
+		
+		printf("parse scripts(cb=%Zd)", cb_scripts); dump(p, cb_scripts); printf("\n");
+		
 		ssize_t cb = scripts->parse(scripts, satoshi_tx_script_type_unknown, p, cb_scripts);
 		
 		if(cb != cb_scripts) return -1;
 	}
+	
+	--priv->if_statement_depth;	// decrease depths count
+	assert(priv->if_statement_depth >= 0);	
+	
 	return (p_endif - payload);
 label_error:
 	return -1;
@@ -1443,15 +1465,16 @@ int verify_tx(satoshi_script_t * scripts,
 //~ satoshi_script_opcode_op_endif = 0x68,
 void test_op_if_notif(void)
 {
+	debug_printf("test...\n");
 	satoshi_script_t * scripts = satoshi_script_init(NULL, NULL, NULL);
 	unsigned char payload[] = {
-		0x63,	// op_if
-		0x08, 	// push data (8 bytes)
-		0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38,	// "12345678"
-		0x67,	// op_else
-		0x05, 	// push data (5 bytes)
-		0x41,0x42,0x43,0x44,0x45, 	// "ABCDE"
-		0x68	// op_endif
+		0x63,		// op_if
+			0x08, 	// push data (8 bytes)
+			0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38,	// "12345678"
+		0x67,		// op_else
+			0x05, 	// push data (5 bytes)
+			0x41,0x42,0x43,0x44,0x45, 	// "ABCDE"
+		0x68		// op_endif
 	};
 	ssize_t cb_payload = sizeof(payload);
 	
@@ -1517,12 +1540,154 @@ void test_op_if_notif(void)
 	satoshi_script_data_free(stack->pop(stack));
 	
 	
-	exit(0);
+	satoshi_script_cleanup(scripts);
+	free(scripts);
+	return;
+}
+
+
+
+void test_nested_if_statements(void)
+{
+	debug_printf("test...\n");
+	satoshi_script_t * scripts = satoshi_script_init(NULL, NULL, NULL);
+	unsigned char payload[] = {
+		0x63,		// op_if -- depth: 1
+			0x63,	// op_if	-- depth: 2
+				0x63,	// op_if	-- depth: 3
+					0x08, 	// push data (8 bytes)
+					0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38,	// "12345678",  TEST1. (if-->if-->if),  stack->data[] = { true, true, true };
+				0x67,	// op_else -- depth 3
+					0x0f,	// push data (15 bytes)
+					'i','f','-','e','l','s','e','-','-','d','e','p','t','h','3', // TEST2. (if-->if--else), stack->data[] = { false, true, true};
+				0x68,	// endif -- depth: 3
+			0x68,	// endif -- depth: 2
+		0x67,		// op_else
+			0x63,	// op_if	-- depth: 2
+				0x63,	// op_if	-- depth: 3
+					0x05, 	// push data (5 bytes)
+					0x41,0x42,0x43,0x44,0x45, 	// "ABCDE",  TEST3. (else-->if-->if)  , stack->data[] = { true, true, false }
+				0x68,	// endif -- depth: 3
+			0x67,		// op_else of op_else -- depth 2
+				0x11,	// push data (17 bytes)
+					'e','l','s','e', '-','e','l','s','e','-','-','d','e','p','t','h','2',	// TEST4. (else-->else),  stack->data[] = { (true or false), false, false }
+			0x68,	// endif -- depth: 2
+		0x68	// endif -- depth: 1
+	};
+	ssize_t cb_payload = sizeof(payload);
+	
+	satoshi_script_stack_t * stack = scripts->main_stack;
+	satoshi_script_data_t * sdata = NULL;
+	int rc = 0;
+	
+	/**
+	 * 1. test if --> if --> if:  
+	 * 	push { true, true, true } to stack,  
+	 * 	if ok, stack.data[0] = "12345678"
+	 */
+	static const char if_if_if[] = "12345678";
+	stack->push(stack, s_sdata_true);
+	stack->push(stack, s_sdata_true);
+	stack->push(stack, s_sdata_true);
+	assert(stack->count == 3);
+	
+	ssize_t cb = scripts->parse(scripts, satoshi_tx_script_type_unknown, 
+		payload, cb_payload);
+	assert(cb == cb_payload);
+	
+	assert(stack->count == 1);
+	sdata = stack->pop(stack);
+	
+	assert(sdata->size == (sizeof(if_if_if) - 1) && 0 == memcmp(sdata->data, if_if_if, sdata->size));
+	printf("\e[32m ==> test 'IF - IF - IF' [OK]: data=%*s\e[39m\n", (int)sdata->size, sdata->data);
+	
+	satoshi_script_data_free(sdata);
+		
+	
+	/**
+	 * 2. test if --> if --> else
+	 * 	push { false, true, true } to stack,  
+	 * 	if ok, stack.data[0] = "if-else--depth3"
+	 */
+	static const char if_if_else[] = "if-else--depth3";
+	stack->push(stack, s_sdata_false);	// depth 3
+	stack->push(stack, s_sdata_true);	// depth 2
+	stack->push(stack, s_sdata_true);	// depth 1
+	assert(stack->count == 3);
+	
+	cb = scripts->parse(scripts, satoshi_tx_script_type_unknown, 
+		payload, cb_payload);
+	assert(cb == cb_payload);
+	
+	assert(stack->count == 1);
+	sdata = stack->pop(stack);
+	
+	printf("\e[32m ==> test 'IF - IF - ELSE' [OK]: data=%*s\e[39m\n", (int)sdata->size, sdata->data);
+	assert(sdata->size == (sizeof(if_if_else) - 1) && 0 == memcmp(sdata->data, if_if_else, sdata->size));
+	
+	
+	satoshi_script_data_free(sdata);
+	
+	
+	/**
+	 * 3. test else --> if --> if  
+	 * 	push { false, true, true } to stack,  
+	 * 	if ok, stack.data[0] = "if-else--depth3"
+	 */
+	static const char else_if_if[] = "ABCDE";
+	stack->push(stack, s_sdata_true);	// depth 3
+	stack->push(stack, s_sdata_true);	// depth 2
+	stack->push(stack, s_sdata_false);	// depth 1
+	assert(stack->count == 3);
+	
+	cb = scripts->parse(scripts, satoshi_tx_script_type_unknown, 
+		payload, cb_payload);
+	assert(cb == cb_payload);
+	
+	assert(stack->count == 1);
+	sdata = stack->pop(stack);
+	
+	assert(sdata->size == (sizeof(else_if_if) - 1) && 0 == memcmp(sdata->data, else_if_if, sdata->size));
+	printf("\e[32m ==> test 'ELSE - IF - IF' [OK]: data=%*s\e[39m\n", (int)sdata->size, sdata->data);
+	
+	
+	
+	satoshi_script_data_free(sdata);
+	printf("stack.count = %d\n", (int)stack->count);
+	
+	
+	/**
+	 * 4. test else --> else   
+	 * 	push { false, true, true } to stack,  
+	 * 	if ok, stack.data[0] = "if-else--depth3"
+	 */
+	static const char else_else[] = "else-else--depth2";
+//	stack->push(stack, s_sdata_true);	// depth 3, unused		
+	stack->push(stack, s_sdata_false);	// depth 2
+	stack->push(stack, s_sdata_false);	// depth 1
+	assert(stack->count == 2);	// todo: pop unused branches' stack data
+	
+	cb = scripts->parse(scripts, satoshi_tx_script_type_unknown, 
+		payload, cb_payload);
+	assert(cb == cb_payload);
+	
+	assert(stack->count == 1);
+	sdata = stack->pop(stack);
+	
+	printf("\e[32m ==> test 'ELSE - ELSE' [OK]: data=%*s\e[39m\n", (int)sdata->size, sdata->data);
+	assert(sdata->size == (sizeof(else_else) - 1) && 0 == memcmp(sdata->data, else_else, sdata->size));
+	
+	
+	satoshi_script_data_free(sdata);
+	
+	exit(rc);
+	return;
 }
 
 int main(int argc, char **argv)
 {
-	test_op_if_notif();
+	//test_op_if_notif();
+	test_nested_if_statements();
 	
 	unsigned char * txns_data[3] = {NULL};
 	ssize_t cb_txns[3] = { 0 };
