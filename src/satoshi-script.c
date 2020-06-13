@@ -1582,7 +1582,7 @@ void test_nested_if_statements(void)
 	
 	/**
 	 * 1. test if --> if --> if:  
-	 * 	push { true, true, true } to stack,  
+	 * 	push true --> true --> true to stack,  
 	 * 	if ok, stack.data[0] = "12345678"
 	 */
 	static const char if_if_if[] = "12345678";
@@ -1606,7 +1606,7 @@ void test_nested_if_statements(void)
 	
 	/**
 	 * 2. test if --> if --> else
-	 * 	push { false, true, true } to stack,  
+	 * 	push false --> true --> true to stack,  
 	 * 	if ok, stack.data[0] = "if-else--depth3"
 	 */
 	static const char if_if_else[] = "if-else--depth3";
@@ -1631,7 +1631,7 @@ void test_nested_if_statements(void)
 	
 	/**
 	 * 3. test else --> if --> if  
-	 * 	push { false, true, true } to stack,  
+	 * 	push true --> true --> false to stack,  
 	 * 	if ok, stack.data[0] = "if-else--depth3"
 	 */
 	static const char else_if_if[] = "ABCDE";
@@ -1658,7 +1658,7 @@ void test_nested_if_statements(void)
 	
 	/**
 	 * 4. test else --> else   
-	 * 	push { false, true, true } to stack,  
+	 * 	push () --> false --> false  to stack,  
 	 * 	if ok, stack.data[0] = "if-else--depth3"
 	 */
 	static const char else_else[] = "else-else--depth2";
