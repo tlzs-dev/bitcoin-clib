@@ -469,6 +469,9 @@ typedef struct satoshi_script_private
 	
 	enum satoshi_tx_script_type type;
 	int if_statement_depth;		// 0 == top_level
+	int num_popped_items;
+	int stack_top;
+	
 #define MAX_IF_STATEMENT_DEPTH	(256)
 }satoshi_script_private_t;
 
@@ -851,6 +854,138 @@ label_error:
 	return rc;
 }
 
+
+/***************************************
+ * Calculate max if-statements depth
+ * 
+ * 					 root
+ * 				if-node   else-node
+ * 			if-node
+ * 		if-node  else-node
+ * 				if_node
+ * 			if_node
+ * 		  if_node (max_depth)
+ *************************************/
+ 
+typedef struct branches_tree_node
+{
+	struct branches_tree_node * parent;
+	struct branches_tree_node * if_node;		// child
+	struct branches_tree_node * else_node;		// next_sibling
+	int depth;
+}branches_tree_node_t;
+
+typedef struct branches_tree
+{
+	struct branches_tree_node root[1];
+	int max_depth;
+}branches_tree_t;
+
+static int num_nodes = 0;
+static int num_nodes_destroyed = 0;
+void branches_tree_node_destroy(const struct branches_tree_node * root, struct branches_tree_node * node)
+{
+	assert(root && node);
+	if(node->if_node) branches_tree_node_destroy(root, node->if_node);
+	if(node->else_node) branches_tree_node_destroy(root, node->else_node);
+	
+	
+	if(node != root) {
+		debug_printf("==== free node %p\n", node);
+		free(node);
+		++num_nodes_destroyed;
+	}
+}
+
+branches_tree_t * branches_tree_create(branches_tree_t * tree, const unsigned char * payload, const unsigned char * p_end)
+{
+	const unsigned char * p = payload;
+	if(NULL == tree) tree = calloc(1, sizeof(* tree));
+	assert(tree);
+
+	
+	struct branches_tree_node * current = tree->root;
+	current->depth = 1;
+	
+	while(p < p_end)
+	{
+		unsigned char op = *p++;
+		assert(op != 0);
+		
+		if(op == satoshi_script_opcode_op_if || op == satoshi_script_opcode_op_notif)
+		{
+			struct branches_tree_node * if_node = calloc(1, sizeof(*if_node));
+			assert(if_node);
+			
+			// set child data
+			if_node->parent = current;
+			if_node->depth = current->depth + 1;
+			printf("\e[31m" "cur_depth: %d\e[39m\n", if_node->depth);
+			
+			if(if_node->depth > tree->max_depth) tree->max_depth = if_node->depth;
+			
+			current->if_node = if_node;
+			current = if_node;
+			
+			debug_printf("==== add node %p\n", current);
+			++num_nodes;
+			continue;
+		}
+		
+		if(op == satoshi_script_opcode_op_else)	// next_sibling
+		{
+			struct branches_tree_node * else_node = calloc(1, sizeof(*else_node));
+			assert(else_node);
+			// set sibling data
+			else_node->depth = current->depth;	 
+			else_node->parent = current->parent;
+			
+			current->else_node = else_node;
+			current = else_node;
+			
+			++num_nodes;
+			debug_printf("==== add node %p\n", current);
+			continue;
+		}
+		
+		if(op == satoshi_script_opcode_op_endif)
+		{
+			current = current->parent;
+			if(NULL == current) break;	// endif root if-statement
+		}
+
+		if(op <= satoshi_script_opcode_op_pushdata4)	// only need to parse op_pushdata to get data_size
+		{
+			uint32_t data_size = 0;
+			if(op < satoshi_script_opcode_op_pushdata1) {
+				data_size = op;
+			}
+			else { // Make sure there are enough bytes available to get data_size
+				if(op == satoshi_script_opcode_op_pushdata1) {
+					if((p + 1) > p_end) return NULL;	// ensure buffer size
+					data_size = *p++;
+				}else if(op == satoshi_script_opcode_op_pushdata2) {
+					if((p + 2) > p_end) return NULL;	// ensure buffer size
+					data_size = *(uint16_t *)p;
+					p += 2;
+				}else if(satoshi_script_opcode_op_pushdata4)
+				{
+					if((p + 4) > p_end) return NULL;	// ensure buffer size
+					data_size = *(uint32_t *)p;
+					p += 4;
+				}
+			}
+			p += data_size;
+		}
+	}
+	
+	assert(p <= p_end);
+	printf("max_depth: %d\n", tree->max_depth);
+	
+	return tree;
+}
+
+
 static ssize_t parse_op_if_notif(satoshi_script_stack_t * stack, satoshi_script_t * scripts, 
 	int depth, // depth of if/notif branch, 0 == top-level 
 	unsigned char op_code, 
@@ -860,7 +995,7 @@ static ssize_t parse_op_if_notif(satoshi_script_stack_t * stack, satoshi_script_
 	assert(scripts && scripts->priv);
 	assert(op_code == satoshi_script_opcode_op_if || op_code == satoshi_script_opcode_op_notif);
 	satoshi_script_private_t * priv = scripts->priv;
-	
+	branches_tree_t * tree = NULL;
 	debug_printf("depth=%d", depth);
 	printf("\tpayload(cb=%Zd): ", (p_end - payload)); dump(payload, (p_end - payload)); printf("\n");
 	
@@ -875,6 +1010,27 @@ static ssize_t parse_op_if_notif(satoshi_script_stack_t * stack, satoshi_script_
 	if(depth < 1)
 	{
 		scripts_parser_error_handler("if / endif mismathed.");
+	}
+	
+	--depth;
+	int current_level = depth;
+	
+	// save top-level's states to free unused conditions data on the stack
+	if(current_level == 0)
+	{
+		// init states
+		priv->num_popped_items = 0;
+		
+		
+		num_nodes = 0;
+		num_nodes_destroyed = 0;
+		tree = branches_tree_create(NULL, payload, p_end);
+		assert(tree);
+		
+		assert(tree->max_depth <= stack->count);	// to ensure that there are enough conditions data on the stack 
+		
+		priv->stack_top = stack->count - tree->max_depth;	// stack.top (if all conditions data were popped)
+		debug_printf("num_nodes: %d, stack.top=%d", num_nodes, priv->stack_top);	// dump the infos of current states 
 	}
 	
 	// pop top item and check value
@@ -913,12 +1069,14 @@ static ssize_t parse_op_if_notif(satoshi_script_stack_t * stack, satoshi_script_
 	
 	// scan script_code and find op_else and op_endif
 	
-	--depth;
-	int current_level = depth;
+	
+	
+	
+	
 	while(p < p_end)
 	{
 		unsigned char op = *p++;
-		if(op == satoshi_script_opcode_op_if)
+		if(op == satoshi_script_opcode_op_if || op == satoshi_script_opcode_op_notif)
 		{
 			++depth; 
 			continue;
@@ -995,11 +1153,49 @@ static ssize_t parse_op_if_notif(satoshi_script_stack_t * stack, satoshi_script_
 		if(cb != cb_scripts) return -1;
 	}
 	
+	++priv->num_popped_items;	// stats stack's usuage
 	--priv->if_statement_depth;	// decrease depths count
 	assert(priv->if_statement_depth >= 0);	
 	
+	if(current_level == 0){
+		assert(tree);
+		printf("popped items: %d\n", priv->num_popped_items);
+		printf("max_depth: %d\n", tree->max_depth);
+		
+		ssize_t unused_items = tree->max_depth - priv->num_popped_items;
+		if(unused_items > 0)
+		{
+			assert(stack->count >= unused_items);
+			ssize_t i = priv->stack_top;
+			for(; i < (stack->count - unused_items); ++i)
+			{
+				satoshi_script_data_free(stack->data[i]);	// free unused conditions data
+				stack->data[i] = stack->data[i + unused_items];
+			}
+			for(; i < stack->count; ++i)
+			{
+				stack->data[i] = NULL;
+			}
+			stack->count -= unused_items;
+			
+		}
+		
+		branches_tree_node_destroy(tree->root, tree->root);
+		printf("num_nodes_destroyed: %d\n", num_nodes_destroyed);
+		free(tree);
+		tree = NULL;
+	}
+	
 	return (p_endif - payload);
 label_error:
+	
+	if(tree)
+	{
+		branches_tree_node_destroy(tree->root, tree->root);
+		printf("num_nodes_destroyed: %d\n", num_nodes_destroyed);
+		free(tree);
+	}
+
 	return -1;
 }
 
@@ -1659,13 +1855,13 @@ void test_nested_if_statements(void)
 	/**
 	 * 4. test else --> else   
 	 * 	push () --> false --> false  to stack,  
-	 * 	if ok, stack.data[0] = "if-else--depth3"
+	 * 	if ok, stack.data[0] = "else-else--depth2"
 	 */
 	static const char else_else[] = "else-else--depth2";
-//	stack->push(stack, s_sdata_true);	// depth 3, unused		
+	stack->push(stack, s_sdata_true);	// depth 3, unused conditions data
 	stack->push(stack, s_sdata_false);	// depth 2
 	stack->push(stack, s_sdata_false);	// depth 1
-	assert(stack->count == 2);	// todo: pop unused branches' stack data
+	assert(stack->count == 3);	// todo: pop unused branches' stack data
 	
 	cb = scripts->parse(scripts, satoshi_tx_script_type_unknown, 
 		payload, cb_payload);
