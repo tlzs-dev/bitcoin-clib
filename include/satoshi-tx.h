@@ -34,13 +34,20 @@ enum satoshi_tx_sighash_type
 *******************************************/
 typedef struct satoshi_rawtx 
 {
-	satoshi_tx_t * tx;
+	satoshi_tx_t * tx;	// attached tx
+
+	// internal states: pre-hash <-- sha(common_data)
+	sha256_ctx_t sha[1];	
 	
-	sha256_ctx_t sha[1]; // internal states: pre-hash <-- sha(common_data)
+	// legacy tx states:
+	int last_hashed_txin_index;	// pre-hashed index
+	
+	// segwit-v0 states:
 	unsigned char txouts_hash[32]; // segwit_v0: generate preiamge step 8 
 }satoshi_rawtx_t;
-satoshi_rawtx_t * satoshi_rawtx_prepare(satoshi_rawtx_t * rawtx, satoshi_tx_t * tx);
-void satoshi_rawtx_final(satoshi_rawtx_t * rawtx);
+
+satoshi_rawtx_t * satoshi_rawtx_attach(satoshi_rawtx_t * rawtx, satoshi_tx_t * tx);
+void satoshi_rawtx_detach(satoshi_rawtx_t * rawtx);
 
 int satoshi_rawtx_get_digest(satoshi_rawtx_t * rawtx, 
 	int txin_index, 

@@ -675,11 +675,18 @@ static inline int parse_op_checksig(satoshi_script_stack_t * stack, satoshi_scri
 	} 
 	
 	uint256_t digest;
-	memset(&digest, 0, sizeof(digest));
-	rc = satoshi_tx_get_digest(tx, txin_index, hash_type, utxo, &digest);
 	
-	if(rc) {
-		scripts_parser_error_handler("get tx_digest failed.");
+	if(scripts->digest)
+	{
+		memcpy(&digest, scripts->digest, sizeof(digest));
+	}else
+	{
+		memset(&digest, 0, sizeof(digest));
+		rc = satoshi_tx_get_digest(tx, txin_index, hash_type, utxo, &digest);
+		
+		if(rc) {
+			scripts_parser_error_handler("get tx_digest failed.");
+		}
 	}
 	
 	unsigned char * sig_der = NULL;
@@ -1025,8 +1032,6 @@ static ssize_t scripts_parse(struct satoshi_script * scripts,
 	satoshi_script_stack_t * alt = scripts->alt_stack;
 	
 	assert(main_stack && alt);
-	
-	
 	
 	int is_p2sh = 0;
 	int segwit_flag = 0;
@@ -1719,13 +1724,14 @@ void test_nested_if_statements(void)
 	
 	satoshi_script_data_free(sdata);
 	
-	exit(rc);
+	// exit(rc);
+	UNUSED(rc);
 	return;
 }
 
 int main(int argc, char **argv)
 {
-	//test_op_if_notif();
+	test_op_if_notif();
 	test_nested_if_statements();
 	
 	unsigned char * txns_data[3] = {NULL};

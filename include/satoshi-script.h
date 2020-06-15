@@ -228,13 +228,16 @@ typedef struct satoshi_script
 	satoshi_script_stack_t alt_stack[1];
 	
 	crypto_context_t * crypto;
-	// public data, should be initialized before parse
+	
+	//~ // public data, should be initialized before parse
 	satoshi_tx_t * tx;
 	ssize_t txin_index;
 	const satoshi_txout_t * utxo;
 	const unsigned char * redeem_scripts;		// p2pkh: null or utxo->pkscript
 										// p2sh: txin->redeem_scripts
 										// segwit: segwit_program->get_redeem_scripts
+	
+	const uint256_t * digest;	// pre-calulated rawtx_hash, to decouple satoshi_script and satoshi_tx
 	
 	// parse scripts of txins or (and) txouts 
 	ssize_t (* parse)(struct satoshi_script * scripts, 
@@ -251,7 +254,6 @@ satoshi_script_t * satoshi_script_init(satoshi_script_t * scripts,
 	void * user_data);
 void satoshi_script_reset(satoshi_script_t * scripts);
 void satoshi_script_cleanup(satoshi_script_t * scripts);
-
 
 #ifdef __cplusplus
 }
