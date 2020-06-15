@@ -471,67 +471,98 @@ int satoshi_rawtx_get_digest(satoshi_rawtx_t * rawtx,
 		assert(tx->txins && cur_index >= 0 && cur_index < tx->txin_count);
 		assert(rawtx->last_hashed_txin_index < tx->txin_count);
 		
+		uint32_t anyone_canpay = hash_type & satoshi_tx_sighash_anyone_can_pay;
+		hash_type &= ~satoshi_tx_sighash_anyone_can_pay;
+		
+		
 		satoshi_txin_t * txins = tx->txins;
 		satoshi_txin_t * cur_txin = &txins[cur_index];
 		unsigned char vint[9] = { 0 };
 		
-		assert(cur_index > rawtx->last_hashed_txin_index);
-		
-		// pre-hash txins when needed
-		
-		ssize_t i = rawtx->last_hashed_txin_index + 1;
-		assert(i >= 0 && i < tx->txin_count);
-		
-		for(; i < cur_index; ++i)
-		{
-			assert(txins[i].scripts);	// tx should be attached by satoshi_rawtx_attach() function
-			sha256_update(rawtx->sha, (unsigned char *)&txins[i].outpoint, sizeof(txins[i].outpoint));
-			sha256_update(rawtx->sha, (unsigned char *)txins[i].scripts, varstr_size(txins[i].scripts)); 
-			sha256_update(rawtx->sha, (unsigned char *)&txins[i].sequence, sizeof(uint32_t));
-			
-			printf("hash txin[%d]: ", (int)i); dump_line(" -- scripts : ", (unsigned char *)txins[i].scripts, varstr_size(txins[i].scripts));
-			dump_line("\t -- sequence: ", (unsigned char *)&txins[i].sequence, sizeof(uint32_t));
-		}
-		rawtx->last_hashed_txin_index = cur_index - 1;
-		
-		// copy pre-hashed sha context 
-		memcpy(sha, rawtx->sha, sizeof(sha));
-		
-		// prepare current txin and deal with the rest txins 
-		assert(i == cur_index);
-		// replace cur_txin's scripts with redeem_scripts
 		varstr_t * scripts_backup = cur_txin->scripts;
 		cur_txin->scripts = cur_txin->is_p2sh?cur_txin->redeem_scripts:utxo->scripts;
 		assert(cur_txin->scripts);
-		
-		for(; i < tx->txin_count; ++i)
-		{
-			sha256_update(sha, (unsigned char *)&txins[i].outpoint, sizeof(txins[i].outpoint));
-			sha256_update(sha, (unsigned char *)txins[i].scripts, varstr_size(txins[i].scripts));
-			sha256_update(sha, (unsigned char *)&txins[i].sequence, sizeof(uint32_t));
 			
-			printf("hash txin[%d]: ", (int)i); dump_line(" -- scripts : ", (unsigned char *)txins[i].scripts, varstr_size(txins[i].scripts));
-			dump_line("\t -- sequence: ", (unsigned char *)&txins[i].sequence, sizeof(uint32_t));
+		if(cur_index <= rawtx->last_hashed_txin_index) {// need recalc 
+			rawtx->last_hashed_txin_index = cur_index - 1;
+		}
+		assert(cur_index > rawtx->last_hashed_txin_index);
+		
+		// pre-hash txins when needed
+		if(anyone_canpay)	{ // sign only current txin, do not use the states of rawtx's sha_ctx
+			sha256_init(sha);
+			sha256_update(sha, (unsigned char *)&tx->version, sizeof(int32_t));
+			
+			// ??? hash txin_count ???
+			//~ varint_set((varint_t *)vint, tx->txin_count);
+			//~ sha256_update(sha, (unsigned char *)vint, varint_size((varint_t *)vint));
+			
+			sha256_update(sha, (unsigned char *)&cur_txin->outpoint, sizeof(cur_txin->outpoint));
+			sha256_update(sha, (unsigned char *)cur_txin->scripts, varstr_size(cur_txin->scripts));
+			sha256_update(sha, (unsigned char *)&cur_txin->sequence, sizeof(uint32_t));
+		}
+		else{		
+			ssize_t i = rawtx->last_hashed_txin_index + 1;
+			assert(i >= 0 && i < tx->txin_count);
+			for(; i < cur_index; ++i)
+			{
+				assert(txins[i].scripts);	// tx should be attached by satoshi_rawtx_attach() function
+				sha256_update(rawtx->sha, (unsigned char *)&txins[i].outpoint, sizeof(txins[i].outpoint));
+				sha256_update(rawtx->sha, (unsigned char *)txins[i].scripts, varstr_size(txins[i].scripts)); 
+				sha256_update(rawtx->sha, (unsigned char *)&txins[i].sequence, sizeof(uint32_t));
+				
+				printf("hash txin[%d]: ", (int)i); dump_line(" -- scripts : ", (unsigned char *)txins[i].scripts, varstr_size(txins[i].scripts));
+				dump_line("\t -- sequence: ", (unsigned char *)&txins[i].sequence, sizeof(uint32_t));
+			}
+			rawtx->last_hashed_txin_index = cur_index - 1;
+			
+			// copy pre-hashed sha context 
+			memcpy(sha, rawtx->sha, sizeof(sha));
+			
+			// prepare current txin and deal with the rest txins 
+			assert(i == cur_index);
+			// replace cur_txin's scripts with redeem_scripts
+			
+			for(; i < tx->txin_count; ++i)
+			{
+				sha256_update(sha, (unsigned char *)&txins[i].outpoint, sizeof(txins[i].outpoint));
+				sha256_update(sha, (unsigned char *)txins[i].scripts, varstr_size(txins[i].scripts));
+				sha256_update(sha, (unsigned char *)&txins[i].sequence, sizeof(uint32_t));
+				
+				printf("hash txin[%d]: ", (int)i); dump_line(" -- scripts : ", (unsigned char *)txins[i].scripts, varstr_size(txins[i].scripts));
+				dump_line("\t -- sequence: ", (unsigned char *)&txins[i].sequence, sizeof(uint32_t));
+			}
 		}
 		cur_txin->scripts = scripts_backup;		// restore cur_txin's scripts
 		
-
 		// hash txouts
-		varint_set((varint_t *)vint, tx->txout_count);
-		sha256_update(sha, vint, varint_size((varint_t *)vint));
-		
-		satoshi_txout_t * txouts = tx->txouts;
-		assert(txouts);
-		for(i = 0; i < tx->txout_count; ++i)
+		if(hash_type == satoshi_tx_sighash_all)
 		{
-			sha256_update(sha, (unsigned char *)&txouts[i].value, sizeof(txouts[i].value));
-			sha256_update(sha, (unsigned char *)txouts[i].scripts, varstr_size(txouts[i].scripts));
+			varint_set((varint_t *)vint, tx->txout_count);
+			sha256_update(sha, vint, varint_size((varint_t *)vint));
+			
+			satoshi_txout_t * txouts = tx->txouts;
+			assert(txouts);
+			for(ssize_t i = 0; i < tx->txout_count; ++i)
+			{
+				sha256_update(sha, (unsigned char *)&txouts[i].value, sizeof(txouts[i].value));
+				sha256_update(sha, (unsigned char *)txouts[i].scripts, varstr_size(txouts[i].scripts));
+			}
+		}else if(hash_type == satoshi_tx_sighash_single)
+		{
+			if(cur_index >= tx->txout_count) return -1;
+			assert(cur_index < tx->txout_count);
+			
+			satoshi_txout_t * cur_txout = &tx->txouts[cur_index];
+			sha256_update(sha, (unsigned char *)&cur_txout->value, sizeof(cur_txout->value));
+			sha256_update(sha, (unsigned char *)cur_txout->scripts, varstr_size(cur_txout->scripts));
 		}
-		
+			
 		// hash 'lock_time'
 		sha256_update(sha, (unsigned char *)&tx->lock_time, sizeof(tx->lock_time));
 		
 		// hash 'sighash_type'
+		hash_type |= anyone_canpay;
 		sha256_update(sha, (unsigned char *)&hash_type, sizeof(uint32_t));
 	}
 	
