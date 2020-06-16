@@ -479,8 +479,8 @@ int satoshi_rawtx_get_digest(satoshi_rawtx_t * rawtx,
 		assert(cur_index >= rawtx->last_hashed_txin_index);	// pre-hashed index, (from tx.begin() to the end of txins[cur_index].outpoint) 
 		
 		// set pkscript_code
-		raw_txins[cur_index].scripts = cur_txin->is_p2sh?cur_txin->redeem_scripts:utxo->scripts;
-		
+		raw_txins[cur_index].scripts = cur_txin->redeem_scripts;	// unify all mode (p2pk, p2phk, p2sh, p2wphk, p2wsh ...)
+
 		// pre-hash txins when needed
 		if(anyone_canpay)	{ // sign only current txin, do not use the states of rawtx's sha_ctx
 			sha256_init(sha);
@@ -564,98 +564,6 @@ int satoshi_rawtx_get_digest(satoshi_rawtx_t * rawtx,
 	return 0;
 }
 
-#if defined(_TEST_SATOSHI_TX) && defined(_STAND_ALONE)
-
-int test_copy_sha_ctx();
-int test_p2wpkh();
-int test_p2sh();
-int verify_p2sh();
-
-int main(int argc, char ** argv)
-{
-//	test_copy_sha_ctx(argc, argv);
-//	test_p2wpkh(argc, argv);
-	
-//	test_p2sh(argc, argv);
-	
-	verify_p2sh(argc, argv);
-	return 0;
-}
-
-/*************************************************
- * test_rawtx
-*************************************************/
-
-/*
- * Segwit v0 TEST data: from https://github.com/bitcoin/bips/blob/master/bip-0143.mediawiki
-1. Native P2WPKH
- The following is an unsigned transaction:
-    0100000002fff7f7881a8099afa6940d42d1e7f6362bec38171ea3edf433541db4e4ad969f0000000000eeffffffef51e1b804cc89d182d279655c3aa89e815b1b309fe287d9b2b55d57b90ec68a0100000000ffffffff02202cb206000000001976a9148280b37df378db99f66f85c95a783a76ac7a6d5988ac9093510d000000001976a9143bde42dbee7e4dbe6a21b2d50ce2f0167faa815988ac11000000
-    
-    nVersion:  01000000
-    txin:      02 fff7f7881a8099afa6940d42d1e7f6362bec38171ea3edf433541db4e4ad969f 00000000 00 eeffffff
-                  ef51e1b804cc89d182d279655c3aa89e815b1b309fe287d9b2b55d57b90ec68a 01000000 00 ffffffff
-    txout:     02 202cb20600000000 1976a9148280b37df378db99f66f85c95a783a76ac7a6d5988ac
-                  9093510d00000000 1976a9143bde42dbee7e4dbe6a21b2d50ce2f0167faa815988ac
-    nLockTime: 11000000
-  
-  The first input comes from an ordinary P2PK:
-    scriptPubKey : 2103c9f4836b9a4f77fc0d81f7bcb01b7f1b35916864b9476c241ce9fc198bd25432ac value: 6.25
-    private key  : bbc27228ddcb9209d7fd6f36b02f7dfa6252af40bb2f1cbc7a557da8027ff866
-    
-  The second input comes from a P2WPKH witness program:
-    scriptPubKey : 00141d0f172a0ecb48aee1be1f2687d2963ae33f71a1, value: 6
-    private key  : 619c335025c7f4012e556c2a58b2506e30b8511b53ade95ea316fd8c3286feb9
-    public key   : 025476c2e83188368da1ff3e292e7acafcdb3566bb0ad253f62fc70f07aeee6357
-*/ 
-
-int satoshi_tx_add_inputs(satoshi_tx_t * tx,
-	ssize_t count,
-	const satoshi_outpoint_t outpoints[],
-	uint32_t sequences[]
-)
-{
-	assert(tx && count > 0 && outpoints);
-	
-	satoshi_txin_t * txins = realloc(tx->txins, (tx->txin_count + count) * sizeof(*txins));
-	assert(txins);
-	memset(txins + tx->txin_count, 0, count * sizeof(*txins));
-	tx->txins = txins;
-	
-	tx->txin_count += count;
-	txins += count;	// move to new item's start_pos
-	for(ssize_t i = 0; i < count; ++i)
-	{
-		txins[i].outpoint = outpoints[i];
-		txins[i].sequence = sequences?sequences[i]:0xffffffff;
-	}
-	
-	return 0;
-}
-
-int satoshi_tx_add_outputs(satoshi_tx_t * tx, 
-	ssize_t count,
-	const int64_t values[],
-	varstr_t * scripts[]
-)
-{
-	assert(tx && count > 0 && values && scripts);
-	
-	satoshi_txout_t * txouts = realloc(tx->txouts, (tx->txout_count + count) * sizeof(*txouts));
-	assert(txouts);
-	memset(txouts + tx->txout_count, 0, count * sizeof(*txouts));
-	tx->txouts = txouts;
-
-	tx->txout_count += count;
-	txouts += count;	// move to new item's start_pos
-	for(ssize_t i = 0; i < count; ++i)
-	{
-		txouts[i].value = values[i];
-		txouts[i].scripts = varstr_clone(scripts[i]);
-	}
-	return 0;
-}
-
 void satoshi_tx_dump(const satoshi_tx_t * tx)
 {
 	assert(tx && tx->txin_count && tx->txins && tx->txout_count && tx->txouts);
@@ -733,6 +641,272 @@ void satoshi_tx_dump(const satoshi_tx_t * tx)
 	printf("locktime: "); dump(&tx->lock_time, 4); printf("\n");
 }
 
+
+/**
+ * set p2pk or p2phk or p2wphk txin's redeem scripts
+ */
+static inline varstr_t * get_p2wpkh_redeem_scripts(const satoshi_txout_t * utxo)
+{
+	static const unsigned char redeem_scripts_template[] = {
+		[0] = 0x19,
+		[1] = satoshi_script_opcode_op_dup,
+		[2] = satoshi_script_opcode_op_hash160,
+		[3] = 20,	// h160 size
+		// [4] .. [23]: hash160 result
+		[24] = satoshi_script_opcode_op_equalverify,
+		[25] = satoshi_script_opcode_op_checksig
+	};
+	
+	const unsigned char * scripts_data = varstr_getdata_ptr(utxo->scripts);
+	assert(scripts_data);
+	// check_version
+	uint8_t segwit_version = *scripts_data++;
+	assert(segwit_version == 0);	// only support segwit_v0
+	
+	uint8_t data_size = *scripts_data++;
+	assert(data_size == 20);
+	assert(varstr_length(utxo->scripts) == 0x16);
+	
+	
+	unsigned char * redeem_scripts = calloc(1, sizeof(redeem_scripts_template));
+	assert(redeem_scripts);
+	memcpy(redeem_scripts, redeem_scripts_template, sizeof(redeem_scripts_template));
+	
+	memcpy(&redeem_scripts[4], scripts_data, 20); // copy h160 data
+	return (varstr_t *)redeem_scripts;
+}
+
+varstr_t * satoshi_txin_get_redeem_scripts(int is_segwit, const satoshi_txout_t * utxo)
+{
+	if(!is_segwit) return varstr_clone(utxo->scripts);
+	return get_p2wpkh_redeem_scripts(utxo);
+}
+				
+
+/**************************************************************************************
+ * TEST Module
+**************************************************************************************/
+#if defined(_TEST_SATOSHI_TX) && defined(_STAND_ALONE)
+
+int test_copy_sha_ctx();
+int test_p2wpkh();
+int test_p2sh();
+int verify_p2sh();
+
+int test_segwit_v0();
+
+int main(int argc, char ** argv)
+{
+//	test_copy_sha_ctx(argc, argv);
+//	test_p2wpkh(argc, argv);
+	
+//	test_p2sh(argc, argv);
+	
+	//~ verify_p2sh(argc, argv);
+	
+	test_segwit_v0(argc, argv);
+	return 0;
+}
+
+/*************************************************
+ * test_rawtx
+*************************************************/
+/*
+ * Segwit v0 TEST data: from https://github.com/bitcoin/bips/blob/master/bip-0143.mediawiki
+1. Native P2WPKH
+ The following is an unsigned transaction:
+    0100000002fff7f7881a8099afa6940d42d1e7f6362bec38171ea3edf433541db4e4ad969f0000000000eeffffffef51e1b804cc89d182d279655c3aa89e815b1b309fe287d9b2b55d57b90ec68a0100000000ffffffff02202cb206000000001976a9148280b37df378db99f66f85c95a783a76ac7a6d5988ac9093510d000000001976a9143bde42dbee7e4dbe6a21b2d50ce2f0167faa815988ac11000000
+    
+    nVersion:  01000000
+    txin:      02 fff7f7881a8099afa6940d42d1e7f6362bec38171ea3edf433541db4e4ad969f 00000000 00 eeffffff
+                  ef51e1b804cc89d182d279655c3aa89e815b1b309fe287d9b2b55d57b90ec68a 01000000 00 ffffffff
+    txout:     02 202cb20600000000 1976a9148280b37df378db99f66f85c95a783a76ac7a6d5988ac
+                  9093510d00000000 1976a9143bde42dbee7e4dbe6a21b2d50ce2f0167faa815988ac
+    nLockTime: 11000000
+  
+  The first input comes from an ordinary P2PK:
+    scriptPubKey : 2103c9f4836b9a4f77fc0d81f7bcb01b7f1b35916864b9476c241ce9fc198bd25432ac value: 6.25
+    private key  : bbc27228ddcb9209d7fd6f36b02f7dfa6252af40bb2f1cbc7a557da8027ff866
+    
+  The second input comes from a P2WPKH witness program:
+    scriptPubKey : 00141d0f172a0ecb48aee1be1f2687d2963ae33f71a1, value: 6
+    private key  : 619c335025c7f4012e556c2a58b2506e30b8511b53ade95ea316fd8c3286feb9
+    public key   : 025476c2e83188368da1ff3e292e7acafcdb3566bb0ad253f62fc70f07aeee6357
+*/
+
+static inline crypto_privkey_t * crypto_privkey_import_from_string(crypto_context_t * crypto, const char * secdata_hex)
+{
+	assert(secdata_hex);
+	ssize_t cb = strlen(secdata_hex);
+	assert(cb > 0 && cb <= 64);
+	
+	unsigned char data[32] = { 0 };
+	void * p_data = data;
+	ssize_t cb_data = hex2bin(secdata_hex, cb, &p_data);
+	assert(cb_data == (cb / 2));
+	
+	crypto_privkey_t * privkey = crypto_privkey_import(crypto, data, cb_data);
+	memset(data, 0, sizeof(data));
+	return privkey;
+}
+
+int test_segwit_v0(int argc, char ** argv)
+{
+// 1. Native P2WPKH
+	satoshi_txout_t utxoes[2] = {
+		[0] = { .value = 625000000, },
+		[1] = { .value = 600000000, }
+	};
+	hex2bin("23" // vstr.length 
+		"2103c9f4836b9a4f77fc0d81f7bcb01b7f1b35916864b9476c241ce9fc198bd25432ac",
+		-1, (void **)&utxoes[0].scripts);
+	hex2bin("16" // vstr.length 
+		"00141d0f172a0ecb48aee1be1f2687d2963ae33f71a1",
+		-1, (void **)&utxoes[1].scripts);
+	
+	satoshi_tx_t tx[1] = { 0 };
+	tx->version = 1;
+	
+	// set segwit flag
+	tx->has_flag = 1;
+	tx->flag[0] = 0; tx->flag[1] = 1;
+	
+	tx->txin_count = 2;
+	satoshi_txin_t * txins = calloc(tx->txin_count, sizeof(*txins));
+	assert(txins);
+	tx->txins = txins;
+	
+	// set txins[0]
+	hex2bin("fff7f7881a8099afa6940d42d1e7f6362bec38171ea3edf433541db4e4ad969f" "00000000",
+			-1, 
+			(void **)&txins[0].outpoint);
+	txins[0].scripts = (varstr_t *)s_empty_script;
+	txins[0].sequence = 0xffffffee;		// "eeffffff"
+	
+	// set txins[1]
+	hex2bin("ef51e1b804cc89d182d279655c3aa89e815b1b309fe287d9b2b55d57b90ec68a" "01000000",
+			-1, 
+			(void **)&txins[1].outpoint);
+	txins[1].scripts = (varstr_t *)s_empty_script;	// "00"
+	txins[1].sequence = 0xffffffff;		// "ffffffff"
+	
+	tx->txout_count = 2;
+	satoshi_txout_t * txouts = calloc(tx->txout_count, sizeof(*txouts));
+	assert(txouts);
+	tx->txouts = txouts;
+	
+	// set txouts[0]
+	hex2bin("202cb20600000000", -1, (void **)&txouts[0].value);
+	hex2bin("1976a9148280b37df378db99f66f85c95a783a76ac7a6d5988ac", -1, (void **)&txouts[0].scripts);
+	
+	// set txouts[1]
+	hex2bin("9093510d00000000", -1, (void **)&txouts[1].value);
+	hex2bin("1976a9143bde42dbee7e4dbe6a21b2d50ce2f0167faa815988ac", -1, (void **)&txouts[1].scripts);
+	
+	/*
+	 * set redeem_scripts manually 
+	 * ( this field should be set by scripts->parse() automatically )
+	 */
+	if(NULL == txins[0].redeem_scripts) 
+		txins[0].redeem_scripts = varstr_clone(utxoes[0].scripts);	// The first input comes from an ordinary P2PK:
+	
+	if(NULL == txins[1].redeem_scripts)
+		txins[1].redeem_scripts = get_p2wpkh_redeem_scripts(&utxoes[1]); //The second input comes from a P2WPKH witness program:
+	
+	crypto_context_t * crypto = crypto_context_init(NULL, crypto_backend_libsecp256, NULL);
+	crypto_privkey_t * privkeys[2] = { NULL };
+	crypto_pubkey_t * pubkeys[2] = { NULL };
+	
+	// private key of the first input:
+	privkeys[0] = crypto_privkey_import_from_string(crypto, 
+		"bbc27228ddcb9209d7fd6f36b02f7dfa6252af40bb2f1cbc7a557da8027ff866");
+	
+	// private key of the second input:
+	privkeys[1] = crypto_privkey_import_from_string(crypto,
+		"619c335025c7f4012e556c2a58b2506e30b8511b53ade95ea316fd8c3286feb9");
+	assert(privkeys[0] && privkeys[1]);
+	
+	// calc pubkeys
+	pubkeys[0] = (crypto_pubkey_t *)crypto_privkey_get_pubkey(privkeys[0]);
+	pubkeys[1] = (crypto_pubkey_t *)crypto_privkey_get_pubkey(privkeys[1]);
+	
+	// verify keys
+	unsigned char hash[32];
+	unsigned char pubkey_buffer[65] = { 0 };
+	unsigned char * pubkey_data = pubkey_buffer;
+	
+	int compressed_flag = 1;
+	ssize_t cb_pubkey = crypto_pubkey_export(crypto, pubkeys[0], compressed_flag, &pubkey_data);
+	assert(cb_pubkey == 33);
+	// verify pubkey of the first input
+	assert(0 == memcmp(pubkey_data, varstr_getdata_ptr(utxoes[0].scripts) + 2, cb_pubkey));
+	
+	// verify pubkey of the second input
+	char * pubkey_hex = NULL;
+	hash160(pubkey_data, cb_pubkey, hash);
+	assert(0 == memcmp(hash, varstr_getdata_ptr(utxoes[1].scripts) + 2, 20));
+	
+	ssize_t cb = bin2hex(pubkey_data, cb_pubkey, &pubkey_hex);
+	assert(cb == 66);
+	assert(0 == strcasecmp(pubkey_hex, "025476c2e83188368da1ff3e292e7acafcdb3566bb0ad253f62fc70f07aeee6357"));
+	free(pubkey_hex);
+	pubkey_hex = NULL;
+	
+	
+	
+	
+	return 0;
+}
+
+
+
+int satoshi_tx_add_inputs(satoshi_tx_t * tx,
+	ssize_t count,
+	const satoshi_outpoint_t outpoints[],
+	uint32_t sequences[]
+)
+{
+	assert(tx && count > 0 && outpoints);
+	
+	satoshi_txin_t * txins = realloc(tx->txins, (tx->txin_count + count) * sizeof(*txins));
+	assert(txins);
+	memset(txins + tx->txin_count, 0, count * sizeof(*txins));
+	tx->txins = txins;
+	
+	tx->txin_count += count;
+	txins += count;	// move to new item's start_pos
+	for(ssize_t i = 0; i < count; ++i)
+	{
+		txins[i].outpoint = outpoints[i];
+		txins[i].sequence = sequences?sequences[i]:0xffffffff;
+	}
+	
+	return 0;
+}
+
+int satoshi_tx_add_outputs(satoshi_tx_t * tx, 
+	ssize_t count,
+	const int64_t values[],
+	varstr_t * scripts[]
+)
+{
+	assert(tx && count > 0 && values && scripts);
+	
+	satoshi_txout_t * txouts = realloc(tx->txouts, (tx->txout_count + count) * sizeof(*txouts));
+	assert(txouts);
+	memset(txouts + tx->txout_count, 0, count * sizeof(*txouts));
+	tx->txouts = txouts;
+
+	tx->txout_count += count;
+	txouts += count;	// move to new item's start_pos
+	for(ssize_t i = 0; i < count; ++i)
+	{
+		txouts[i].value = values[i];
+		txouts[i].scripts = varstr_clone(scripts[i]);
+	}
+	return 0;
+}
+
 static inline crypto_privkey_t * import_privkey_from_string(crypto_context_t * crypto, const char * secdata_hex)
 {
 	assert(crypto && secdata_hex);
@@ -752,216 +926,6 @@ static inline crypto_privkey_t * import_privkey_from_string(crypto_context_t * c
 	memset(buffer, 0, 32);
 	return privkey;
 }
-
-int test_p2wpkh(int argc, char **argv)
-{
-	static const char * rawtx_hex = "01000000"
-//	"0001"
-	"02"
-		"fff7f7881a8099afa6940d42d1e7f6362bec38171ea3edf433541db4e4ad969f" "00000000"
-		"00"
-		"eeffffff"
-		"ef51e1b804cc89d182d279655c3aa89e815b1b309fe287d9b2b55d57b90ec68a" "01000000"
-		"00"
-		"ffffffff"
-	"02"
-		"202cb20600000000"
-		"1976a9148280b37df378db99f66f85c95a783a76ac7a6d5988ac"
-		"9093510d00000000"
-		"1976a9143bde42dbee7e4dbe6a21b2d50ce2f0167faa815988ac"
-	"11000000";
-	
-	static const char * signed_tx_hex = "01000000"
-		"0001"
-		"02"
-			"fff7f7881a8099afa6940d42d1e7f6362bec38171ea3edf433541db4e4ad969f" "00000000"
-			"49"
-				"48"
-					"3045"
-						"0221008b9d1dc26ba6a9cb62127b02742fa9d754cd3bebf337f7a55d114c8e5cdd30be"
-						"022040529b194ba3f9281a99f2b1c0a19c0489bc22ede944ccf4ecbab4cc618ef3ed"
-					"01"
-			"eeffffff"
-			"ef51e1b804cc89d182d279655c3aa89e815b1b309fe287d9b2b55d57b90ec68a" "01000000"
-			"00"
-			"ffffffff"
-		"02"
-			"202cb20600000000" "1976a9148280b37df378db99f66f85c95a783a76ac7a6d5988ac"
-			"9093510d00000000" "1976a9143bde42dbee7e4dbe6a21b2d50ce2f0167faa815988ac"
-		"00" "02"
-			"47"
-				"3044"
-					"02203609e17b84f6a7d30c80bfa610b5b4542f32a8a0d5447a12fb1366d7f01cc44a"
-					"0220573a954c4518331561406f90300e8f3358f51928d43c212a8caed02de67eebee"
-				"01"
-			"21"
-				"025476c2e83188368da1ff3e292e7acafcdb3566bb0ad253f62fc70f07aeee6357"
-		"11000000";
-	
-	int rc = 0;
-	unsigned char * rawtx_data = NULL;
-	unsigned char * signed_tx_data = NULL;
-	
-	ssize_t cb = 0;
-	ssize_t cb_rawtx = hex2bin(rawtx_hex, -1, (void **)&rawtx_data);
-	ssize_t cb_signed_tx = hex2bin(signed_tx_hex, -1, (void **)&signed_tx_data);
-	
-	assert(cb_rawtx > 0 && rawtx_data);
-	assert(cb_signed_tx > 0 && signed_tx_data);
-	
-	satoshi_tx_t tx[2]; 
-	memset(tx, 0, sizeof(tx));
-	cb = satoshi_tx_parse(&tx[0], cb_rawtx, rawtx_data);
-	assert(cb == cb_rawtx);
-	
-	cb = satoshi_tx_parse(&tx[1], cb_signed_tx, signed_tx_data);
-	assert(cb == cb_signed_tx);
-	
-	satoshi_tx_dump(&tx[0]);
-	satoshi_tx_dump(&tx[1]);
-	
-	satoshi_txout_t utxoes[2];
-	memset(utxoes, 0, sizeof(utxoes));
-	/*
-		The first input comes from an ordinary P2PK:
-		scriptPubKey : 2103c9f4836b9a4f77fc0d81f7bcb01b7f1b35916864b9476c241ce9fc198bd25432ac value: 6.25
-		private key  : bbc27228ddcb9209d7fd6f36b02f7dfa6252af40bb2f1cbc7a557da8027ff866
-	*/
-	
-	// prepare utxo[0]
-	utxoes[0].value = 625000000;	// 6.25 BTC == 625000000 satoshi
-	cb = hex2bin(
-		"23"	// varstr.length
-		"2103c9f4836b9a4f77fc0d81f7bcb01b7f1b35916864b9476c241ce9fc198bd25432"	// vstr(pubkey)
-		"ac", 	// OP_CHECKSIG
-		-1, 
-		(void **)&utxoes[0].scripts);
-	assert(utxoes[0].scripts && cb > 0);
-	/*
-		The second input comes from a P2WPKH witness program:
-		scriptPubKey : 00141d0f172a0ecb48aee1be1f2687d2963ae33f71a1, value: 6
-		private key  : 619c335025c7f4012e556c2a58b2506e30b8511b53ade95ea316fd8c3286feb9
-		public key   : 025476c2e83188368da1ff3e292e7acafcdb3566bb0ad253f62fc70f07aeee6357
-	
-		P2WPKH witness program
-	*/
-	
-	// verify P2WPKH witness program
-	unsigned char p2wpkh_program[] = {
-		[0] = 25, 	// 0x19, vstr.length
-		[1] = satoshi_script_opcode_op_dup,
-		[2] = satoshi_script_opcode_op_hash160,
-		[3] = 20, 	// sizeof( hash160 )
-		// ( [4] .. [23 ]) <-- hash160
-		[24] = satoshi_script_opcode_op_equalverify, 
-		[25] = satoshi_script_opcode_op_checksig
-	};
-	unsigned char * pubkey2_data = NULL;
-	ssize_t cb_pubkey = hex2bin("025476c2e83188368da1ff3e292e7acafcdb3566bb0ad253f62fc70f07aeee6357", -1, 
-		(void **)&pubkey2_data);
-	assert(cb_pubkey == 33);
-	hash160(pubkey2_data, cb_pubkey, &p2wpkh_program[4]);
-	dump_line("p2pkh program: ", p2wpkh_program, sizeof(p2wpkh_program));
-	
-	unsigned char * script_pubkey_data = NULL;
-	ssize_t cb_pkscript = hex2bin("00141d0f172a0ecb48aee1be1f2687d2963ae33f71a1", -1, 
-		(void **)&script_pubkey_data);
-	assert(cb_pkscript == 22);
-	
-	assert(0 == memcmp(&p2wpkh_program[4], // hash160(pubkey)
-					&script_pubkey_data[2], // hash160(pubkey)
-					20));
-
-	free(pubkey2_data);
-	free(script_pubkey_data);
-	
-	// prepare utxo[1]
-	utxoes[1].value = 600000000;
-	utxoes[1].scripts = varstr_clone((varstr_t *)p2wpkh_program);
-	assert(utxoes[1].scripts && varstr_size(utxoes[1].scripts) == sizeof(p2wpkh_program));
-	
-	crypto_context_t * crypto = crypto_context_init(NULL, crypto_backend_libsecp256, NULL);
-	assert(crypto);
-	
-	// import privkeys
-	crypto_privkey_t * privkeys[2] = { NULL };
-	privkeys[0] = import_privkey_from_string(crypto, "bbc27228ddcb9209d7fd6f36b02f7dfa6252af40bb2f1cbc7a557da8027ff866");
-	privkeys[1] = import_privkey_from_string (crypto, "619c335025c7f4012e556c2a58b2506e30b8511b53ade95ea316fd8c3286feb9");
-	assert(privkeys[0] && privkeys[1]);
-	
-	// get pubkeys
-	const crypto_pubkey_t * pubkeys[2] = { NULL };
-	pubkeys[0] = crypto_privkey_get_pubkey(privkeys[0]);
-	pubkeys[1] = crypto_privkey_get_pubkey(privkeys[1]);
-	assert(pubkeys[0] && pubkeys[1]);
-	
-	unsigned char buffer[100] = { 0 };
-	unsigned char * pubkey_data = buffer;
-	cb = crypto_pubkey_export(crypto, (crypto_pubkey_t *)pubkeys[0], 1, &pubkey_data);
-	assert(cb > 0 && cb <= 65);
-	
-	dump_line("pubkey[0]: ", pubkey_data, cb);
-	
-	varstr_t * signature = tx[1].txins[0].signatures[0];
-	assert(signature);
-	dump_line("txin[0].signature:", 
-		signature, varstr_size(signature));
-	
-	uint32_t hash_type = 1;
-	for(int index = 0; index < tx[1].txin_count; ++index)
-	{
-		satoshi_rawtx_t rawtx[1];
-		uint256_t hash[1];
-		memset(rawtx, 0, sizeof(rawtx));
-		memset(hash, 0, sizeof(hash));
-		
-		// use tx[0] to verify input[0] (from legacy utxo)
-		// use tx[1] to verify input[1] (from p2wpkh utxo)
-		satoshi_rawtx_attach(rawtx, &tx[index]);
-
-		// get digests - method-1: use struct satoshi_rawtx
-		rc = satoshi_rawtx_get_digest(rawtx, index, hash_type, &utxoes[index], hash); assert(0 == rc);
-		printf("digest[%d]: ", index); dump(&hash, 32); printf("\n");
-		
-		// restore tx's settings before crypto->verify
-		satoshi_rawtx_detach(rawtx);	
-		
-		const unsigned char * sig_der = NULL;
-		ssize_t cb_sig = 0;
-		
-		bitcoin_tx_witness_t * witness = &tx[1].witnesses[index];
-		sig_der = varstr_getdata_ptr(tx[1].txins[index].signatures[0]);
-		cb_sig  = varstr_length(tx[1].txins[index].signatures[0]);
-		if(witness->num_items == 2)
-		{
-			sig_der = varstr_getdata_ptr(witness->items[0]);
-			cb_sig = varstr_length(witness->items[0]) - 1;
-			assert(cb_sig > 0);
-		}
-		
-		rc = crypto->verify(crypto, (unsigned char *)hash, 32,
-			pubkeys[index],
-			sig_der, cb_sig);
-
-		const char * term_color = (0 == rc)?"\e[32m":"\e[31m";
-		printf("%s""== verify input[%d]: [%s]\e[39m\n", term_color, index, (0==rc)?"OK":"NG");
-		assert(0 == rc);
-	}
-
-	crypto_privkey_free(privkeys[0]);
-	crypto_privkey_free(privkeys[1]);
-	
-	crypto_context_cleanup(crypto);
-	free(crypto);
-	
-	satoshi_tx_cleanup(&tx[0]);
-	satoshi_tx_cleanup(&tx[1]);
-	
-	free(rawtx_data);
-	free(signed_tx_data);
-	return 0;
-}
-
 
 // verify p2sh 
 int test_p2sh(int argc, char ** argv)	

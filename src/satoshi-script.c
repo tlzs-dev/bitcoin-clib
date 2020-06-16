@@ -678,13 +678,18 @@ static inline int parse_op_checksig(satoshi_script_stack_t * stack, satoshi_scri
 	} 
 	
 	uint256_t digest;
-	memset(&digest, 0, sizeof(digest));
-	rc = satoshi_rawtx_get_digest(rawtx, txin_index, hash_type, utxo, &digest);
-		
-	if(rc) {
-		scripts_parser_error_handler("get tx_digest failed.");
+	if(scripts->digest)
+	{
+		memcpy(&digest, scripts->digest, sizeof(digest));
+	}else
+	{
+		memset(&digest, 0, sizeof(digest));
+		rc = satoshi_rawtx_get_digest(rawtx, txin_index, hash_type, utxo, &digest);
+			
+		if(rc) {
+			scripts_parser_error_handler("get tx_digest failed.");
+		}
 	}
-	
 	
 	unsigned char * sig_der = NULL;
 	ssize_t cb_sig_der = crypto_signature_export(crypto, sig, &sig_der);
@@ -1199,55 +1204,64 @@ static ssize_t scripts_parse(struct satoshi_script * scripts,
 		scripts_parser_error_handler("parse scripts failed or invalid payload length");
 	}
 	
-	if(type == satoshi_tx_script_type_txin && is_p2sh)
+	if(type == satoshi_tx_script_type_txin)
 	{
 		satoshi_tx_t * tx = priv->tx;
 		ssize_t txin_index = priv->txin_index;
 		assert(tx && txin_index >= 0 && txin_index < tx->txin_count);
-		tx->txins[txin_index].is_p2sh = 1;
+		satoshi_txin_t * cur_txin = &tx->txins[txin_index];
+		cur_txin->is_p2sh = is_p2sh;
 		
-		satoshi_script_data_t * sdata = NULL;
-		ssize_t cb = 0;
-		
-		// parse redeem scripts;
-		sdata = main_stack->pop(main_stack);
-		if(NULL == sdata || sdata->type < satoshi_script_data_type_varstr)
-		{
-			fprintf(stderr, "invalid redeem scripts\n");
-			satoshi_script_data_free(sdata);
-			return -1;
+		if(!is_p2sh) {
+			if(NULL == cur_txin->redeem_scripts)
+			{
+				// set p2pk or p2phk or p2wphk txin's redeem scripts
+				cur_txin->redeem_scripts = satoshi_txin_get_redeem_scripts(tx->has_flag, priv->utxo);
+			}
 		}
-		
-		debug_printf("parse redeem_scripts %p, length=%ld...", sdata->data, (long)sdata->size);
-		dump_line("redeem scripts: ", sdata->data, sdata->size);
-		
-		tx->txins[txin_index].redeem_scripts = varstr_new(sdata->data, sdata->size);
-		
-		cb = scripts->parse(scripts, 
-			satoshi_tx_script_type_p2sh_redeem_scripts, 
-			sdata->data, sdata->size);
-		
-		if(cb == sdata->size) // if parsed ok, push back redeem_scripts
-		{
-			/**
-			 * There might be a bug on p2sh design:
-			 * By definition, the last op_code(OP_CHECKMULTISIG) will push a 'true/false' value to the stack, 
-			 * but nowhere else can this value be used.
-			 * It might be more reasonable if OP_CHECKMULTISIGVERIFY is used here.
-			 * 
-			 * so, when we are processing the txin scripts, 
-			 * we need to manually pop this extra value from the stack before push back redeem scripts
-			 */
-			satoshi_script_data_free(main_stack->pop(main_stack));
+		else { // is_p2sh
+			satoshi_script_data_t * sdata = NULL;
+			ssize_t cb = 0;
 			
-			// push back redeem_scripts
-			main_stack->push(main_stack, sdata);
-		}else
-		{
-			satoshi_script_data_free(sdata);
-			scripts_parser_error_handler("parse redeem scripts failed");
+			// parse redeem scripts;
+			sdata = main_stack->pop(main_stack);
+			if(NULL == sdata || sdata->type < satoshi_script_data_type_varstr)
+			{
+				fprintf(stderr, "invalid redeem scripts\n");
+				satoshi_script_data_free(sdata);
+				return -1;
+			}
+			
+			debug_printf("parse redeem_scripts %p, length=%ld...", sdata->data, (long)sdata->size);
+			dump_line("redeem scripts: ", sdata->data, sdata->size);
+			
+			cur_txin->redeem_scripts = varstr_new(sdata->data, sdata->size);
+			
+			cb = scripts->parse(scripts, 
+				satoshi_tx_script_type_p2sh_redeem_scripts, 
+				sdata->data, sdata->size);
+			
+			if(cb == sdata->size) // if parsed ok, push back redeem_scripts
+			{
+				/**
+				 * There might be a bug on p2sh design:
+				 * By definition, the last op_code(OP_CHECKMULTISIG) will push a 'true/false' value to the stack, 
+				 * but nowhere else can this value be used.
+				 * It might be more reasonable if OP_CHECKMULTISIGVERIFY is used here.
+				 * 
+				 * so, when we are processing the txin scripts, 
+				 * we need to manually pop this extra value from the stack before push back redeem scripts
+				 */
+				satoshi_script_data_free(main_stack->pop(main_stack));
+				
+				// push back redeem_scripts
+				main_stack->push(main_stack, sdata);
+			}else
+			{
+				satoshi_script_data_free(sdata);
+				scripts_parser_error_handler("parse redeem scripts failed");
+			}
 		}
-		
 	}
 	
 	return (p_end - payload);

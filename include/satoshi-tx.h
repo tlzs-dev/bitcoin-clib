@@ -64,6 +64,10 @@ int satoshi_tx_get_digest(
 	uint32_t hash_type,
 	const satoshi_txout_t * utxo,
 	uint256_t * hash);
+	
+
+
+varstr_t * satoshi_txin_get_redeem_scripts(int is_segwit, const satoshi_txout_t * utxo);
 #ifdef __cplusplus
 }
 #endif
