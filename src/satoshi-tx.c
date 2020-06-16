@@ -159,9 +159,10 @@ static ssize_t segwit_v0_generate_preimage(const satoshi_tx_t * tx,
    p += sizeof(satoshi_outpoint_t);
     
    //  5. scriptCode of the input (serialized as scripts inside CTxOuts)
-   memcpy(p, utxo->scripts, pk_scripts_size);
-   debug_dump("scriptcode", p, pk_scripts_size);
-   p += pk_scripts_size;
+   assert(txins[cur_index].redeem_scripts);
+   ssize_t cb_redeem_scripts = varstr_size(txins[cur_index].redeem_scripts);
+   memcpy(p, txins[cur_index].redeem_scripts, cb_redeem_scripts);
+   p += cb_redeem_scripts;
    
    //  6. value of the output spent by this input (8-byte little endian)
    *(int64_t *)p = utxo->value;
@@ -429,11 +430,11 @@ int satoshi_rawtx_get_digest(satoshi_rawtx_t * rawtx,
 		sha256_update(sha, (unsigned char *)&txins[cur_index].outpoint, sizeof(satoshi_outpoint_t));
 		cb_image += sizeof(satoshi_outpoint_t);
 		
-		//  5. TODO: scriptCode of the input (serialized as scripts inside CTxOuts)
-		ssize_t vstr_size = varstr_size(utxo->scripts);
-		assert(vstr_size > 0);
-		sha256_update(sha, (unsigned char *)utxo->scripts, vstr_size);	
-		cb_image += vstr_size;
+		//  5. scriptCode of the input (serialized as scripts inside CTxOuts)
+		assert(txins[cur_index].redeem_scripts);
+		ssize_t cb_redeem_scripts = varstr_size(txins[cur_index].redeem_scripts);
+		sha256_update(sha, (unsigned char *)txins[cur_index].redeem_scripts, cb_redeem_scripts);	
+		cb_image += cb_redeem_scripts;
 		
 		//  6. value of the output spent by this input (8-byte little endian)
 		sha256_update(sha, (unsigned char *)&utxo->value, sizeof(int64_t));
@@ -479,7 +480,7 @@ int satoshi_rawtx_get_digest(satoshi_rawtx_t * rawtx,
 		assert(cur_index >= rawtx->last_hashed_txin_index);	// pre-hashed index, (from tx.begin() to the end of txins[cur_index].outpoint) 
 		
 		// set pkscript_code
-		raw_txins[cur_index].scripts = cur_txin->redeem_scripts;	// unify all mode (p2pk, p2phk, p2sh, p2wphk, p2wsh ...)
+		raw_txins[cur_index].scripts = cur_txin->redeem_scripts;	// unify all modes (p2pk, p2phk, p2sh, p2wphk, p2wsh ...)
 
 		// pre-hash txins when needed
 		if(anyone_canpay)	{ // sign only current txin, do not use the states of rawtx's sha_ctx
