@@ -465,7 +465,12 @@ void satoshi_script_stack_cleanup(satoshi_script_stack_t * stack)
 typedef struct satoshi_script_private
 {
 	crypto_context_t crypto[1]; 
-	int crypto_init_flags;	
+	int crypto_init_flags;
+
+	satoshi_tx_t * tx;
+	satoshi_rawtx_t rawtx[1];
+	ssize_t txin_index;
+	const satoshi_txout_t * utxo;
 	
 	enum satoshi_tx_script_type type;
 	int if_statement_depth;		// 0 == top_level
@@ -641,13 +646,11 @@ static inline int parse_op_checksig(satoshi_script_stack_t * stack, satoshi_scri
 			satoshi_script_opcode_op_checksig);
 	}
 	
-	satoshi_tx_t * tx = scripts->tx;
-	const satoshi_txout_t * utxo = scripts->utxo;
-	assert(tx && tx->txins);
-	
-	ssize_t txin_index = scripts->txin_index;
-	//~ satoshi_txin_t * txins = tx->txins;
-	assert(txin_index >= 0 && txin_index < tx->txin_count);
+	satoshi_script_private_t * priv = scripts->priv;
+	satoshi_rawtx_t * rawtx = priv->rawtx;
+	const satoshi_txout_t * utxo = priv->utxo;
+
+	ssize_t txin_index = priv->txin_index;
 	
 	crypto_context_t * crypto = scripts->crypto;
 	assert(crypto);
@@ -675,19 +678,13 @@ static inline int parse_op_checksig(satoshi_script_stack_t * stack, satoshi_scri
 	} 
 	
 	uint256_t digest;
-	
-	if(scripts->digest)
-	{
-		memcpy(&digest, scripts->digest, sizeof(digest));
-	}else
-	{
-		memset(&digest, 0, sizeof(digest));
-		rc = satoshi_tx_get_digest(tx, txin_index, hash_type, utxo, &digest);
+	memset(&digest, 0, sizeof(digest));
+	rc = satoshi_rawtx_get_digest(rawtx, txin_index, hash_type, utxo, &digest);
 		
-		if(rc) {
-			scripts_parser_error_handler("get tx_digest failed.");
-		}
+	if(rc) {
+		scripts_parser_error_handler("get tx_digest failed.");
 	}
+	
 	
 	unsigned char * sig_der = NULL;
 	ssize_t cb_sig_der = crypto_signature_export(crypto, sig, &sig_der);
@@ -722,9 +719,10 @@ static inline int parse_op_checkmultisig(satoshi_script_stack_t * stack, satoshi
 	int rc = -1;
 	int num_pubkeys = 0, num_sigs = 0;
 	
-	satoshi_tx_t * tx = scripts->tx;
-	ssize_t txin_index = scripts->txin_index;
-	assert(tx && txin_index >= 0 && txin_index < tx->txin_count);
+	satoshi_script_private_t * priv = scripts->priv;
+	satoshi_rawtx_t * rawtx = priv->rawtx;
+	const satoshi_txout_t * utxo = priv->utxo;
+	ssize_t txin_index = priv->txin_index;
 	
 	satoshi_script_data_t * sdata = NULL;
 	crypto_pubkey_t ** pubkeys = NULL;
@@ -811,14 +809,15 @@ static inline int parse_op_checkmultisig(satoshi_script_stack_t * stack, satoshi
 		// recalulate tx_digest if need
 		if(sighash_type != prev_sighash_type)
 		{
-			rc = satoshi_tx_get_digest(tx, txin_index, sighash_type, 
-				scripts->utxo, &digest);
+			rc = satoshi_rawtx_get_digest(rawtx, txin_index, 
+				sighash_type, 
+				utxo, 
+				&digest);
 			if(rc){
 				scripts_parser_error_handler("get tx_digest failed.");
 			}
 			prev_sighash_type = sighash_type;
 		}
-		
 
 		// verify signature
 		rc = -1;
@@ -1202,13 +1201,14 @@ static ssize_t scripts_parse(struct satoshi_script * scripts,
 	
 	if(type == satoshi_tx_script_type_txin && is_p2sh)
 	{
-		satoshi_tx_t * tx = scripts->tx;
-		int txin_index = scripts->txin_index;
+		satoshi_tx_t * tx = priv->tx;
+		ssize_t txin_index = priv->txin_index;
 		assert(tx && txin_index >= 0 && txin_index < tx->txin_count);
 		tx->txins[txin_index].is_p2sh = 1;
 		
 		satoshi_script_data_t * sdata = NULL;
 		ssize_t cb = 0;
+		
 		// parse redeem scripts;
 		sdata = main_stack->pop(main_stack);
 		if(NULL == sdata || sdata->type < satoshi_script_data_type_varstr)
@@ -1259,7 +1259,9 @@ label_error:
 
 static int scripts_verify(satoshi_script_t * scripts)
 {
-	debug_printf("txin_index: %d", (int)scripts->txin_index);
+	satoshi_script_private_t * priv = scripts->priv;
+	assert(priv);
+	debug_printf("txin_index: %d", (int)priv->txin_index);
 	
 	satoshi_script_stack_t * stack = scripts->main_stack;
 	if(NULL == stack || stack->count <= 0) return -1;
@@ -1278,6 +1280,56 @@ static int scripts_verify(satoshi_script_t * scripts)
 		if(sdata->b) rc = 0;
 	}
 	return rc;
+}
+
+static int scripts_attach_tx(satoshi_script_t * scripts, satoshi_tx_t * tx)
+{
+	assert(scripts && scripts->priv);
+	satoshi_script_private_t * priv = scripts->priv;
+	if(priv->tx)
+	{
+		scripts->detach_tx(scripts);	
+	}
+	
+	priv->tx = tx;
+	if(tx)
+	{
+		satoshi_rawtx_t * rawtx = satoshi_rawtx_attach(priv->rawtx, tx);
+		assert(rawtx);
+	}
+	return 0;
+}
+
+static int scripts_detach_tx(satoshi_script_t * scripts)
+{
+	if(scripts && scripts->priv)
+	{
+		satoshi_script_private_t * priv = scripts->priv;
+		if(priv->tx)
+		{
+			satoshi_rawtx_detach(priv->rawtx);
+			memset(priv->rawtx, 0, sizeof(priv->rawtx));
+			priv->tx = NULL;
+		}
+		return 0;
+	}
+	return -1;
+}
+
+static int scripts_set_txin_info(satoshi_script_t * scripts, ssize_t index, const satoshi_txout_t * utxo)
+{
+	assert(scripts && scripts->priv);
+	satoshi_script_private_t * priv = scripts->priv;
+	
+	if(NULL == priv->tx)
+	{
+		return -1;
+	}
+	
+	assert(index >= 0 && index < priv->tx->txin_count);
+	priv->txin_index = index;
+	priv->utxo = utxo;
+	return 0;
 }
 
 satoshi_script_t * satoshi_script_init(satoshi_script_t * scripts, 
@@ -1308,6 +1360,10 @@ satoshi_script_t * satoshi_script_init(satoshi_script_t * scripts,
 		}
 	}
 	scripts->crypto = crypto;
+	
+	scripts->attach_tx = scripts_attach_tx;
+	scripts->detach_tx = scripts_detach_tx;
+	scripts->set_txin_info = scripts_set_txin_info;
 	scripts->parse = scripts_parse;
 	scripts->verify = scripts_verify;
 	
@@ -1419,21 +1475,24 @@ int verify_tx(satoshi_script_t * scripts,
 	satoshi_txout_t ** utxoes)
 {
 	int rc = 0;
-	scripts->tx = tx;	// attach tx
 	
+	scripts->attach_tx(scripts, tx);
+
 	int64_t inputs_amount = 0;		// sum(utxoes[].value)
 	int64_t outputs_amount = 0;		// sum(tx.txouts[].value)
+	
+	satoshi_rawtx_t rawtx[1];
+	satoshi_rawtx_attach(rawtx, tx);
+		
 	// verify tx
 	for(ssize_t i = 0; i < tx->txin_count; ++i)
 	{
 		satoshi_txin_t * txin = &tx->txins[i];
 		int utxo_index = txin->outpoint.index;
-		satoshi_txout_t * utxo = utxoes[utxo_index]; 
+		satoshi_txout_t * utxo = utxoes[utxo_index]; 	// todo: utxo = utxo_db.get(&txin->outpoint)
 		
-		// init scripts' public data
-		scripts->txin_index = i;
-		scripts->utxo = utxo;
-		
+		scripts->set_txin_info(scripts, i,	utxo);
+
 		ssize_t cb = -1;
 		unsigned char * payload = varstr_getdata_ptr(txin->scripts);
 		ssize_t cb_payload = varstr_length(txin->scripts);
@@ -1441,6 +1500,16 @@ int verify_tx(satoshi_script_t * scripts,
 			satoshi_tx_script_type_txin, 
 			payload, cb_payload);
 		assert(cb == cb_payload);
+		
+		uint256_t hash[2];
+		
+		satoshi_tx_get_digest(tx, i, 1, utxo, &hash[0]);
+
+		satoshi_rawtx_get_digest(rawtx, i, 1, utxo, &hash[1]);
+		dump_line("   tx_digest: ", &hash[0], 32);
+		dump_line("rawtx_digest: ", &hash[1], 32);
+		assert(0 == memcmp(&hash[0], &hash[1], 32));
+
 
 		// parse utxo scripts
 		payload = varstr_getdata_ptr(utxo->scripts);
@@ -1729,10 +1798,11 @@ void test_nested_if_statements(void)
 	return;
 }
 
+
 int main(int argc, char **argv)
 {
-	test_op_if_notif();
-	test_nested_if_statements();
+	//~ test_op_if_notif();
+	//~ test_nested_if_statements();
 	
 	unsigned char * txns_data[3] = {NULL};
 	ssize_t cb_txns[3] = { 0 };

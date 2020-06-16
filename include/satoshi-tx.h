@@ -35,6 +35,7 @@ enum satoshi_tx_sighash_type
 typedef struct satoshi_rawtx 
 {
 	satoshi_tx_t * tx;	// attached tx
+	satoshi_txin_t * txins;
 
 	// internal states: pre-hash <-- sha(common_data)
 	sha256_ctx_t sha[1];	
