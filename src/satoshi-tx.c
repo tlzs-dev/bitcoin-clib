@@ -92,13 +92,14 @@ static ssize_t segwit_v0_generate_preimage(const satoshi_tx_t * tx,
 	const satoshi_txout_t * utxo, // prevout
 	unsigned char ** p_image)
 {
-	ssize_t pk_scripts_size = varstr_size(utxo->scripts);
+	satoshi_txin_t * cur_txin = &tx->txins[cur_index];
+	ssize_t cb_redeem_scripts = varstr_size(cur_txin->redeem_scripts);
 	
 	ssize_t cb_image = sizeof(uint32_t)		// 1. nVersion of the transaction (4-byte little endian)
 		+ sizeof(uint256_t)	// 2. hashPrevouts (32-byte hash)
 		+ sizeof(uint256_t)	// 3. hashSequence (32-byte hash)
 		+ sizeof(satoshi_outpoint_t)	// 4. outpoint (32-byte hash + 4-byte little endian) 
-		+ pk_scripts_size	//  5. scriptCode of the input (serialized as scripts inside CTxOuts)
+		+ cb_redeem_scripts	//  5. scriptCode of the input (serialized as scripts inside CTxOuts)
 		+ sizeof(int64_t) // 6. value of the output spent by this input (8-byte little endian)
 		+ sizeof(uint32_t) // 7. nSequence of the input (4-byte little endian)
 		+ sizeof(uint256_t) // 8. hashOutputs (32-byte hash)
@@ -130,6 +131,7 @@ static ssize_t segwit_v0_generate_preimage(const satoshi_tx_t * tx,
     sha256_init(sha);
     for(ssize_t i = 0; i < tx->txin_count; ++i)
     {
+		debug_dump("  --> hash outpoint: ", &txins[i].outpoint, sizeof(satoshi_outpoint_t));
 		sha256_update(sha, (unsigned char *)&txins[i].outpoint, sizeof(satoshi_outpoint_t));
 	}
 	sha256_final(sha, hash);
@@ -159,9 +161,7 @@ static ssize_t segwit_v0_generate_preimage(const satoshi_tx_t * tx,
    p += sizeof(satoshi_outpoint_t);
     
    //  5. scriptCode of the input (serialized as scripts inside CTxOuts)
-   assert(txins[cur_index].redeem_scripts);
-   ssize_t cb_redeem_scripts = varstr_size(txins[cur_index].redeem_scripts);
-   memcpy(p, txins[cur_index].redeem_scripts, cb_redeem_scripts);
+   memcpy(p, cur_txin->redeem_scripts, cb_redeem_scripts);
    p += cb_redeem_scripts;
    
    //  6. value of the output spent by this input (8-byte little endian)
@@ -751,6 +751,22 @@ static inline crypto_privkey_t * crypto_privkey_import_from_string(crypto_contex
 	return privkey;
 }
 
+
+static inline crypto_signature_t * crypto_signature_import_from_string(crypto_context_t * crypto, const char * sig_der_hex)
+{
+	assert(sig_der_hex);
+	ssize_t cb = strlen(sig_der_hex);
+	assert(cb > 0 && 0 == (cb % 2) && cb < 200);
+	
+	unsigned char data[100] = { 0 };
+	void * p_data = data;
+	ssize_t cb_data = hex2bin(sig_der_hex, cb, &p_data);
+	assert(cb_data == (cb / 2));
+	
+	crypto_signature_t * sig = crypto_signature_import(crypto, data, cb_data);
+	return sig;
+}
+
 int test_segwit_v0(int argc, char ** argv)
 {
 // 1. Native P2WPKH
@@ -778,16 +794,18 @@ int test_segwit_v0(int argc, char ** argv)
 	tx->txins = txins;
 	
 	// set txins[0]
+	void * p_outpoint = &txins[0].outpoint;
 	hex2bin("fff7f7881a8099afa6940d42d1e7f6362bec38171ea3edf433541db4e4ad969f" "00000000",
 			-1, 
-			(void **)&txins[0].outpoint);
+			(void **)&p_outpoint);
 	txins[0].scripts = (varstr_t *)s_empty_script;
 	txins[0].sequence = 0xffffffee;		// "eeffffff"
 	
 	// set txins[1]
+	p_outpoint = &txins[1].outpoint;
 	hex2bin("ef51e1b804cc89d182d279655c3aa89e815b1b309fe287d9b2b55d57b90ec68a" "01000000",
 			-1, 
-			(void **)&txins[1].outpoint);
+			(void **)&p_outpoint);
 	txins[1].scripts = (varstr_t *)s_empty_script;	// "00"
 	txins[1].sequence = 0xffffffff;		// "ffffffff"
 	
@@ -797,22 +815,31 @@ int test_segwit_v0(int argc, char ** argv)
 	tx->txouts = txouts;
 	
 	// set txouts[0]
-	hex2bin("202cb20600000000", -1, (void **)&txouts[0].value);
+	void * p_value = &txouts[0].value;
+	hex2bin("202cb20600000000", -1, (void **)&p_value);
 	hex2bin("1976a9148280b37df378db99f66f85c95a783a76ac7a6d5988ac", -1, (void **)&txouts[0].scripts);
 	
 	// set txouts[1]
-	hex2bin("9093510d00000000", -1, (void **)&txouts[1].value);
+	p_value = &txouts[1].value;
+	hex2bin("9093510d00000000", -1, (void **)&p_value);
 	hex2bin("1976a9143bde42dbee7e4dbe6a21b2d50ce2f0167faa815988ac", -1, (void **)&txouts[1].scripts);
 	
-	/*
-	 * set redeem_scripts manually 
-	 * ( this field should be set by scripts->parse() automatically )
-	 */
+	// set locktime
+	tx->lock_time = 0x00000011;	// "11000000"
+	
+	satoshi_tx_dump(tx);
+	
+/*
+ * set redeem_scripts manually 
+ * ( this field should be set by scripts->parse() automatically )
+ */
 	if(NULL == txins[0].redeem_scripts) 
 		txins[0].redeem_scripts = varstr_clone(utxoes[0].scripts);	// The first input comes from an ordinary P2PK:
 	
 	if(NULL == txins[1].redeem_scripts)
 		txins[1].redeem_scripts = get_p2wpkh_redeem_scripts(&utxoes[1]); //The second input comes from a P2WPKH witness program:
+	
+	dump_line("txins[1].script: ", txins[1].redeem_scripts, varstr_size(txins[1].redeem_scripts));
 	
 	crypto_context_t * crypto = crypto_context_init(NULL, crypto_backend_libsecp256, NULL);
 	crypto_privkey_t * privkeys[2] = { NULL };
@@ -831,7 +858,7 @@ int test_segwit_v0(int argc, char ** argv)
 	pubkeys[0] = (crypto_pubkey_t *)crypto_privkey_get_pubkey(privkeys[0]);
 	pubkeys[1] = (crypto_pubkey_t *)crypto_privkey_get_pubkey(privkeys[1]);
 	
-	// verify keys
+// verify keys
 	unsigned char hash[32];
 	unsigned char pubkey_buffer[65] = { 0 };
 	unsigned char * pubkey_data = pubkey_buffer;
@@ -840,11 +867,18 @@ int test_segwit_v0(int argc, char ** argv)
 	ssize_t cb_pubkey = crypto_pubkey_export(crypto, pubkeys[0], compressed_flag, &pubkey_data);
 	assert(cb_pubkey == 33);
 	// verify pubkey of the first input
-	assert(0 == memcmp(pubkey_data, varstr_getdata_ptr(utxoes[0].scripts) + 2, cb_pubkey));
+	assert(0 == memcmp(pubkey_data, varstr_getdata_ptr(utxoes[0].scripts) + 1, cb_pubkey));
 	
 	// verify pubkey of the second input
+	cb_pubkey = crypto_pubkey_export(crypto, pubkeys[1], compressed_flag, &pubkey_data);
+	assert(cb_pubkey == 33);
+	
 	char * pubkey_hex = NULL;
+	dump_line("pubkey: ", pubkey_data, cb_pubkey);
 	hash160(pubkey_data, cb_pubkey, hash);
+	
+	dump_line("hash160(pubkey): ", hash, 20);
+	dump_line("utxo: ", varstr_getdata_ptr(utxoes[1].scripts) + 2, 20);
 	assert(0 == memcmp(hash, varstr_getdata_ptr(utxoes[1].scripts) + 2, 20));
 	
 	ssize_t cb = bin2hex(pubkey_data, cb_pubkey, &pubkey_hex);
@@ -853,8 +887,39 @@ int test_segwit_v0(int argc, char ** argv)
 	free(pubkey_hex);
 	pubkey_hex = NULL;
 	
+// import signatures
+	crypto_signature_t * sigs[2] = { NULL };
+	sigs[0] = crypto_signature_import_from_string(crypto, 
+		"3045"
+			"0221008b9d1dc26ba6a9cb62127b02742fa9d754cd3bebf337f7a55d114c8e5cdd30be"
+			"022040529b194ba3f9281a99f2b1c0a19c0489bc22ede944ccf4ecbab4cc618ef3ed");
 	
+	sigs[1] = crypto_signature_import_from_string(crypto, 
+		"3044"
+			"02203609e17b84f6a7d30c80bfa610b5b4542f32a8a0d5447a12fb1366d7f01cc44a"
+			"0220573a954c4518331561406f90300e8f3358f51928d43c212a8caed02de67eebee");
 	
+	assert(sigs[0] && sigs[1]);
+	
+	uint256_t digests[2];
+	
+	unsigned char * preimage = NULL;
+	ssize_t cb_image = segwit_v0_generate_preimage(tx, 1, 1, &utxoes[1], &preimage);
+	assert(cb_image > 0);
+	
+	hash256(preimage, cb_image, (unsigned char *)&digests[1]);
+	
+	//c37af31116d1b27caf68aae9e3ac82f1477929014d5b917657d0eb49478cb670
+	dump_line("digest[1]: ", &digests[1], 32);
+	free(preimage); preimage = NULL;
+	
+	satoshi_rawtx_t rawtx[1];
+	memset(rawtx, 0, sizeof(rawtx));
+	satoshi_rawtx_attach(rawtx, tx);
+	uint256_t digest;
+	satoshi_rawtx_get_digest(rawtx, 1, 1, &utxoes[1], &digest);
+	dump_line("rawtx_get_digest: ", &digest, 32);
+	assert(0 == memcmp(&digest, &digests[1], 32));
 	
 	return 0;
 }
