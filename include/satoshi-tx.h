@@ -25,6 +25,8 @@ enum satoshi_tx_sighash_type
 	satoshi_tx_sighash_all = 1,							
 	satoshi_tx_sighash_none = 2,
 	satoshi_tx_sighash_single = 3,
+	
+	satoshi_tx_sighash_masks = 0x1f,	// according to the current implementation in bitcoin-core
 	satoshi_tx_sighash_anyone_can_pay = 0x80
 };
 
@@ -34,37 +36,27 @@ enum satoshi_tx_sighash_type
 *******************************************/
 typedef struct satoshi_rawtx 
 {
-	satoshi_tx_t * tx;	// attached tx
-	satoshi_txin_t * txins;
-
-	// internal states: pre-hash <-- sha(common_data)
-	sha256_ctx_t sha[1];
+	satoshi_tx_t * tx;				// attached tx
+	sha256_ctx_t sha[1]; 			// internal states: pre-hash <-- sha(common_data)
 	
-	// virtual function
+	satoshi_txin_t * txins;			// raw_txins for legacy tx
+	int last_hashed_txin_index;		// legacy tx states: pre-hashed index
+	
+	uint256_t txouts_hash[1]; 	// segwit_v0: step 8 
+	
+	/** 
+	 * Use virtual function for compatibility with future versions
+	 */
 	int (* get_digest)(struct satoshi_rawtx * rawtx, 
 		ssize_t cur_index, // current txin index
 		uint32_t hash_type, 
 		const satoshi_txout_t * utxo, 
 		uint256_t * digest);
-
-	// legacy tx states:
-	int last_hashed_txin_index;	// pre-hashed index
-	
-	// segwit-v0 states:
-	unsigned char txouts_hash[32]; // segwit_v0: generate preiamge step 8 
 }satoshi_rawtx_t;
-
 satoshi_rawtx_t * satoshi_rawtx_attach(satoshi_rawtx_t * rawtx, satoshi_tx_t * tx);
 void satoshi_rawtx_detach(satoshi_rawtx_t * rawtx);
 
-int satoshi_tx_get_digest(
-	satoshi_tx_t * tx, 
-	int txin_index, 
-	uint32_t hash_type,
-	const satoshi_txout_t * utxo,
-	uint256_t * hash);
 
-varstr_t * satoshi_txin_get_redeem_scripts(int is_segwit, const satoshi_txout_t * utxo);
 void satoshi_tx_dump(const satoshi_tx_t * tx);
 
 /**
@@ -78,6 +70,13 @@ int segwit_v0_tx_get_digest(const satoshi_tx_t * tx,
 	const satoshi_txout_t * utxo, // prevout
 	uint256_t * hash
 );
+int satoshi_tx_get_digest(
+	satoshi_tx_t * tx, 
+	int txin_index, 
+	uint32_t hash_type,
+	const satoshi_txout_t * utxo,
+	uint256_t * hash);
+varstr_t * satoshi_txin_get_redeem_scripts(int is_segwit, const satoshi_txout_t * utxo);
 /**
  * @}
  */
