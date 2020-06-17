@@ -228,21 +228,24 @@ static inline int segwit_v0_get_digest(satoshi_rawtx_t * rawtx,
 	{
 		// copy pre-hashed states
 		memcpy(sha, rawtx->sha, sizeof(sha));	// copy internal state ( common data pre-hashed )
-	}else
+	}else // with anyone_canpay flag,  or is sighash_single,  or is sighash_none
 	{
 		// there's no convenient way to simplify operation, just hash from the very begining
 		sha256_init(sha);
 		// step 1
-		sha256_update(sha, (unsigned char *)&tx->version, sizeof(tx->version));	
-	
+		sha256_update(sha, (unsigned char *)&tx->version, sizeof(tx->version));
+		
 		// step 2
-		if(hash_type == satoshi_tx_sighash_all) prehash_prevouts(sha, tx->txin_count, tx->txins);
+		if(!anyone_canpay) prehash_prevouts(sha, tx->txin_count, tx->txins);
 		else prehash_prevouts(sha, 0, NULL);
 		
 		// step 3
-		if(hash_type == satoshi_tx_sighash_all) prehash_sequences(sha, tx->txin_count, tx->txins);
-		else prehash_sequences(sha, 0, NULL);
-		
+		if(hash_type == satoshi_tx_sighash_all) {	// ( anyone_canpay && (type!=sighash_single) && (type!=sighash_none) )
+			prehash_sequences(sha, tx->txin_count, tx->txins);
+		}
+		else {
+			prehash_sequences(sha, 0, NULL);
+		}
 	}
 	
 	ssize_t cb_image = 4 + 32 + 32;	// skip pre-hashed data
@@ -353,9 +356,13 @@ satoshi_rawtx_t * satoshi_rawtx_attach_segwit_tx(satoshi_rawtx_t * rawtx, satosh
  ***************************************************************/
 #if defined(_TEST_SEGWIT_TX) || defined(_TEST_SATOSHI_TX)
 /*
- * Segwit v0 TEST data: from https://github.com/bitcoin/bips/blob/master/bip-0143.mediawiki
+ * Segwit v0 TEST data: 
+ *  https://github.com/bitcoin/bips/blob/master/bip-0143.mediawiki
+*/
+
+/*
 1. Native P2WPKH
- The following is an unsigned transaction:
+The following is an unsigned transaction:
     0100000002fff7f7881a8099afa6940d42d1e7f6362bec38171ea3edf433541db4e4ad969f0000000000eeffffffef51e1b804cc89d182d279655c3aa89e815b1b309fe287d9b2b55d57b90ec68a0100000000ffffffff02202cb206000000001976a9148280b37df378db99f66f85c95a783a76ac7a6d5988ac9093510d000000001976a9143bde42dbee7e4dbe6a21b2d50ce2f0167faa815988ac11000000
     
     nVersion:  01000000
@@ -373,12 +380,55 @@ satoshi_rawtx_t * satoshi_rawtx_attach_segwit_tx(satoshi_rawtx_t * rawtx, satosh
     scriptPubKey : 00141d0f172a0ecb48aee1be1f2687d2963ae33f71a1, value: 6
     private key  : 619c335025c7f4012e556c2a58b2506e30b8511b53ade95ea316fd8c3286feb9
     public key   : 025476c2e83188368da1ff3e292e7acafcdb3566bb0ad253f62fc70f07aeee6357
+    
+  To sign it with a nHashType of 1 (SIGHASH_ALL):
+  
+  hashPrevouts:
+    dSHA256(fff7f7881a8099afa6940d42d1e7f6362bec38171ea3edf433541db4e4ad969f00000000ef51e1b804cc89d182d279655c3aa89e815b1b309fe287d9b2b55d57b90ec68a01000000)
+  = 96b827c8483d4e9b96712b6713a7b68d6e8003a781feba36c31143470b4efd37
+  
+  hashSequence:
+    dSHA256(eeffffffffffffff)
+  = 52b0a642eea2fb7ae638c36f6252b6750293dbe574a806984b8e4d8548339a3b
+  
+  hashOutputs:
+    dSHA256(202cb206000000001976a9148280b37df378db99f66f85c95a783a76ac7a6d5988ac9093510d000000001976a9143bde42dbee7e4dbe6a21b2d50ce2f0167faa815988ac)
+  = 863ef3e1a92afbfdb97f31ad0fc7683ee943e9abcf2501590ff8f6551f47e5e5
+  
+  hash preimage: 0100000096b827c8483d4e9b96712b6713a7b68d6e8003a781feba36c31143470b4efd3752b0a642eea2fb7ae638c36f6252b6750293dbe574a806984b8e4d8548339a3bef51e1b804cc89d182d279655c3aa89e815b1b309fe287d9b2b55d57b90ec68a010000001976a9141d0f172a0ecb48aee1be1f2687d2963ae33f71a188ac0046c32300000000ffffffff863ef3e1a92afbfdb97f31ad0fc7683ee943e9abcf2501590ff8f6551f47e5e51100000001000000
+  
+    nVersion:     01000000
+    hashPrevouts: 96b827c8483d4e9b96712b6713a7b68d6e8003a781feba36c31143470b4efd37
+    hashSequence: 52b0a642eea2fb7ae638c36f6252b6750293dbe574a806984b8e4d8548339a3b
+    outpoint:     ef51e1b804cc89d182d279655c3aa89e815b1b309fe287d9b2b55d57b90ec68a01000000
+    scriptCode:   1976a9141d0f172a0ecb48aee1be1f2687d2963ae33f71a188ac
+    amount:       0046c32300000000
+    nSequence:    ffffffff
+    hashOutputs:  863ef3e1a92afbfdb97f31ad0fc7683ee943e9abcf2501590ff8f6551f47e5e5
+    nLockTime:    11000000
+    nHashType:    01000000
+    
+  sigHash:      c37af31116d1b27caf68aae9e3ac82f1477929014d5b917657d0eb49478cb670
+  signature:    304402203609e17b84f6a7d30c80bfa610b5b4542f32a8a0d5447a12fb1366d7f01cc44a0220573a954c4518331561406f90300e8f3358f51928d43c212a8caed02de67eebee
+    
+  The serialized signed transaction is: 01000000000102fff7f7881a8099afa6940d42d1e7f6362bec38171ea3edf433541db4e4ad969f00000000494830450221008b9d1dc26ba6a9cb62127b02742fa9d754cd3bebf337f7a55d114c8e5cdd30be022040529b194ba3f9281a99f2b1c0a19c0489bc22ede944ccf4ecbab4cc618ef3ed01eeffffffef51e1b804cc89d182d279655c3aa89e815b1b309fe287d9b2b55d57b90ec68a0100000000ffffffff02202cb206000000001976a9148280b37df378db99f66f85c95a783a76ac7a6d5988ac9093510d000000001976a9143bde42dbee7e4dbe6a21b2d50ce2f0167faa815988ac000247304402203609e17b84f6a7d30c80bfa610b5b4542f32a8a0d5447a12fb1366d7f01cc44a0220573a954c4518331561406f90300e8f3358f51928d43c212a8caed02de67eebee0121025476c2e83188368da1ff3e292e7acafcdb3566bb0ad253f62fc70f07aeee635711000000
+  
+    nVersion:  01000000
+    marker:    00
+    flag:      01
+    txin:      02 fff7f7881a8099afa6940d42d1e7f6362bec38171ea3edf433541db4e4ad969f 00000000 494830450221008b9d1dc26ba6a9cb62127b02742fa9d754cd3bebf337f7a55d114c8e5cdd30be022040529b194ba3f9281a99f2b1c0a19c0489bc22ede944ccf4ecbab4cc618ef3ed01 eeffffff
+                  ef51e1b804cc89d182d279655c3aa89e815b1b309fe287d9b2b55d57b90ec68a 01000000 00 ffffffff
+    txout:     02 202cb20600000000 1976a9148280b37df378db99f66f85c95a783a76ac7a6d5988ac
+                  9093510d00000000 1976a9143bde42dbee7e4dbe6a21b2d50ce2f0167faa815988ac
+    witness    00
+               02 47304402203609e17b84f6a7d30c80bfa610b5b4542f32a8a0d5447a12fb1366d7f01cc44a0220573a954c4518331561406f90300e8f3358f51928d43c212a8caed02de67eebee01 21025476c2e83188368da1ff3e292e7acafcdb3566bb0ad253f62fc70f07aeee6357
+    nLockTime: 11000000
 */
 
-
-int test_segwit_v0(int argc, char ** argv)
+int test_native_p2wpkh(int argc, char ** argv)
 {
 // 1. Native P2WPKH
+	debug_printf("TEST: 1. Native P2WPKH ...");
 	satoshi_txout_t utxoes[2] = {
 		[0] = { .value = 625000000, },
 		[1] = { .value = 600000000, }
@@ -390,148 +440,139 @@ int test_segwit_v0(int argc, char ** argv)
 		"00141d0f172a0ecb48aee1be1f2687d2963ae33f71a1",
 		-1, (void **)&utxoes[1].scripts);
 	
+	
+	// step 0. load tx
 	satoshi_tx_t tx[1] = { 0 };
-	tx->version = 1;
+	ssize_t cb = 0;
+	unsigned char * tx_data = NULL;	// serialized tx data
+	ssize_t cb_data = hex2bin("01000000"
+		"0001"	// segwit flag
+		"02"	// 2 txins
+			"fff7f7881a8099afa6940d42d1e7f6362bec38171ea3edf433541db4e4ad969f" "00000000"
+			"49"
+				"48"
+					"3045"	
+						"0221008b9d1dc26ba6a9cb62127b02742fa9d754cd3bebf337f7a55d114c8e5cdd30be"
+						"022040529b194ba3f9281a99f2b1c0a19c0489bc22ede944ccf4ecbab4cc618ef3ed"
+					"01"
+			"eeffffff"
+			"ef51e1b804cc89d182d279655c3aa89e815b1b309fe287d9b2b55d57b90ec68a" "01000000"
+			"00"
+			"ffffffff"
+		"02"
+			"202cb20600000000" "1976a9148280b37df378db99f66f85c95a783a76ac7a6d5988ac"
+			"9093510d00000000" "1976a9143bde42dbee7e4dbe6a21b2d50ce2f0167faa815988ac"
+		
+		// witness data
+		"00"	// for first txin
+		"02"	// for second txin
+			"47"
+				"3044"
+					"02203609e17b84f6a7d30c80bfa610b5b4542f32a8a0d5447a12fb1366d7f01cc44a"
+					"0220573a954c4518331561406f90300e8f3358f51928d43c212a8caed02de67eebee"
+				"01"
+			"21"
+				"025476c2e83188368da1ff3e292e7acafcdb3566bb0ad253f62fc70f07aeee6357"
+		"11000000", 
+		-1, 
+		(void **)&tx_data);
+	assert(cb_data > 0 && tx_data);
 	
-	// set segwit flag
-	tx->has_flag = 1;
-	tx->flag[0] = 0; tx->flag[1] = 1;
-	
-	tx->txin_count = 2;
-	satoshi_txin_t * txins = calloc(tx->txin_count, sizeof(*txins));
-	assert(txins);
-	tx->txins = txins;
-	
-	// set txins[0]
-	void * p_outpoint = &txins[0].outpoint;
-	hex2bin("fff7f7881a8099afa6940d42d1e7f6362bec38171ea3edf433541db4e4ad969f" "00000000",
-			-1, 
-			(void **)&p_outpoint);
-	txins[0].scripts = (varstr_t *)varstr_empty;
-	txins[0].sequence = 0xffffffee;		// "eeffffff"
-	
-	// set txins[1]
-	p_outpoint = &txins[1].outpoint;
-	hex2bin("ef51e1b804cc89d182d279655c3aa89e815b1b309fe287d9b2b55d57b90ec68a" "01000000",
-			-1, 
-			(void **)&p_outpoint);
-	txins[1].scripts = (varstr_t *)varstr_empty;	// "00"
-	txins[1].sequence = 0xffffffff;		// "ffffffff"
-	
-	tx->txout_count = 2;
-	satoshi_txout_t * txouts = calloc(tx->txout_count, sizeof(*txouts));
-	assert(txouts);
-	tx->txouts = txouts;
-	
-	// set txouts[0]
-	void * p_value = &txouts[0].value;
-	hex2bin("202cb20600000000", -1, (void **)&p_value);
-	hex2bin("1976a9148280b37df378db99f66f85c95a783a76ac7a6d5988ac", -1, (void **)&txouts[0].scripts);
-	
-	// set txouts[1]
-	p_value = &txouts[1].value;
-	hex2bin("9093510d00000000", -1, (void **)&p_value);
-	hex2bin("1976a9143bde42dbee7e4dbe6a21b2d50ce2f0167faa815988ac", -1, (void **)&txouts[1].scripts);
-	
-	// set locktime
-	tx->lock_time = 0x00000011;	// "11000000"
-	
+	cb = satoshi_tx_parse(tx, cb_data, tx_data);
+	assert(cb == cb_data);
 	satoshi_tx_dump(tx);
 	
-/*
- * set redeem_scripts manually 
- * ( this field should be set by scripts->parse() automatically )
- */
-	if(NULL == txins[0].redeem_scripts) 
-		txins[0].redeem_scripts = varstr_clone(utxoes[0].scripts);	// The first input comes from an ordinary P2PK:
-	
-	if(NULL == txins[1].redeem_scripts)
-		txins[1].redeem_scripts = satoshi_txin_get_redeem_scripts(1, &utxoes[1]); //The second input comes from a P2WPKH witness program:
-	
-	dump_line("txins[1].script: ", txins[1].redeem_scripts, varstr_size(txins[1].redeem_scripts));
-	
+	// step 1. parse tx
 	crypto_context_t * crypto = crypto_context_init(NULL, crypto_backend_libsecp256, NULL);
-	crypto_privkey_t * privkeys[2] = { NULL };
-	crypto_pubkey_t * pubkeys[2] = { NULL };
+	assert(crypto);
+	satoshi_script_t * scripts = satoshi_script_init(NULL, crypto, NULL);
+	assert(scripts);
+	scripts->attach_tx(scripts, tx);
 	
-	// private key of the first input:
-	privkeys[0] = crypto_privkey_import_from_string(crypto, 
-		"bbc27228ddcb9209d7fd6f36b02f7dfa6252af40bb2f1cbc7a557da8027ff866");
-	
-	// private key of the second input:
-	privkeys[1] = crypto_privkey_import_from_string(crypto,
-		"619c335025c7f4012e556c2a58b2506e30b8511b53ade95ea316fd8c3286feb9");
-	assert(privkeys[0] && privkeys[1]);
-	
-	// calc pubkeys
-	pubkeys[0] = (crypto_pubkey_t *)crypto_privkey_get_pubkey(privkeys[0]);
-	pubkeys[1] = (crypto_pubkey_t *)crypto_privkey_get_pubkey(privkeys[1]);
-	
-// verify keys
-	unsigned char hash[32];
-	unsigned char pubkey_buffer[65] = { 0 };
-	unsigned char * pubkey_data = pubkey_buffer;
-	
-	int compressed_flag = 1;
-	ssize_t cb_pubkey = crypto_pubkey_export(crypto, pubkeys[0], compressed_flag, &pubkey_data);
-	assert(cb_pubkey == 33);
-	// verify pubkey of the first input
-	assert(0 == memcmp(pubkey_data, varstr_getdata_ptr(utxoes[0].scripts) + 1, cb_pubkey));
-	
-	// verify pubkey of the second input
-	cb_pubkey = crypto_pubkey_export(crypto, pubkeys[1], compressed_flag, &pubkey_data);
-	assert(cb_pubkey == 33);
-	
-	char * pubkey_hex = NULL;
-	dump_line("pubkey: ", pubkey_data, cb_pubkey);
-	hash160(pubkey_data, cb_pubkey, hash);
-	
-	dump_line("hash160(pubkey): ", hash, 20);
-	dump_line("utxo: ", varstr_getdata_ptr(utxoes[1].scripts) + 2, 20);
-	assert(0 == memcmp(hash, varstr_getdata_ptr(utxoes[1].scripts) + 2, 20));
-	
-	ssize_t cb = bin2hex(pubkey_data, cb_pubkey, &pubkey_hex);
-	assert(cb == 66);
-	assert(0 == strcasecmp(pubkey_hex, "025476c2e83188368da1ff3e292e7acafcdb3566bb0ad253f62fc70f07aeee6357"));
-	free(pubkey_hex);
-	pubkey_hex = NULL;
-	
-// import signatures
-	crypto_signature_t * sigs[2] = { NULL };
-	sigs[0] = crypto_signature_import_from_string(crypto, 
-		"3045"
-			"0221008b9d1dc26ba6a9cb62127b02742fa9d754cd3bebf337f7a55d114c8e5cdd30be"
-			"022040529b194ba3f9281a99f2b1c0a19c0489bc22ede944ccf4ecbab4cc618ef3ed");
-	
-	sigs[1] = crypto_signature_import_from_string(crypto, 
-		"3044"
-			"02203609e17b84f6a7d30c80bfa610b5b4542f32a8a0d5447a12fb1366d7f01cc44a"
-			"0220573a954c4518331561406f90300e8f3358f51928d43c212a8caed02de67eebee");
-	
-	assert(sigs[0] && sigs[1]);
-	
-	uint256_t digests[2];
-	int rc = 0;
-	unsigned char * preimage = NULL;
-	rc = segwit_v0_tx_get_digest(tx, 1, 1, &utxoes[1], &digests[1]);
-	assert(0 == rc);
-	
-	//c37af31116d1b27caf68aae9e3ac82f1477929014d5b917657d0eb49478cb670
-	printf("digest(truth): %s\n", "c37af31116d1b27caf68aae9e3ac82f1477929014d5b917657d0eb49478cb670");
-	dump_line("--> digest[1]: ", &digests[1], 32);
-	free(preimage); preimage = NULL;
-	
-	satoshi_rawtx_t rawtx[1];
-	memset(rawtx, 0, sizeof(rawtx));
-	satoshi_rawtx_attach(rawtx, tx);
-	uint256_t digest;
-	rawtx->get_digest(rawtx, 1, 1, &utxoes[1], &digest);
-	dump_line("rawtx_get_digest: ", &digest, 32);
-	assert(0 == memcmp(&digest, &digests[1], 32));
-	
+	satoshi_txin_t * txins = tx->txins;
+	for(ssize_t i = 0; i < tx->txin_count; ++i)
+	{
+		ssize_t cb_scripts = varstr_length(txins[i].scripts);
+		unsigned char * scripts_data = varstr_getdata_ptr(txins[i].scripts);
+		scripts->set_txin_info(scripts, i, &utxoes[i]);
+		
+		if(tx->has_flag && cb_scripts == 0)	 // todo: load from tx->witness_data
+		{
+		}else
+		{
+			cb = scripts->parse(scripts, 
+				satoshi_tx_script_type_txin, scripts_data, cb_scripts);
+			assert(cb == cb_scripts);
+		}
+	}
+
 	return 0;
 }
 
+/*
+2. P2SH-P2WPKH
+  The following is an unsigned transaction: 0100000001db6b1b20aa0fd7b23880be2ecbd4a98130974cf4748fb66092ac4d3ceb1a54770100000000feffffff02b8b4eb0b000000001976a914a457b684d7f0d539a46a45bbc043f35b59d0d96388ac0008af2f000000001976a914fd270b1ee6abcaea97fea7ad0402e8bd8ad6d77c88ac92040000
+  
+    nVersion:  01000000
+    txin:      01 db6b1b20aa0fd7b23880be2ecbd4a98130974cf4748fb66092ac4d3ceb1a5477 01000000 00 feffffff
+    txout:     02 b8b4eb0b00000000 1976a914a457b684d7f0d539a46a45bbc043f35b59d0d96388ac
+                  0008af2f00000000 1976a914fd270b1ee6abcaea97fea7ad0402e8bd8ad6d77c88ac
+    nLockTime: 92040000
+  
+  The input comes from a P2SH-P2WPKH witness program:
+    scriptPubKey : a9144733f37cf4db86fbc2efed2500b4f4e49f31202387, value: 10
+    redeemScript : 001479091972186c449eb1ded22b78e40d009bdf0089
+    private key  : eb696a065ef48a2192da5b28b694f87544b30fae8327c4510137a922f32c6dcf
+    public key   : 03ad1d8e89212f0b92c74d23bb710c00662ad1470198ac48c43f7d6f93a2a26873
+  
+  To sign it with a nHashType of 1 (SIGHASH_ALL):
+  
+  hashPrevouts:
+    dSHA256(db6b1b20aa0fd7b23880be2ecbd4a98130974cf4748fb66092ac4d3ceb1a547701000000)
+  = b0287b4a252ac05af83d2dcef00ba313af78a3e9c329afa216eb3aa2a7b4613a
+  
+  hashSequence:
+    dSHA256(feffffff)
+  = 18606b350cd8bf565266bc352f0caddcf01e8fa789dd8a15386327cf8cabe198
+  
+  hashOutputs:
+    dSHA256(b8b4eb0b000000001976a914a457b684d7f0d539a46a45bbc043f35b59d0d96388ac0008af2f000000001976a914fd270b1ee6abcaea97fea7ad0402e8bd8ad6d77c88ac)
+  = de984f44532e2173ca0d64314fcefe6d30da6f8cf27bafa706da61df8a226c83
+  
+  hash preimage: 01000000b0287b4a252ac05af83d2dcef00ba313af78a3e9c329afa216eb3aa2a7b4613a18606b350cd8bf565266bc352f0caddcf01e8fa789dd8a15386327cf8cabe198db6b1b20aa0fd7b23880be2ecbd4a98130974cf4748fb66092ac4d3ceb1a5477010000001976a91479091972186c449eb1ded22b78e40d009bdf008988ac00ca9a3b00000000feffffffde984f44532e2173ca0d64314fcefe6d30da6f8cf27bafa706da61df8a226c839204000001000000
+  
+    nVersion:     01000000
+    hashPrevouts: b0287b4a252ac05af83d2dcef00ba313af78a3e9c329afa216eb3aa2a7b4613a
+    hashSequence: 18606b350cd8bf565266bc352f0caddcf01e8fa789dd8a15386327cf8cabe198
+    outpoint:     db6b1b20aa0fd7b23880be2ecbd4a98130974cf4748fb66092ac4d3ceb1a547701000000
+    scriptCode:   1976a91479091972186c449eb1ded22b78e40d009bdf008988ac
+    amount:       00ca9a3b00000000
+    nSequence:    feffffff
+    hashOutputs:  de984f44532e2173ca0d64314fcefe6d30da6f8cf27bafa706da61df8a226c83
+    nLockTime:    92040000
+    nHashType:    01000000
+  
+  sigHash:      64f3b0f4dd2bb3aa1ce8566d220cc74dda9df97d8490cc81d89d735c92e59fb6
+  signature:    3044022047ac8e878352d3ebbde1c94ce3a10d057c24175747116f8288e5d794d12d482f0220217f36a485cae903c713331d877c1f64677e3622ad4010726870540656fe9dcb01
+  
+  The serialized signed transaction is: 01000000000101db6b1b20aa0fd7b23880be2ecbd4a98130974cf4748fb66092ac4d3ceb1a5477010000001716001479091972186c449eb1ded22b78e40d009bdf0089feffffff02b8b4eb0b000000001976a914a457b684d7f0d539a46a45bbc043f35b59d0d96388ac0008af2f000000001976a914fd270b1ee6abcaea97fea7ad0402e8bd8ad6d77c88ac02473044022047ac8e878352d3ebbde1c94ce3a10d057c24175747116f8288e5d794d12d482f0220217f36a485cae903c713331d877c1f64677e3622ad4010726870540656fe9dcb012103ad1d8e89212f0b92c74d23bb710c00662ad1470198ac48c43f7d6f93a2a2687392040000
+    nVersion:  01000000
+    marker:    00
+    flag:      01
+    txin:      01 db6b1b20aa0fd7b23880be2ecbd4a98130974cf4748fb66092ac4d3ceb1a5477 01000000 1716001479091972186c449eb1ded22b78e40d009bdf0089 feffffff
+    txout:     02 b8b4eb0b00000000 1976a914a457b684d7f0d539a46a45bbc043f35b59d0d96388ac
+                  0008af2f00000000 1976a914fd270b1ee6abcaea97fea7ad0402e8bd8ad6d77c88ac
+    witness    02 473044022047ac8e878352d3ebbde1c94ce3a10d057c24175747116f8288e5d794d12d482f0220217f36a485cae903c713331d877c1f64677e3622ad4010726870540656fe9dcb01 2103ad1d8e89212f0b92c74d23bb710c00662ad1470198ac48c43f7d6f93a2a26873
+    nLockTime: 92040000
+*/
+
+
+
+int test_segwit_v0(int argc, char ** argv)
+{
+	test_native_p2wpkh(argc, argv);
+	return 0;
+}
 #endif
 
 

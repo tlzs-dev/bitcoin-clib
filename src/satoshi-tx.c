@@ -582,9 +582,14 @@ static inline varstr_t * get_p2wpkh_redeem_scripts(const satoshi_txout_t * utxo)
 	return (varstr_t *)redeem_scripts;
 }
 
-varstr_t * satoshi_txin_get_redeem_scripts(int is_segwit, const satoshi_txout_t * utxo)
+varstr_t * satoshi_txin_get_redeem_scripts(
+	unsigned char segwit_program_version_byte,	// [ 0 .. 16 ]
+	unsigned char segwit_program_length,	// MUST be 20 or 32 for segwit_v0
+	const satoshi_txout_t * utxo)
 {
-	if(!is_segwit) return varstr_clone(utxo->scripts);
+	if(segwit_program_version_byte == -1) return varstr_clone(utxo->scripts);
+	assert(segwit_program_version_byte == 0);	// segwit_v0 only
+	
 	return get_p2wpkh_redeem_scripts(utxo);
 }
 				

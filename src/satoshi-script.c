@@ -1038,25 +1038,61 @@ static ssize_t scripts_parse(struct satoshi_script * scripts,
 	assert(main_stack && alt);
 	
 	int is_p2sh = 0;
-	int segwit_flag = 0;
-	if(p[0] == 0)
+	unsigned char segwit_version_byte = -1;
+	unsigned char program_length = 0;
+	satoshi_txin_t * cur_txin = NULL;
+	
+	switch(type)
 	{
-		if(type == satoshi_tx_script_type_txin) {
+	case satoshi_tx_script_type_txin:	// parse p2sh flags
+		if(p[0] == 0) {
 			is_p2sh = 1;
-		}else
-		{
-			segwit_flag = 1;
+			++p;
 		}
-		++p;
+		break;
+	case satoshi_tx_script_type_txout:	// parse segwit flags
+	/**
+	 * check Witness flags: 
+	 * A scriptPubKey (or redeemScript as defined in BIP16/P2SH) that 
+	 * consists of a 1-byte push opcode (for 0 to 16) 
+	 * followed by a data push between 2 and 40 bytes gets a new special meaning. 
+	 * The value of the first push is called the "version byte". 
+	 * The following byte vector pushed is called the "witness program".
+	*/
+		if(p[0] >= 0 && p[0] <= 16)
+		{
+			segwit_version_byte = *p++;
+			program_length = *p;
+		}
+		
+		// if !cur_txin->is_p2sh, set cur_txin->redeem_scripts before parse 
+		assert(priv->txin_index >= 0 && priv->txin_index < priv->tx->txin_count);
+		cur_txin = &priv->tx->txins[priv->txin_index];
+		if(NULL == cur_txin->redeem_scripts)
+		{
+			cur_txin->redeem_scripts = satoshi_txin_get_redeem_scripts(segwit_version_byte, program_length, priv->utxo);
+			if(NULL == cur_txin->redeem_scripts)
+			{
+				scripts_parser_error_handler("parse txout scripts failed: %s", "load redeem scripts failed.");
+			}
+		}
+		break;
+	default:
+		break;
 	}
 	
-	(void)((segwit_flag));	// todo: ...
-	ssize_t data_size = 0;
+	// pre-process
 	while(p < p_end)
 	{
 		int rc = 0;
+		ssize_t data_size = 0;
 		uint8_t op_code = *p++;
 		
+		if(op_code == satoshi_script_opcode_op_false) {
+			main_stack->push(main_stack, s_sdata_false);
+			continue;
+		}
+
 		if(op_code <= satoshi_script_opcode_op_pushdata4)
 		{
 			assert(op_code < satoshi_script_opcode_op_pushdata4); // LIMIT the scripts length can not exceed 65535 bytes
@@ -1066,7 +1102,6 @@ static ssize_t scripts_parse(struct satoshi_script * scripts,
 			
 			if(data_size < 0) return -1;
 			p += data_size;
-			
 			continue;
 		}
 		
@@ -1077,8 +1112,8 @@ static ssize_t scripts_parse(struct satoshi_script * scripts,
 			return -1;
 		}
 		
-		if(op_code >= satoshi_script_opcode_op_1 && 
-			op_code <= satoshi_script_opcode_op_16)
+		if(op_code >= satoshi_script_opcode_op_1   // ( op_1 == op_true)
+			&& op_code <= satoshi_script_opcode_op_16)
 		{
 			debug_printf("parse op_1 .. op_16 (0x%.2x)", op_code);
 			op_code -= (satoshi_script_opcode_op_1 - 1);
@@ -1091,12 +1126,10 @@ static ssize_t scripts_parse(struct satoshi_script * scripts,
 		switch(op_code)
 		{
 		// Constants:
-		case satoshi_script_opcode_op_false:
-			main_stack->push(main_stack, s_sdata_false);
-			continue;
-		case satoshi_script_opcode_op_true:
-			main_stack->push(main_stack, s_sdata_true);
-			continue;
+		//~ case satoshi_script_opcode_op_true:		
+			//~ main_stack->push(main_stack, s_sdata_true);
+			//~ continue;
+			
 		// crypto
 		case satoshi_script_opcode_op_ripemd160:
 		case satoshi_script_opcode_op_hash160:
@@ -1204,7 +1237,8 @@ static ssize_t scripts_parse(struct satoshi_script * scripts,
 		scripts_parser_error_handler("parse scripts failed or invalid payload length");
 	}
 	
-	if(type == satoshi_tx_script_type_txin)
+	// post-process
+	if(type == satoshi_tx_script_type_txin)	
 	{
 		satoshi_tx_t * tx = priv->tx;
 		ssize_t txin_index = priv->txin_index;
@@ -1212,14 +1246,7 @@ static ssize_t scripts_parse(struct satoshi_script * scripts,
 		satoshi_txin_t * cur_txin = &tx->txins[txin_index];
 		cur_txin->is_p2sh = is_p2sh;
 		
-		if(!is_p2sh) {
-			if(NULL == cur_txin->redeem_scripts)
-			{
-				// set p2pk or p2phk or p2wphk txin's redeem scripts
-				cur_txin->redeem_scripts = satoshi_txin_get_redeem_scripts(tx->has_flag, priv->utxo);
-			}
-		}
-		else { // is_p2sh
+		if(is_p2sh) { // need to parse and set cur_txin->redeem_scripts
 			satoshi_script_data_t * sdata = NULL;
 			ssize_t cb = 0;
 			
