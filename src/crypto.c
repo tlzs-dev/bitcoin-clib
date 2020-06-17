@@ -87,6 +87,22 @@ crypto_signature_t * crypto_signature_import(crypto_context_t * crypto, const un
 	return sig;
 }
 
+crypto_signature_t * crypto_signature_import_from_string(crypto_context_t * crypto, const char * sig_der_hex)
+{
+	assert(sig_der_hex);
+	ssize_t cb = strlen(sig_der_hex);
+	assert(cb > 0 && 0 == (cb % 2) && cb < 200);
+	
+	unsigned char data[100] = { 0 };
+	void * p_data = data;
+	ssize_t cb_data = hex2bin(sig_der_hex, cb, &p_data);
+	assert(cb_data == (cb / 2));
+	
+	crypto_signature_t * sig = crypto_signature_import(crypto, data, cb_data);
+	return sig;
+}
+
+
 ssize_t crypto_signature_export(crypto_context_t * crypto, const crypto_signature_t * sig, unsigned char ** p_sig_der)
 {
 	assert(crypto && crypto->priv);
@@ -202,6 +218,22 @@ void crypto_privkey_free(crypto_privkey_t * privkey)
 	free(privkey);
 }
 
+crypto_privkey_t * crypto_privkey_import_from_string(crypto_context_t * crypto, const char * secdata_hex)
+{
+	assert(secdata_hex);
+	ssize_t cb = strlen(secdata_hex);
+	assert(cb > 0 && cb <= 64);
+	
+	unsigned char data[32] = { 0 };
+	void * p_data = data;
+	ssize_t cb_data = hex2bin(secdata_hex, cb, &p_data);
+	assert(cb_data == (cb / 2));
+	
+	crypto_privkey_t * privkey = crypto_privkey_import(crypto, data, cb_data);
+	memset(data, 0, sizeof(data));
+	return privkey;
+}
+
 crypto_pubkey_t * crypto_pubkey_import(crypto_context_t * crypto, const unsigned char * pubkey_data, size_t length)
 {
 	assert(crypto && crypto->priv);
@@ -268,6 +300,19 @@ void crypto_pubkey_free(crypto_pubkey_t * pubkey)
 	free(pubkey);
 }
 
+crypto_pubkey_t * crypto_pubkey_import_from_string(crypto_context_t * crypto, const char * pubkey_hex)
+{
+	assert(crypto && pubkey_hex);
+	int cb_hex = strlen(pubkey_hex);
+	assert(cb_hex == 66 || cb_hex == 130);
+	
+	unsigned char pubkey_data[65] = {0};
+	void * p_data = pubkey_data;
+	ssize_t cb_pubkey = hex2bin(pubkey_hex, cb_hex, (void **)&p_data);
+	assert(cb_pubkey == 33 || cb_pubkey == 65);
+	
+	return crypto_pubkey_import(crypto, pubkey_data, cb_pubkey);
+}
 
 
 crypto_context_private_t * crypto_context_private_new(crypto_context_t * crypto)

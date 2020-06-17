@@ -54,16 +54,20 @@ ssize_t crypto_privkey_export(crypto_context_t * crypto,
 	unsigned char ** p_secdata);
 void crypto_privkey_free(crypto_privkey_t * privkey);
 const crypto_pubkey_t * crypto_privkey_get_pubkey(crypto_privkey_t * privkey);
+crypto_privkey_t * crypto_privkey_import_from_string(crypto_context_t * crypto, const char * secdata_hex);
+
 
 crypto_pubkey_t * crypto_pubkey_import(crypto_context_t * crypto, const unsigned char * pubkey_data, size_t length);
 ssize_t crypto_pubkey_export(crypto_context_t * crypto, 
 	crypto_pubkey_t * pubkey, int compressed_flag, 
 	unsigned char ** p_pubkey_data);
 void crypto_pubkey_free(crypto_pubkey_t * pubkey);
+crypto_pubkey_t * crypto_pubkey_import_from_string(crypto_context_t * crypto, const char * pubkey_hex);
 
 crypto_signature_t * crypto_signature_import(crypto_context_t * crypto, const unsigned char * sig_der, size_t length);
 ssize_t crypto_signature_export(crypto_context_t * crypto, const crypto_signature_t * sig, unsigned char ** p_sig_der);
 void crypto_signature_free(crypto_signature_t * sig);
+crypto_signature_t * crypto_signature_import_from_string(crypto_context_t * crypto, const char * sig_der_hex);
 
 #ifdef __cplusplus
 }

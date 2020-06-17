@@ -65,6 +65,23 @@ int satoshi_tx_get_digest(
 	uint256_t * hash);
 
 varstr_t * satoshi_txin_get_redeem_scripts(int is_segwit, const satoshi_txout_t * utxo);
+void satoshi_tx_dump(const satoshi_tx_t * tx);
+
+/**
+ * @deprecated 
+ * 	keep these functions for test use only
+ * @{
+ */
+int segwit_v0_tx_get_digest(const satoshi_tx_t * tx, 
+	int cur_index, 		// txin index
+	uint32_t hash_type,
+	const satoshi_txout_t * utxo, // prevout
+	uint256_t * hash
+);
+/**
+ * @}
+ */
+
 
 #ifdef __cplusplus
 }
