@@ -684,7 +684,7 @@ static inline int parse_op_checksig(satoshi_script_stack_t * stack, satoshi_scri
 	}else
 	{
 		memset(&digest, 0, sizeof(digest));
-		rc = satoshi_rawtx_get_digest(rawtx, txin_index, hash_type, utxo, &digest);
+		rc = rawtx->get_digest(rawtx, txin_index, hash_type, utxo, &digest);
 			
 		if(rc) {
 			scripts_parser_error_handler("get tx_digest failed.");
@@ -814,7 +814,7 @@ static inline int parse_op_checkmultisig(satoshi_script_stack_t * stack, satoshi
 		// recalulate tx_digest if need
 		if(sighash_type != prev_sighash_type)
 		{
-			rc = satoshi_rawtx_get_digest(rawtx, txin_index, 
+			rc = rawtx->get_digest(rawtx, txin_index, 
 				sighash_type, 
 				utxo, 
 				&digest);
@@ -1519,7 +1519,7 @@ int verify_tx(satoshi_script_t * scripts,
 		
 		satoshi_tx_get_digest(tx, i, 1, utxo, &hash[0]);
 
-		satoshi_rawtx_get_digest(rawtx, i, 1, utxo, &hash[1]);
+		rawtx->get_digest(rawtx, i, 1, utxo, &hash[1]);
 		dump_line("   tx_digest: ", &hash[0], 32);
 		dump_line("rawtx_digest: ", &hash[1], 32);
 		assert(0 == memcmp(&hash[0], &hash[1], 32));

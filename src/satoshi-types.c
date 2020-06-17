@@ -157,6 +157,8 @@ uint64_t varint_get(const varint_t * vint)
 /*********************************************************
  * varstr
 *********************************************************/
+const varstr_t varstr_empty[1];	// {{ .vch = {0} }
+
 varstr_t * varstr_new(const unsigned char * data, size_t length)
 {
 	size_t vint_size = varint_calc_size(length);
@@ -175,12 +177,14 @@ varstr_t * varstr_new(const unsigned char * data, size_t length)
 }
 void varstr_free(varstr_t * vstr)
 {
-	free(vstr);
+	if(vstr != varstr_empty) free(vstr);
 }
 
 varstr_t * varstr_clone(const varstr_t * vstr)
 {
 	if(NULL == vstr) return NULL;
+	if(vstr == varstr_empty) return (varstr_t *)varstr_empty;
+	
 	ssize_t size = varstr_size(vstr);
 	assert(size > 0);
 	
@@ -192,7 +196,7 @@ varstr_t * varstr_clone(const varstr_t * vstr)
 
 varstr_t * varstr_resize(varstr_t * vstr, size_t new_len)
 {
-	if(NULL == vstr) return varstr_new(NULL, new_len);
+	if(NULL == vstr || vstr == varstr_empty) return varstr_new(NULL, new_len);
 	
 	size_t old_len = varstr_length(vstr);
 	if(old_len == new_len) return vstr;
@@ -223,7 +227,7 @@ size_t varstr_size(const varstr_t * vstr)
 
 varstr_t * varstr_set(varstr_t * vstr, const unsigned char * data, size_t length)
 {
-	if(NULL == vstr) return varstr_new(data, length);
+	if(NULL == vstr || vstr == varstr_empty) return varstr_new(data, length);
 	
 	unsigned char * p = (unsigned char *)vstr;
 	varint_set((varint_t *)p, length);
@@ -595,7 +599,7 @@ void satoshi_txout_cleanup(satoshi_txout_t * txout)
 {
 	if(txout && txout->scripts)
 	{
-		free(txout->scripts);
+		varstr_free(txout->scripts);
 		txout->scripts = NULL;
 	}
 }

@@ -68,6 +68,7 @@ typedef struct varstr
 {
 	unsigned char vch[1];
 }varstr_t;
+extern const varstr_t varstr_empty[1];
 
 /**
  * @ingroup varstr

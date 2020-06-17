@@ -38,8 +38,15 @@ typedef struct satoshi_rawtx
 	satoshi_txin_t * txins;
 
 	// internal states: pre-hash <-- sha(common_data)
-	sha256_ctx_t sha[1];	
+	sha256_ctx_t sha[1];
 	
+	// virtual function
+	int (* get_digest)(struct satoshi_rawtx * rawtx, 
+		ssize_t cur_index, // current txin index
+		uint32_t hash_type, 
+		const satoshi_txout_t * utxo, 
+		uint256_t * digest);
+
 	// legacy tx states:
 	int last_hashed_txin_index;	// pre-hashed index
 	
@@ -50,24 +57,15 @@ typedef struct satoshi_rawtx
 satoshi_rawtx_t * satoshi_rawtx_attach(satoshi_rawtx_t * rawtx, satoshi_tx_t * tx);
 void satoshi_rawtx_detach(satoshi_rawtx_t * rawtx);
 
-int satoshi_rawtx_get_digest(satoshi_rawtx_t * rawtx, 
-	int txin_index, 
-	uint32_t hash_type,
-	const satoshi_txout_t * utxo,
-	uint256_t * hash);
-
-
-
 int satoshi_tx_get_digest(
 	satoshi_tx_t * tx, 
 	int txin_index, 
 	uint32_t hash_type,
 	const satoshi_txout_t * utxo,
 	uint256_t * hash);
-	
-
 
 varstr_t * satoshi_txin_get_redeem_scripts(int is_segwit, const satoshi_txout_t * utxo);
+
 #ifdef __cplusplus
 }
 #endif
