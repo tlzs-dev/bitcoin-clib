@@ -492,17 +492,36 @@ int test_native_p2wpkh(int argc, char ** argv)
 	satoshi_txin_t * txins = tx->txins;
 	for(ssize_t i = 0; i < tx->txin_count; ++i)
 	{
-		ssize_t cb_scripts = varstr_length(txins[i].scripts);
-		unsigned char * scripts_data = varstr_getdata_ptr(txins[i].scripts);
-		scripts->set_txin_info(scripts, i, &utxoes[i]);
+		varstr_t * vscripts = txins[i].scripts;
+		ssize_t cb_scripts = varstr_length(vscripts);
 		
-		if(tx->has_flag && cb_scripts == 0)	 // todo: load from tx->witness_data
-		{
-		}else
+		if(cb_scripts > 0)	// legacy tx
 		{
 			cb = scripts->parse(scripts, 
-				satoshi_tx_script_type_txin, scripts_data, cb_scripts);
+				satoshi_tx_script_type_txin, varstr_getdata_ptr(vscripts), cb_scripts);
 			assert(cb == cb_scripts);
+		}else { // unsigned rawtx or segwit tx
+			if(tx->has_flag)
+			{
+				assert(tx->witnesses);
+				bitcoin_tx_witness_t * witness = &tx->witnesses[i];
+				assert(witness);
+				
+				for(ssize_t ii = 0; ii < witness->num_items; ++ii)
+				{
+					vscripts = witness->items[ii];
+					cb_scripts = varstr_size(vscripts);
+					if(cb_scripts > 0)
+					{
+						cb = scripts->parse(scripts, 
+							satoshi_tx_script_type_txin, (unsigned char *)vscripts , cb_scripts);
+							assert(cb == cb_scripts);
+					}
+				}
+				
+			}
+
+			
 		}
 	}
 
