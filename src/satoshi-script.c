@@ -56,6 +56,55 @@ static void auto_free_ptr(void * ptr)
 	}
 }
 
+/**
+ * utils
+ */
+ssize_t satoshi_script_pushdata_code_from_varstr(const varstr_t * vscripts, unsigned char ** p_script_code)
+{
+	assert(p_script_code);
+	uint32_t length = varstr_length(vscripts);
+	
+	assert(length >= 0);
+	unsigned char * script_code = *p_script_code;
+	
+	if(NULL == script_code)
+	{
+		script_code = malloc(length + 5);	// max buffer-size:  op_pushdata4 | (uint32_t) | { data }
+		assert(script_code);
+		
+		*p_script_code = script_code;
+	}
+	
+	if(length < satoshi_script_opcode_op_pushdata1)	// just copy 
+	{
+		++length;	// append (op_code = length) 
+		memcpy(script_code, vscripts, length);
+		return length;
+	}
+	
+	// need to convert to push_data code
+	unsigned char * p = &script_code[1];
+	if(length > 0xffff) // 4 bytes
+	{
+		script_code[0] = satoshi_script_opcode_op_pushdata4;
+		memcpy(p, &length, 4);
+		p += 4;
+	}else if(length > 0xff) // 2 bytes
+	{
+		script_code[0] = satoshi_script_opcode_op_pushdata2;
+		memcpy(p, &length, 2);
+		p += 2;
+	}else
+	{
+		script_code[0] = satoshi_script_opcode_op_pushdata1;
+		*p++ = length;
+	}
+	
+	memcpy(p, varstr_getdata_ptr(vscripts), length);
+	return (p - script_code) + length;
+}
+
+
 
 /*******************************************************
  * satoshi_script_data

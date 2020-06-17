@@ -250,6 +250,12 @@ satoshi_script_t * satoshi_script_init(satoshi_script_t * scripts,
 void satoshi_script_reset(satoshi_script_t * scripts);
 void satoshi_script_cleanup(satoshi_script_t * scripts);
 
+
+/**
+ *  utils
+ */
+ssize_t satoshi_script_pushdata_code_from_varstr(const varstr_t * vscripts, unsigned char ** p_script_code);
+
 #ifdef __cplusplus
 }
 #endif

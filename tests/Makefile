@@ -48,7 +48,9 @@ test_blockchain: $(BASE_OBJECTS) $(UTILS_OBJECTS) $(OBJ_DIR)/satoshi-types.o $(S
 	$(CC) -o $@ $(CFLAGS) $(LIBS) $^ -D_TEST_BITCOIN_BLOCKCHAIN -D_STAND_ALONE
 
 satoshi-script: test_satoshi-script
-test_satoshi-script: $(BASE_OBJECTS) $(UTILS_OBJECTS) $(SRC_DIR)/satoshi-types.c $(SRC_DIR)/satoshi-script.c $(SRC_DIR)/crypto.c $(SRC_DIR)/satoshi-tx.c
+test_satoshi-script: $(BASE_OBJECTS) $(UTILS_OBJECTS) $(SRC_DIR)/satoshi-types.c \
+		$(SRC_DIR)/satoshi-script.c $(SRC_DIR)/crypto.c \
+		$(SRC_DIR)/satoshi-tx.c	$(SRC_DIR)/segwit-tx.c
 	echo "build $@ ..."
 	$(CC) -o $@ $(CFLAGS) $(LIBS) $^ \
 		-D_TEST_SATOSHI_SCRIPT -D_STAND_ALONE -D_DEBUG -lsecp256k1

@@ -503,20 +503,33 @@ int test_native_p2wpkh(int argc, char ** argv)
 		}else { // unsigned rawtx or segwit tx
 			if(tx->has_flag)
 			{
+				/**
+				 * The design of 'witness-data' might be affected by its implementation language, 
+				 * adding some unnecessary complexity and slightly affecting performance.
+				 * (The complexity is hidden by the programming language used.)
+				 * 
+				 * If it uses the same format as legacy txin to keep current witness_data (just use plain varstr),
+				 * it will be more convenient for general purpose programming.
+				 * 
+				 * Here, since each pushdata op is stored separately, 
+				 * we have to do some additional encoding processing.
+				 */
 				assert(tx->witnesses);
 				bitcoin_tx_witness_t * witness = &tx->witnesses[i];
 				assert(witness);
 				
 				for(ssize_t ii = 0; ii < witness->num_items; ++ii)
 				{
-					vscripts = witness->items[ii];
-					cb_scripts = varstr_size(vscripts);
+					unsigned char * script_code = NULL;
+					cb_scripts = satoshi_script_pushdata_code_from_varstr(witness->items[ii], &script_code);
 					if(cb_scripts > 0)
 					{
 						cb = scripts->parse(scripts, 
-							satoshi_tx_script_type_txin, (unsigned char *)vscripts , cb_scripts);
-							assert(cb == cb_scripts);
+							satoshi_tx_script_type_txin, (unsigned char *)script_code , cb_scripts);
+						assert(cb == cb_scripts);
 					}
+					
+					free(script_code);
 				}
 				
 			}
