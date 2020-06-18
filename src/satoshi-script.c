@@ -1066,17 +1066,180 @@ label_error:
 	return -1;
 }
 
+varstr_t * satoshi_script_generate_p2pkh_script(const unsigned char * h160, ssize_t length)
+{
+	assert(h160 && length == 20);
+	static const unsigned char scripts_template[] = {
+		[0] = 0x19,		// script_code length: 25 bytes
+		[1] = satoshi_script_opcode_op_dup,
+		[2] = satoshi_script_opcode_op_hash160,
+		[3] = 20,	// h160 size
+		// [4] .. [23]: hash160 result
+		[24] = satoshi_script_opcode_op_equalverify,
+		[25] = satoshi_script_opcode_op_checksig
+	};
+	
+	unsigned char * vscripts = calloc(1, sizeof(scripts_template));
+	assert(vscripts);
+	memcpy(vscripts, scripts_template, sizeof(scripts_template));
+	
+	memcpy(&vscripts[4], h160, 20); // copy h160 data
+	return (varstr_t *)vscripts;
+}
+
+/**
+ * function ssize_t scripts_parse()
+ *  @param scripts		this
+ *  @param type			txin-scripts, txout-scripts or free-scripts
+ *  @param payload		script_code
+ *  @param length		length of the payload(script_code)
+ *  
+ *  @return the number of bytes successfully parsed, -1 on error
+ *  
+ *  @details	
+ *     When the type is type_txin or type_txout, some processing needs to be appended
+ * to simplify the check-signature operations. (provides the data required for rawtx->get_digest())
+ * 
+ *      1. type_txin: need some post-processing 
+ *          if it is a p2sh scripts: 
+ *              pop the top item from the main_stack to get the redeem_scripts;
+ *              set cur_txin->redeem_scripts = varstr(redeem_scripts);
+ *              parse the redeem_scripts;
+ *          endif
+ *      2. type_txout: need some pre-processing
+ * 			check_version byte to determine the script type;
+ *          if the script is a segwit program:
+ *              get the length of segwit_program, 
+ *              if length == 20, the set cur_txin->redeem_scripts = generate_p2pkh_script(segwit_program);
+ *              if length == 32: 
+ *                  push all items of tx->witnesses[cur_txin_index] to the main_stack;
+ *                  pop the top item from the main_stack to get the redeem_scripts;
+ *                  set cur_txin->redeem_scripts = varstr(redeem_scripts);
+ *                  parse the redeem_scripts;
+ *              else return -1 ( support segwit_v0 program only )
+ *          else if (NULL == cur_txin->redeem_scripts && !cur_txin->is_p2sh):
+ *              set cur_txin->redeem_scripts = varstr_new(script_code);	// <== utxo->scripts
+ *          endif
+ * 
+ * @{
+ */
+static inline int txin_p2sh_scripts_post_process(satoshi_script_t * scripts, satoshi_tx_t * tx, ssize_t txin_index)
+{
+	assert(tx && tx->txins);
+	assert(txin_index >= 0 && txin_index < tx->txin_count);
+	
+	satoshi_txin_t * txin = &tx->txins[txin_index];
+	txin->is_p2sh = 1;
+	satoshi_script_data_t * sdata = NULL;
+	ssize_t cb = 0;
+	
+	satoshi_script_stack_t * main_stack = scripts->main_stack;
+	// parse redeem scripts;
+	sdata = main_stack->pop(main_stack);
+	if(NULL == sdata || sdata->type < satoshi_script_data_type_varstr)
+	{
+		fprintf(stderr, "invalid redeem scripts\n");
+		satoshi_script_data_free(sdata);
+		return -1;
+	}
+	
+	debug_printf("parse redeem_scripts %p, length=%ld...", sdata->data, (long)sdata->size);
+	dump_line("redeem scripts: ", sdata->data, sdata->size);
+	
+	txin->redeem_scripts = varstr_new(sdata->data, sdata->size);
+	
+	cb = scripts->parse(scripts, 
+		satoshi_tx_script_type_p2sh_redeem_scripts, 
+		sdata->data, sdata->size);
+	
+	if(cb == sdata->size) // if parsed ok, push back redeem_scripts
+	{
+		/**
+		 * There might be a bug on p2sh design:
+		 * By definition, the last op_code(OP_CHECKMULTISIG) will push a 'true/false' value to the stack, 
+		 * but nowhere else can this value be used.
+		 * It might be more reasonable if OP_CHECKMULTISIGVERIFY is used here.
+		 * 
+		 * so, when we are processing the txin scripts, 
+		 * we need to manually pop this extra value from the stack before push back redeem scripts
+		 */
+		satoshi_script_data_free(main_stack->pop(main_stack));
+		
+		// push back redeem_scripts
+		main_stack->push(main_stack, sdata);
+	}else
+	{
+		satoshi_script_data_free(sdata);
+		return -1;
+	}
+
+	return 0;
+}
+
+static inline const unsigned char * txout_scripts_pre_process(satoshi_script_t * scripts, 
+	satoshi_tx_t * tx, ssize_t txin_index,
+	const unsigned char * p, const unsigned char * p_end)
+{
+	/**
+	 * check Witness flags: 
+	 * A scriptPubKey (or redeemScript as defined in BIP16/P2SH) that 
+	 * consists of a 1-byte push opcode (for 0 to 16) 
+	 * followed by a data push between 2 and 40 bytes gets a new special meaning. 
+	 * The value of the first push is called the "version byte". 
+	 * The following byte vector pushed is called the "witness program".
+	*/
+	
+	assert(tx && tx->txins);
+	assert(txin_index < tx->txin_count);
+	assert(p < p_end);
+	
+	satoshi_txin_t * cur_txin = &tx->txins[txin_index];
+	
+	if(p[0] > 16) { // legacy txout
+		if(NULL == cur_txin->redeem_scripts && !cur_txin->is_p2sh)
+		{
+			// use current utxo's scripts directly
+			cur_txin->redeem_scripts = varstr_new(p, (p_end - p));		
+		}
+		return p;
+	}
+	
+	// segwit program
+	unsigned char version_byte = *p++;
+	assert(version_byte == 0);		// currently only supports segwit_v0
+	
+	if(p > p_end) return NULL;
+	
+	unsigned char program_length = p[0];
+	if((p + program_length) > p_end) return NULL;
+	
+	if(program_length == 20)
+	{
+		cur_txin->redeem_scripts = satoshi_script_generate_p2pkh_script(p + 1, program_length);
+		return p;
+	}else if(program_length == 32)
+	{
+		// todo
+	}else
+	{
+		fprintf(stderr, "[ERROR]: %s(): invalid segwit program length (%u)\n", 
+			__FUNCTION__, 
+			(uint32_t)program_length);
+	}
+	return NULL;
+}
+
 static ssize_t scripts_parse(struct satoshi_script * scripts, 
 	enum satoshi_tx_script_type type, 	// if is_txin, only allows opcode < OP_PUSHDATA4
 	const unsigned char * payload, size_t length)
 {
 	assert(scripts && scripts->priv && payload && (length > 0));
-	bitcoin_blockchain_t * chain = scripts->user_data;
+	
+	int rc = 0;
+	int is_p2sh = 0;
 	
 	satoshi_script_private_t * priv = scripts->priv;
 	priv->type = type;
-	
-	UNUSED(chain);
 	
 	const unsigned char * p = payload;
 	const unsigned char * p_end = p + length;
@@ -1085,12 +1248,6 @@ static ssize_t scripts_parse(struct satoshi_script * scripts,
 	satoshi_script_stack_t * alt = scripts->alt_stack;
 	
 	assert(main_stack && alt);
-	
-	int is_p2sh = 0;
-	unsigned char segwit_version_byte = -1;
-	unsigned char program_length = 0;
-	satoshi_txin_t * cur_txin = NULL;
-	
 	switch(type)
 	{
 	case satoshi_tx_script_type_txin:	// parse p2sh flags
@@ -1100,37 +1257,15 @@ static ssize_t scripts_parse(struct satoshi_script * scripts,
 		}
 		break;
 	case satoshi_tx_script_type_txout:	// parse segwit flags
-	/**
-	 * check Witness flags: 
-	 * A scriptPubKey (or redeemScript as defined in BIP16/P2SH) that 
-	 * consists of a 1-byte push opcode (for 0 to 16) 
-	 * followed by a data push between 2 and 40 bytes gets a new special meaning. 
-	 * The value of the first push is called the "version byte". 
-	 * The following byte vector pushed is called the "witness program".
-	*/
-		if(p[0] >= 0 && p[0] <= 16)
-		{
-			segwit_version_byte = *p++;
-			program_length = *p;
-		}
-		
-		// if !cur_txin->is_p2sh, set cur_txin->redeem_scripts before parse 
-		assert(priv->txin_index >= 0 && priv->txin_index < priv->tx->txin_count);
-		cur_txin = &priv->tx->txins[priv->txin_index];
-		if(NULL == cur_txin->redeem_scripts)
-		{
-			cur_txin->redeem_scripts = satoshi_txin_get_redeem_scripts(segwit_version_byte, program_length, priv->utxo);
-			if(NULL == cur_txin->redeem_scripts)
-			{
-				scripts_parser_error_handler("parse txout scripts failed: %s", "load redeem scripts failed.");
-			}
+		p = txout_scripts_pre_process(scripts, priv->tx, priv->txin_index, p, p_end);
+		if(NULL == p) {
+			scripts_parser_error_handler("pre-process txout scripts failed");
 		}
 		break;
 	default:
 		break;
 	}
 	
-	// pre-process
 	while(p < p_end)
 	{
 		int rc = 0;
@@ -1286,58 +1421,12 @@ static ssize_t scripts_parse(struct satoshi_script * scripts,
 		scripts_parser_error_handler("parse scripts failed or invalid payload length");
 	}
 	
-	// post-process
-	if(type == satoshi_tx_script_type_txin)	
+	
+	// post-processing
+	if(type == satoshi_tx_script_type_txin && is_p2sh)	
 	{
-		satoshi_tx_t * tx = priv->tx;
-		ssize_t txin_index = priv->txin_index;
-		assert(tx && txin_index >= 0 && txin_index < tx->txin_count);
-		satoshi_txin_t * cur_txin = &tx->txins[txin_index];
-		cur_txin->is_p2sh = is_p2sh;
-		
-		if(is_p2sh) { // need to parse and set cur_txin->redeem_scripts
-			satoshi_script_data_t * sdata = NULL;
-			ssize_t cb = 0;
-			
-			// parse redeem scripts;
-			sdata = main_stack->pop(main_stack);
-			if(NULL == sdata || sdata->type < satoshi_script_data_type_varstr)
-			{
-				fprintf(stderr, "invalid redeem scripts\n");
-				satoshi_script_data_free(sdata);
-				return -1;
-			}
-			
-			debug_printf("parse redeem_scripts %p, length=%ld...", sdata->data, (long)sdata->size);
-			dump_line("redeem scripts: ", sdata->data, sdata->size);
-			
-			cur_txin->redeem_scripts = varstr_new(sdata->data, sdata->size);
-			
-			cb = scripts->parse(scripts, 
-				satoshi_tx_script_type_p2sh_redeem_scripts, 
-				sdata->data, sdata->size);
-			
-			if(cb == sdata->size) // if parsed ok, push back redeem_scripts
-			{
-				/**
-				 * There might be a bug on p2sh design:
-				 * By definition, the last op_code(OP_CHECKMULTISIG) will push a 'true/false' value to the stack, 
-				 * but nowhere else can this value be used.
-				 * It might be more reasonable if OP_CHECKMULTISIGVERIFY is used here.
-				 * 
-				 * so, when we are processing the txin scripts, 
-				 * we need to manually pop this extra value from the stack before push back redeem scripts
-				 */
-				satoshi_script_data_free(main_stack->pop(main_stack));
-				
-				// push back redeem_scripts
-				main_stack->push(main_stack, sdata);
-			}else
-			{
-				satoshi_script_data_free(sdata);
-				scripts_parser_error_handler("parse redeem scripts failed");
-			}
-		}
+		rc = txin_p2sh_scripts_post_process(scripts, priv->tx, priv->txin_index);
+		if(rc) scripts_parser_error_handler("parse redeem scripts failed");
 	}
 	
 	return (p_end - payload);

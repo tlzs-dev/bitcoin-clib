@@ -550,6 +550,8 @@ void satoshi_tx_dump(const satoshi_tx_t * tx)
 
 /**
  * set p2pk or p2phk or p2wphk txin's redeem scripts
+ * 
+ * @deprecated
  */
 static inline varstr_t * get_p2wpkh_redeem_scripts(const satoshi_txout_t * utxo)
 {
@@ -582,6 +584,9 @@ static inline varstr_t * get_p2wpkh_redeem_scripts(const satoshi_txout_t * utxo)
 	return (varstr_t *)redeem_scripts;
 }
 
+/**
+ * @deprecated
+ */
 varstr_t * satoshi_txin_get_redeem_scripts(
 	unsigned char segwit_program_version_byte,	// [ 0 .. 16 ]
 	unsigned char segwit_program_length,	// MUST be 20 or 32 for segwit_v0
