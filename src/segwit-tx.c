@@ -356,6 +356,86 @@ satoshi_rawtx_t * satoshi_rawtx_attach_segwit_tx(satoshi_rawtx_t * rawtx, satosh
  * TEST Module
  ***************************************************************/
 #if defined(_TEST_SEGWIT_TX) || defined(_TEST_SATOSHI_TX)
+
+#define test_(name) do {												\
+		int rc = test_##name(argc, argv);								\
+		printf("==> TEST %s: [%s]\n" 									\
+			"----------------------------------------\n",				\
+			#name, 														\
+			(0==rc)?"\e[32mPASSED\e[39m":"\e[31mFAILED\e[39m");			\
+	} while(0)
+
+#define AUTO_FREE_PTR __attribute__((cleanup(auto_free_ptr)))
+void auto_free_ptr(void * ptr)
+{
+	void * p = *(void **)ptr;
+	if(p)
+	{
+		free(p);
+		*(void **)ptr = NULL;
+	}
+	return;
+}
+
+#define AUTO_FREE_(type) __attribute__((cleanup(auto_free_##type))) type
+void auto_free_satoshi_script_t(void * ptr)
+{
+	satoshi_script_t * scripts = *(satoshi_script_t **)ptr;
+	if(scripts)
+	{
+		satoshi_script_cleanup(scripts);
+		free(scripts);
+		*(void **)ptr = NULL;
+	}
+	return;
+}
+
+void auto_free_crypto_context_t(void * ptr)
+{
+	crypto_context_t * crypto = *(crypto_context_t **)ptr;
+	if(crypto)
+	{
+		crypto_context_cleanup(crypto);
+		free(crypto);
+		*(void **)ptr = NULL;
+	}
+	return;
+}
+
+#define AUTO_CLEANUP_ARRAY1_(type) __attribute__((cleanup(auto_cleanup_array1_##type))) type
+#define AUTO_CLEANUP_ARRAY2_(type) __attribute__((cleanup(auto_cleanup_array2_##type))) type
+void auto_cleanup_array1_satoshi_tx_t(void * ptr)
+{
+	satoshi_tx_t * tx = ptr;
+	if(tx)
+	{
+		satoshi_tx_cleanup(tx);
+	}
+	return;
+}
+
+void auto_cleanup_array1_satoshi_txout_t(void * ptr)
+{
+	satoshi_txout_t * txouts = ptr;
+	if(txouts)
+	{
+		satoshi_txout_cleanup(&txouts[0]);
+	}
+	return;
+}
+
+void auto_cleanup_array2_satoshi_txout_t(void * ptr)
+{
+	satoshi_txout_t * txouts = ptr;
+	if(txouts)
+	{
+		satoshi_txout_cleanup(&txouts[0]);
+		satoshi_txout_cleanup(&txouts[1]);
+	}
+	return;
+}
+
+
 /*
  * Segwit v0 TEST data: 
  *  https://github.com/bitcoin/bips/blob/master/bip-0143.mediawiki
@@ -429,8 +509,9 @@ The following is an unsigned transaction:
 int test_native_p2wpkh(int argc, char ** argv)
 {
 // 1. Native P2WPKH
-	debug_printf("TEST: 1. Native P2WPKH ...");
-	satoshi_txout_t utxoes[2] = {
+	static const int TEST_CASE = 1;
+	printf("\n======== TEST %d. %s() ========\n", TEST_CASE, __FUNCTION__);
+	AUTO_CLEANUP_ARRAY2_(satoshi_txout_t) utxoes[2] = {
 		[0] = { .value = 625000000, .flags = 1},
 		[1] = { .value = 600000000, .flags = 2}
 	};
@@ -443,9 +524,9 @@ int test_native_p2wpkh(int argc, char ** argv)
 	
 	
 	// step 0. load tx
-	satoshi_tx_t tx[1] = { 0 };
+	AUTO_CLEANUP_ARRAY1_(satoshi_tx_t) tx[1] = { 0 };
 	ssize_t cb = 0;
-	unsigned char * tx_data = NULL;	// serialized tx data
+	AUTO_FREE_PTR unsigned char * tx_data = NULL;	// serialized tx data
 	ssize_t cb_data = hex2bin("01000000"
 		"0001"	// segwit flag
 		"02"	// 2 txins
@@ -483,18 +564,18 @@ int test_native_p2wpkh(int argc, char ** argv)
 	assert(cb == cb_data);
 	satoshi_tx_dump(tx);
 	
-	// step 1. parse tx
-	crypto_context_t * crypto = crypto_context_init(NULL, crypto_backend_libsecp256, NULL);
+	AUTO_FREE_(crypto_context_t) * crypto = crypto_context_init(NULL, crypto_backend_libsecp256, NULL);
 	assert(crypto);
-	satoshi_script_t * scripts = satoshi_script_init(NULL, crypto, NULL);
+	AUTO_FREE_(satoshi_script_t) * scripts = satoshi_script_init(NULL, crypto, NULL);
 	assert(scripts);
 	
 	scripts->attach_tx(scripts, tx);
 	
+	// step 1. verify tx
 	satoshi_txin_t * txins = tx->txins;
+	int rc = 0;
 	for(ssize_t i = 0; i < tx->txin_count; ++i)
 	{
-		int rc = 0;
 		varstr_t * vscripts = txins[i].scripts;
 		ssize_t cb_scripts = varstr_length(vscripts);
 		satoshi_txout_t * utxo = &utxoes[i];
@@ -551,9 +632,10 @@ int test_native_p2wpkh(int argc, char ** argv)
 		
 		rc = scripts->verify(scripts);
 		assert(0 == rc);
+		if(rc) break;
 	}
-
-	return 0;
+	
+	return rc;
 }
 
 /*
@@ -612,12 +694,126 @@ int test_native_p2wpkh(int argc, char ** argv)
     witness    02 473044022047ac8e878352d3ebbde1c94ce3a10d057c24175747116f8288e5d794d12d482f0220217f36a485cae903c713331d877c1f64677e3622ad4010726870540656fe9dcb01 2103ad1d8e89212f0b92c74d23bb710c00662ad1470198ac48c43f7d6f93a2a26873
     nLockTime: 92040000
 */
-
+int test_p2sh_p2wpkh(int argc, char ** argv)
+{
+	static const int TEST_CASE = 2;
+	printf("\n======== TEST %d. %s() ========\n", TEST_CASE, __FUNCTION__);
+	
+	// 2. Native P2WPKH
+	AUTO_CLEANUP_ARRAY1_(satoshi_txout_t) utxoes[1] = {
+		[0] = { .value = 1000000000, .flags = 1},
+	};
+	hex2bin("17" // vstr.length 
+		"a9144733f37cf4db86fbc2efed2500b4f4e49f31202387",
+		-1, (void **)&utxoes[0].scripts);
+	
+	ssize_t cb = 0;
+	AUTO_FREE_PTR unsigned char * tx_data = NULL;	// serialized tx data
+	ssize_t cb_data = hex2bin(
+		"01000000"
+		"0001"
+		"01"
+			"db6b1b20aa0fd7b23880be2ecbd4a98130974cf4748fb66092ac4d3ceb1a547701000000"
+			"1716001479091972186c449eb1ded22b78e40d009bdf0089"
+			"feffffff"
+		"02"
+			"b8b4eb0b00000000" "1976a914a457b684d7f0d539a46a45bbc043f35b59d0d96388ac"
+			"0008af2f00000000" "1976a914fd270b1ee6abcaea97fea7ad0402e8bd8ad6d77c88ac"
+		"02"
+			"47"
+				"3044"
+					"022047ac8e878352d3ebbde1c94ce3a10d057c24175747116f8288e5d794d12d482f"
+					"0220217f36a485cae903c713331d877c1f64677e3622ad4010726870540656fe9dcb"
+				"01"
+			"21"
+				"03ad1d8e89212f0b92c74d23bb710c00662ad1470198ac48c43f7d6f93a2a26873"
+		"92040000",
+		-1,
+		(void **)&tx_data);
+	assert(tx_data && cb_data > 0);
+	
+	int rc = 0;
+	AUTO_CLEANUP_ARRAY1_(satoshi_tx_t) tx[1] = { 0 };
+	cb = satoshi_tx_parse(tx, cb_data, tx_data);
+	assert(cb == cb_data);
+	satoshi_tx_dump(tx);
+	
+	
+	AUTO_FREE_(satoshi_script_t) * scripts = satoshi_script_init(NULL, NULL, NULL);
+	assert(scripts);
+	scripts->attach_tx(scripts, tx);
+	
+	satoshi_txin_t * txins = tx->txins;
+	for(ssize_t i = 0; i < tx->txin_count; ++i)
+	{
+		varstr_t * vscripts = txins[i].scripts;
+		ssize_t cb_scripts = varstr_length(vscripts);
+		satoshi_txout_t * utxo = &utxoes[i];
+		
+		scripts->set_txin_info(scripts, i, utxo);
+		// parse txin
+		if(cb_scripts > 0)	// legacy tx
+		{
+			cb = scripts->parse(scripts, 
+				satoshi_tx_script_type_txin, 
+				varstr_getdata_ptr(vscripts), cb_scripts);
+			assert(cb == cb_scripts);
+		}else
+		{
+			if(!tx->has_flag || NULL == tx->witnesses) {
+				/*
+				 * legacy-tx with no witnesses data, 
+				 * ignore this verification for compatibility with future unknown versions
+				 */
+				continue;
+			}
+		}
+		
+		
+		satoshi_script_stack_t * stack = scripts->main_stack;
+		printf("== stack status: count = %Zd\n", stack->count);
+		for(ssize_t ii = 0; ii < stack->count; ++ii)
+		{
+			satoshi_script_data_t * sdata = stack->data[stack->count - 1 - ii];
+			assert(sdata->type > satoshi_script_data_type_varstr);
+			dump_line("\t data: ", sdata->data, sdata->size);
+		}
+		
+		// parse utxo
+		printf("-- txins[%Zd] ---------------------------------------------\n", i);
+		dump_line("utxo: ", utxo->scripts, varstr_size(utxo->scripts));
+		cb_scripts = varstr_length(utxo->scripts);
+		if(cb_scripts > 0)
+		{
+			printf("== parse utxo ..., flags=%d\n", utxo->flags);
+			cb = scripts->parse(scripts, 
+				satoshi_tx_script_type_txout,
+				varstr_getdata_ptr(utxo->scripts), cb_scripts);
+			assert(cb == cb_scripts);
+		} 
+		
+		printf("== stack status: count = %Zd\n", stack->count);
+		for(ssize_t ii = 0; ii < stack->count; ++ii)
+		{
+			satoshi_script_data_t * sdata = stack->data[stack->count - 1 - ii];
+			if(sdata->type > satoshi_script_data_type_varstr)
+				dump_line("\t data: ", sdata->data, sdata->size);
+		}
+		
+		rc = scripts->verify(scripts);
+		assert(0 == rc);
+		if(rc) break;
+	}
+	
+	
+	return rc;
+}
 
 
 int test_segwit_v0(int argc, char ** argv)
 {
-	test_native_p2wpkh(argc, argv);
+	test_(native_p2wpkh);
+	test_(p2sh_p2wpkh);
 	return 0;
 }
 #endif

@@ -366,7 +366,7 @@ satoshi_script_data_t * satoshi_script_data_clone(const satoshi_script_data_t * 
 
 void satoshi_script_data_cleanup(satoshi_script_data_t * sdata)
 {
-	if(NULL == sdata) return;
+	if(NULL == sdata || sdata == s_sdata_true || sdata == s_sdata_false) return;
 	switch(sdata->type)
 	{
 	case satoshi_script_data_type_pointer:
@@ -390,11 +390,10 @@ satoshi_script_data_t * satoshi_script_data_new(enum satoshi_script_data_type ty
 
 void satoshi_script_data_free(satoshi_script_data_t * sdata)
 {
-	if(sdata && sdata != s_sdata_true && sdata != s_sdata_false)
-	{
-		satoshi_script_data_cleanup(sdata);
-		free(sdata);
-	}
+	if(NULL == sdata || sdata == s_sdata_true || sdata == s_sdata_false) return;
+
+	satoshi_script_data_cleanup(sdata);
+	free(sdata);
 }
 
 /*******************************************************
@@ -484,11 +483,7 @@ void satoshi_script_stack_cleanup(satoshi_script_stack_t * stack)
 		for(ssize_t i = 0; i < stack->count; ++i)
 		{
 			satoshi_script_data_t * sdata = stack->data[i];
-			if(sdata)
-			{
-				satoshi_script_data_cleanup(sdata);
-				free(sdata);
-			}
+			satoshi_script_data_free(sdata);
 		}
 		free(stack->data);
 		stack->data = NULL;
@@ -547,6 +542,7 @@ static inline int parse_op_hash(satoshi_script_stack_t * stack, uint8_t op_code,
 	ssize_t length = 0;
 	enum satoshi_script_data_type type = satoshi_script_data_get(sdata, &data, &length);
 	assert(type != satoshi_script_data_type_unknown);
+	satoshi_script_data_free(sdata);
 	
 	switch(op_code)
 	{
@@ -688,6 +684,7 @@ static inline int parse_op_checksig(satoshi_script_stack_t * stack, satoshi_scri
 	int rc = 0;
 	crypto_pubkey_t * pubkey = NULL;
 	crypto_signature_t * sig = NULL;
+	unsigned char * sig_der = NULL;
 	
 	if(stack->count < 2)	// must have { sig_with_hashtype, pubkey }
 	{
@@ -705,23 +702,31 @@ static inline int parse_op_checksig(satoshi_script_stack_t * stack, satoshi_scri
 	assert(crypto);
 	
 	// pop pubkey
-	satoshi_script_data_t * sdata_pubkey = stack->pop(stack);
+	satoshi_script_data_t * sdata_pubkey = NULL;
+	satoshi_script_data_t * sdata_sig_hashtype = NULL;
+	
+	sdata_pubkey = stack->pop(stack);
+	if(NULL == sdata_pubkey) {
+		scripts_parser_error_handler("no pubkey.");
+	}
 	pubkey = crypto_pubkey_import(crypto, 
 		sdata_pubkey->data, sdata_pubkey->size);
 	if(NULL == pubkey) {
 		scripts_parser_error_handler("invalid pubkey.");
-	} 
-	
+	}
+
 	// pop signature with hashtype
-	satoshi_script_data_t * sdata_sig_hashtype = stack->pop(stack);
+	sdata_sig_hashtype = stack->pop(stack);
+	if(NULL == sdata_sig_hashtype) {
+		scripts_parser_error_handler("no signature.");
+	}
+	
 	ssize_t cb_sig = sdata_sig_hashtype->size - 1;
 	assert(sdata_sig_hashtype && sdata_sig_hashtype->data && cb_sig > 0);
 	sig = crypto_signature_import(crypto,
 		sdata_sig_hashtype->data, cb_sig);
 		
 	uint32_t hash_type = sdata_sig_hashtype->data[cb_sig];
-	satoshi_script_data_free(sdata_sig_hashtype);
-	
 	if(NULL == sig) {
 		scripts_parser_error_handler("invalid signature.");
 	} 
@@ -740,15 +745,14 @@ static inline int parse_op_checksig(satoshi_script_stack_t * stack, satoshi_scri
 		}
 	}
 	
-	unsigned char * sig_der = NULL;
 	ssize_t cb_sig_der = crypto_signature_export(crypto, sig, &sig_der);
-	assert(sig_der && cb_sig_der > 0); 
+	if(NULL == sig_der && cb_sig_der <= 0) {
+		scripts_parser_error_handler("invalid signature format: export failed.");
+	}
 	rc = crypto->verify(crypto, (unsigned char *)&digest, 32,
 		pubkey, 
 		sig_der, cb_sig_der);
-	
 	stack->push(stack, satoshi_script_data_new_boolean((0 == rc)));
-
 	if(rc)
 	{
 		scripts_parser_error_handler("verify signature failed.");
@@ -757,15 +761,16 @@ static inline int parse_op_checksig(satoshi_script_stack_t * stack, satoshi_scri
 		debug_printf("verify ok");
 	}
 	
+	// cleanup
+label_error:
+	if(sig_der) free(sig_der);
+	if(sdata_pubkey) satoshi_script_data_free(sdata_pubkey);
+	if(sdata_sig_hashtype) satoshi_script_data_free(sdata_sig_hashtype);
+
 	if(pubkey) crypto_pubkey_free(pubkey);
 	if(sig) crypto_signature_free(sig);
 	
 	return rc;
-label_error:
-	if(pubkey) crypto_pubkey_free(pubkey);
-	if(sig) crypto_signature_free(sig);
-	
-	return -1;
 }
 
 static inline int parse_op_checkmultisig(satoshi_script_stack_t * stack, satoshi_script_t * scripts)
@@ -1176,71 +1181,52 @@ static inline int txin_p2sh_scripts_post_process(satoshi_script_t * scripts, sat
 	return 0;
 }
 
-static inline const unsigned char * txout_scripts_pre_process(satoshi_script_t * scripts, 
-	satoshi_tx_t * tx, ssize_t txin_index,
+
+/**
+ * check Witness flags: 
+ * A scriptPubKey (or redeemScript as defined in BIP16/P2SH) that 
+ * consists of a 1-byte push opcode (for 0 to 16) 
+ * followed by a data push between 2 and 40 bytes gets a new special meaning. 
+ * The value of the first push is called the "version byte". 
+ * The following byte vector pushed is called the "witness program".
+*/
+static inline int parse_segwit_script(satoshi_script_t * scripts, satoshi_tx_t * tx, ssize_t txin_index,
 	const unsigned char * p, const unsigned char * p_end)
 {
-	/**
-	 * check Witness flags: 
-	 * A scriptPubKey (or redeemScript as defined in BIP16/P2SH) that 
-	 * consists of a 1-byte push opcode (for 0 to 16) 
-	 * followed by a data push between 2 and 40 bytes gets a new special meaning. 
-	 * The value of the first push is called the "version byte". 
-	 * The following byte vector pushed is called the "witness program".
-	*/
-	
-	assert(tx && tx->txins);
-	assert(txin_index < tx->txin_count);
-	assert(p < p_end);
-	
 	satoshi_txin_t * cur_txin = &tx->txins[txin_index];
 	
-	if(p[0] > 16) { // legacy txout
-		if(NULL == cur_txin->redeem_scripts && !cur_txin->is_p2sh)
-		{
-			// use current utxo's scripts directly
-			cur_txin->redeem_scripts = varstr_new(p, (p_end - p));		
-		}
-		return p;
-	}
-	
-	// segwit program
 	unsigned char version_byte = *p++;
-	if(version_byte != 0) return NULL;	// currently only supports segwit_v0
-	//	assert(version_byte == 0);			// currently only supports segwit_v0
+	if(version_byte != 0 || p >= p_end) return -1;	// currently only supports segwit_v0
+		
+	unsigned char program_length = *p++;
+	if((p + program_length) > p_end) return -1;
 	
-	if(p > p_end) return NULL;
-	
-	unsigned char program_length = p[0];
-	if((p + program_length) > p_end) return NULL;
-	
+	const unsigned char * witness_program = p;
+
 	// push witnesses_data
 	assert(tx->witnesses);
 	int rc = 0;
 	bitcoin_tx_witness_t * witness = &tx->witnesses[txin_index];
+	assert(witness->num_items > 0);
+	
 	for(ssize_t i = 0; i < witness->num_items; ++i)
 	{
 		unsigned char * scripts_data = varstr_getdata_ptr(witness->items[i]);
 		ssize_t cb_scripts = varstr_length(witness->items[i]); // length of vstr.data
-	
-		
+
 		assert(cb_scripts > 0);	///< @todo check length <= consensus.max_script_length
-		if(cb_scripts <= 0) return NULL;	
+		if(cb_scripts <= 0) return -1;	
 		
 		rc = scripts->main_stack->push(scripts->main_stack,
 			satoshi_script_data_new_ptr(scripts_data, cb_scripts));
-		if(rc) return NULL;
+		if(rc) return -1;
 	}
 
 	if(program_length == 20)	// p2wpkh
 	{
-		const unsigned char * h160 = ++p;	// the data of hash160(pubkey)
-		assert((p + 20) <= p_end);
-
-		// use h160 data to construct redeem_scripts
 		if(NULL == cur_txin->redeem_scripts) // if redeem_scripts has not been set.  ( eg. been manually set for signing tx , or for testing ...) 
 		{
-			cur_txin->redeem_scripts = satoshi_script_generate_p2pkh_script(h160, program_length);
+			cur_txin->redeem_scripts = satoshi_script_generate_p2pkh_script(witness_program, program_length);
 		}
 		
 		// verify redeem scripts 
@@ -1249,20 +1235,71 @@ static inline const unsigned char * txout_scripts_pre_process(satoshi_script_t *
 			satoshi_tx_script_type_unknown,	// no addition processing
 			varstr_getdata_ptr(cur_txin->redeem_scripts), cb_scripts);
 		assert(cb == cb_scripts);
-		if(cb != cb_scripts) return NULL;
+		if(cb != cb_scripts) return -1;
 	}else if(program_length == 32)	// p2wsh
 	{
 		rc = txin_p2sh_scripts_post_process(scripts, tx, txin_index);
-		if(rc) return NULL;
+		if(rc) return -1;
 	}else
 	{
 		fprintf(stderr, "[ERROR]: %s(): invalid segwit program length (%u)\n", 
 			__FUNCTION__, 
 			(uint32_t)program_length);
-		return NULL;
+		return -1;
 	}
 	
 	debug_printf("Successfully processed.");
+	return 0;
+}
+
+static inline const unsigned char * txout_scripts_pre_process(satoshi_script_t * scripts, 
+	satoshi_tx_t * tx, ssize_t txin_index,
+	const unsigned char * p, const unsigned char * p_end)
+{
+	assert(tx && tx->txins);
+	assert(txin_index < tx->txin_count);
+	assert(p < p_end);
+	
+	int rc = 0;
+	satoshi_txin_t * cur_txin = &tx->txins[txin_index];;
+	const unsigned char * p_witness_program_end = p_end;
+	
+	if(p[0] > 16) { // legacy utxo
+		if(cur_txin->is_p2sh) return p;		// use the original(legacy) processing method 
+		
+		if( !tx->has_flag 		// not segwit 
+			|| (0 == tx->witnesses[txin_index].num_items) // not p2sh-p2wphk or p2sh-pwsh 
+		){
+			// set redeem_scripts: use current utxo's scripts directly
+			if(NULL == cur_txin->redeem_scripts) cur_txin->redeem_scripts = varstr_new(p, (p_end - p));
+			return p;	// use the original(legacy) processing method 
+		}
+		
+		//  p2sh --> (p2wpkh or p2wsh)
+		satoshi_script_private_t * priv = scripts->priv;
+		assert(priv && priv->utxo);
+		satoshi_txout_t * utxo = (satoshi_txout_t *)priv->utxo;
+		utxo->flags = satoshi_txout_type_p2sh_to_segwit;
+		
+		// verify p2sh utxo first
+		ssize_t cb = scripts->parse(scripts, 
+			satoshi_tx_script_type_unknown, // no additional processing
+			p, p_end - p);
+		if(cb != (p_end - p))
+		{
+			fprintf(stderr, "verify p2sh utxo failed.\n");
+			return NULL;
+		}
+		
+		// use cur_txin->scripts as segwit-scripts
+		varstr_t * segwit_scripts = (varstr_t *)varstr_getdata_ptr(cur_txin->scripts);	// the data of cur_txin->scripts is a varstr 
+		p = varstr_getdata_ptr(segwit_scripts);
+		p_witness_program_end = p + varstr_length(segwit_scripts);
+	}
+	
+	rc = parse_segwit_script(scripts, tx, txin_index, p, p_witness_program_end);
+	if(rc) return NULL;
+	
 	return p_end;
 }
 
@@ -1458,7 +1495,6 @@ static ssize_t scripts_parse(struct satoshi_script * scripts,
 		scripts_parser_error_handler("parse scripts failed or invalid payload length");
 	}
 	
-	
 	// post-processing
 	if(type == satoshi_tx_script_type_txin && is_p2sh)	
 	{
@@ -1603,6 +1639,11 @@ void satoshi_script_cleanup(satoshi_script_t * scripts)
 	satoshi_script_private_t * priv = scripts->priv;
 	if(priv)
 	{
+		if(priv->tx)
+		{
+			scripts->detach_tx(scripts);
+		}
+		
 		if(scripts->crypto == priv->crypto) 
 		{
 			scripts->crypto = NULL;
@@ -1613,6 +1654,8 @@ void satoshi_script_cleanup(satoshi_script_t * scripts)
 		}
 		free(priv);
 		scripts->priv = NULL;
+		
+		
 	}
 	
 	satoshi_script_reset(scripts);

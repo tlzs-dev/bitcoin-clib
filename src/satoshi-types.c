@@ -570,7 +570,7 @@ ssize_t satoshi_txout_parse(satoshi_txout_t * txout, ssize_t length, const void 
 	 * The following byte vector pushed is called the "witness program".
 	*/
 	unsigned char * scripts_data = varstr_getdata_ptr(txout->scripts);
-	txout->flags = (scripts_data[0] <= 16)?satoshi_txout_type_segwit:satoshi_txout_type_legacy;
+	txout->flags = (scripts_data[0] <= 16)?satoshi_txout_type_segwit_utxo:satoshi_txout_type_legacy;
 	
 	return (p - (unsigned char *)payload);
 label_error:
