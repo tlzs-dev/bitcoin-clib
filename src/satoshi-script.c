@@ -1234,49 +1234,20 @@ static inline const unsigned char * txout_scripts_pre_process(satoshi_script_t *
 	
 	// push witnesses_data
 	assert(tx->witnesses);
+	int rc = 0;
 	bitcoin_tx_witness_t * witness = &tx->witnesses[txin_index];
 	for(ssize_t i = 0; i < witness->num_items; ++i)
 	{
-		unsigned char * vscripts = (unsigned char *)witness->items[i];
+		unsigned char * scripts_data = varstr_getdata_ptr(witness->items[i]);
 		ssize_t cb_scripts = varstr_length(witness->items[i]); // length of vstr.data
-		unsigned char * p_end = vscripts + varstr_size(witness->items[i]);
+	
 		
-		ssize_t cb = 0;
-		// must be a pushdata op, and the size MUST not exceed the size specified by the consensus 
-		assert(cb_scripts > 0);
-		if(cb_scripts <= 0) return NULL;
+		assert(cb_scripts > 0);	///< @todo check length <= consensus.max_script_length
+		if(cb_scripts <= 0) return NULL;	
 		
-		if(cb_scripts < satoshi_script_opcode_op_pushdata1)	// the varstr and the script_code are equivalent
-		{
-			cb = parse_op_push_data(scripts->main_stack, 
-				cb_scripts,		// op_code == length
-				vscripts + 1, 	// starts from vstr.data
-				p_end
-			); 
-			assert(cb == cb_scripts);
-			if(cb != cb_scripts) return NULL;
-		}else if(cb_scripts < 0xFD)	// varstr uses 1 byte to indicate the length
-		{
-			cb = parse_op_push_data(scripts->main_stack, 
-				satoshi_script_opcode_op_pushdata1,		// op_code
-				(unsigned char *)vscripts, // use varstr as payload, the first byte represents the payload length
-				p_end
-			); 
-			assert(cb == (cb_scripts + 1));	// plus 1 byte which represents the length
-			if(cb != (cb_scripts + 1)) return NULL;
-		}else if(cb_scripts <= 0xffff) /// <@ todo:   <= consensus::max_script_length
-		{
-			cb = parse_op_push_data(scripts->main_stack, 
-				satoshi_script_opcode_op_pushdata2,		// op_code
-				vscripts + 1, // the first two bytes represents the length, and the following bytes represents the payload
-				p_end
-			); 
-			assert(cb == (cb_scripts + 2));	// plus 2 bytes which represents the length
-			if(cb != (cb_scripts + 2)) return NULL;
-		}else
-		{
-			return NULL; // invalid length
-		}
+		rc = scripts->main_stack->push(scripts->main_stack,
+			satoshi_script_data_new_ptr(scripts_data, cb_scripts));
+		if(rc) return NULL;
 	}
 	
 	if(is_p2wsh)
