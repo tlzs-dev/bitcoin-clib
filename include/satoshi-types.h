@@ -139,7 +139,7 @@ typedef struct satoshi_txin
 	satoshi_outpoint_t outpoint;
 	int is_coinbase;	// coinbase flag
 	int is_p2sh;		// p2sh flag
-
+	
 	varstr_t * scripts;
 	ssize_t cb_scripts;	// hold scripts length
 	uint32_t sequence;
@@ -159,10 +159,18 @@ ssize_t satoshi_txin_parse(satoshi_txin_t * txin, ssize_t length, const void * p
 ssize_t satoshi_txin_serialize(const satoshi_txin_t * txin, unsigned char ** p_data);
 void satoshi_txin_cleanup(satoshi_txin_t * txin);
 
+enum satoshi_txout_type
+{
+	satoshi_txout_type_unknown = 0,
+	satoshi_txout_type_legacy = 1,
+	satoshi_txout_type_segwit = 2,
+};
+
 typedef struct satoshi_txout
 {
 	int64_t value;
 	varstr_t * scripts;
+	enum satoshi_txout_type flags;			// 0: a legacy-utxo, 1: a segwit-utxo
 }satoshi_txout_t;
 ssize_t satoshi_txout_parse(satoshi_txout_t * txout, ssize_t length, const void * payload);
 ssize_t satoshi_txout_serialize(const satoshi_txout_t * txout, unsigned char ** p_data);

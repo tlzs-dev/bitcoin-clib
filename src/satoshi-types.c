@@ -561,6 +561,17 @@ ssize_t satoshi_txout_parse(satoshi_txout_t * txout, ssize_t length, const void 
 	assert(txout->scripts && varstr_size(txout->scripts) == vstr_size);
 	p += vstr_size;
 	
+	/**
+	 * check Witness flags: 
+	 * A scriptPubKey (or redeemScript as defined in BIP16/P2SH) that 
+	 * consists of a 1-byte push opcode (for 0 to 16) 
+	 * followed by a data push between 2 and 40 bytes gets a new special meaning. 
+	 * The value of the first push is called the "version byte". 
+	 * The following byte vector pushed is called the "witness program".
+	*/
+	unsigned char * scripts_data = varstr_getdata_ptr(txout->scripts);
+	txout->flags = (scripts_data[0] <= 16)?satoshi_txout_type_segwit:satoshi_txout_type_legacy;
+	
 	return (p - (unsigned char *)payload);
 label_error:
 	satoshi_txout_cleanup(txout);

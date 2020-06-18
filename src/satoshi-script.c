@@ -431,14 +431,14 @@ static int stack_push(struct satoshi_script_stack * stack, satoshi_script_data_t
 	
 	stack->data[stack->count++] = sdata;
 	
-	//~ fprintf(stderr, "\t --> stack_push()::data_type=%d, size=%zd, stack.count=%d\n",
-		//~ sdata->type,
-		//~ sdata->size,
-		//~ (int)stack->count);
+	fprintf(stderr, "\t --> stack_push()::data_type=%d, size=%zd, stack.count=%d\n",
+		sdata->type,
+		sdata->size,
+		(int)stack->count);
 		
-	//~ dump_line("\t\t --> data pushed: ", 
-		//~ (sdata->type >= satoshi_script_data_type_varstr)?sdata->data:sdata->h256, 
-		//~ sdata->size);
+	dump_line("\t\t --> data pushed: ", 
+		(sdata->type >= satoshi_script_data_type_varstr)?sdata->data:sdata->h256, 
+		sdata->size);
 	return 0;
 }
 
@@ -450,13 +450,13 @@ satoshi_script_data_t * stack_pop(struct satoshi_script_stack * stack)
 	stack->data[stack->count] = NULL;
 	
 	
-	//~ printf("\t --> stack_pop()::data_type=%d, size=%zd, stack.count=%d\n",
-		//~ sdata->type,
-		//~ sdata->size,
-		//~ (int)stack->count);
-	//~ dump_line("\t\t --> data popped: ", 
-		//~ (sdata->type >= satoshi_script_data_type_varstr)?sdata->data:sdata->h256, 
-		//~ sdata->size);
+	printf("\t --> stack_pop()::data_type=%d, size=%zd, stack.count=%d\n",
+		sdata->type,
+		sdata->size,
+		(int)stack->count);
+	dump_line("\t\t --> data popped: ", 
+		(sdata->type >= satoshi_script_data_type_varstr)?sdata->data:sdata->h256, 
+		sdata->size);
 		
 	return sdata;
 }
@@ -1214,24 +1214,6 @@ static inline const unsigned char * txout_scripts_pre_process(satoshi_script_t *
 	unsigned char program_length = p[0];
 	if((p + program_length) > p_end) return NULL;
 	
-	int is_p2wsh = 0;
-	
-	if(program_length == 20)
-	{
-		cur_txin->redeem_scripts = satoshi_script_generate_p2pkh_script(p + 1, program_length);
-		
-	}else if(program_length == 32)
-	{
-		is_p2wsh = 1;
-		// todo
-	}else
-	{
-		fprintf(stderr, "[ERROR]: %s(): invalid segwit program length (%u)\n", 
-			__FUNCTION__, 
-			(uint32_t)program_length);
-		return NULL;
-	}
-	
 	// push witnesses_data
 	assert(tx->witnesses);
 	int rc = 0;
@@ -1249,13 +1231,39 @@ static inline const unsigned char * txout_scripts_pre_process(satoshi_script_t *
 			satoshi_script_data_new_ptr(scripts_data, cb_scripts));
 		if(rc) return NULL;
 	}
-	
-	if(is_p2wsh)
-	{
-		// todo
-	}
 
-	return p;
+	if(program_length == 20)	// p2wpkh
+	{
+		const unsigned char * h160 = ++p;	// the data of hash160(pubkey)
+		assert((p + 20) <= p_end);
+
+		// use h160 data to construct redeem_scripts
+		if(NULL == cur_txin->redeem_scripts) // if redeem_scripts has not been set.  ( eg. been manually set for signing tx , or for testing ...) 
+		{
+			cur_txin->redeem_scripts = satoshi_script_generate_p2pkh_script(h160, program_length);
+		}
+		
+		// verify redeem scripts 
+		ssize_t cb_scripts = varstr_length(cur_txin->redeem_scripts);
+		ssize_t cb = scripts->parse(scripts, 
+			satoshi_tx_script_type_unknown,	// no addition processing
+			varstr_getdata_ptr(cur_txin->redeem_scripts), cb_scripts);
+		assert(cb == cb_scripts);
+		if(cb != cb_scripts) return NULL;
+	}else if(program_length == 32)	// p2wsh
+	{
+		rc = txin_p2sh_scripts_post_process(scripts, tx, txin_index);
+		if(rc) return NULL;
+	}else
+	{
+		fprintf(stderr, "[ERROR]: %s(): invalid segwit program length (%u)\n", 
+			__FUNCTION__, 
+			(uint32_t)program_length);
+		return NULL;
+	}
+	
+	debug_printf("Successfully processed.");
+	return p_end;
 }
 
 static ssize_t scripts_parse(struct satoshi_script * scripts, 

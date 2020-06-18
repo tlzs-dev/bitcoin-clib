@@ -238,7 +238,7 @@ int satoshi_tx_get_digest(
 	int txin_index, 
 	uint32_t hash_type,
 	const satoshi_txout_t * utxo,
-	uint256_t * hash)
+	uint256_t * hash)	///< @deprecated
 {
 	if(tx->has_flag && tx->flag[0] == 0 && tx->flag[1] == 1) // segwit_v0
 	{
@@ -289,24 +289,53 @@ int satoshi_tx_get_digest(
 }
 
 satoshi_rawtx_t * satoshi_rawtx_attach_segwit_tx(satoshi_rawtx_t * rawtx, satoshi_tx_t * tx);
+int segwit_utxo_get_digest(satoshi_rawtx_t * rawtx, 
+	ssize_t cur_index,
+	uint32_t hash_type,
+	const satoshi_txout_t * utxo,
+	uint256_t * digest);
 
-static int legacy_tx_get_digest(satoshi_rawtx_t * rawtx, 
+int satoshi_utxo_get_digest(satoshi_rawtx_t * rawtx, 
 	ssize_t cur_index, 
 	uint32_t hash_type,
 	const satoshi_txout_t * utxo,
 	uint256_t * hash);
+	
+int satoshi_rawtx_get_digest(satoshi_rawtx_t * rawtx, 
+		ssize_t cur_index, // current txin index
+		uint32_t hash_type, 
+		const satoshi_txout_t * utxo,
+		uint256_t * digest)
+{
+	assert(utxo);
+	int flags = utxo->flags; // 0: for legacy-utxo verification, 1: for segwit-utxo verification 
+	switch(flags)
+	{
+	case satoshi_txout_type_unknown:
+	case satoshi_txout_type_legacy: return satoshi_utxo_get_digest(rawtx, cur_index, hash_type, utxo, digest);
+	case satoshi_txout_type_segwit: return segwit_utxo_get_digest(rawtx, cur_index, hash_type, utxo, digest);
+	default:
+		fprintf(stderr, "%s()::unknown utxo type.\n", __FUNCTION__);
+		break;
+	}
+	return -1;
+}
+
 satoshi_rawtx_t * satoshi_rawtx_attach(satoshi_rawtx_t * rawtx, satoshi_tx_t * tx)
 {
 	assert(tx && tx->txin_count > 0 && tx->txins);
-	if(tx->has_flag) return satoshi_rawtx_attach_segwit_tx(rawtx, tx);
+	if(tx->has_flag) {
+		satoshi_rawtx_attach_segwit_tx(rawtx, tx);	// add segwit-tx support
+	}
 	
 	if(NULL == rawtx) rawtx = calloc(1, sizeof(*rawtx));
 	assert(rawtx);
 	
 	rawtx->tx = tx;
-	rawtx->get_digest = legacy_tx_get_digest;
+	rawtx->get_digest = satoshi_rawtx_get_digest;
 	
-	sha256_init(rawtx->sha);
+	sha256_ctx_t * sha = &rawtx->sha[0];
+	sha256_init(sha);
 	rawtx->last_hashed_txin_index = 0;
 	
 	// init raw_txins' script
@@ -324,10 +353,10 @@ satoshi_rawtx_t * satoshi_rawtx_attach(satoshi_rawtx_t * rawtx, satoshi_tx_t * t
 	
 	// pre-hash tx->verison and tx->txin_count
 	unsigned char vint[9] = { 0 };
-	sha256_update(rawtx->sha, (unsigned char *)&tx->version, sizeof(int32_t));
+	sha256_update(sha, (unsigned char *)&tx->version, sizeof(int32_t));
 	
 	varint_set((varint_t *)vint, tx->txin_count);
-	sha256_update(rawtx->sha, vint, varint_size((varint_t *)vint));
+	sha256_update(sha, vint, varint_size((varint_t *)vint));
 	
 	// TODO: pre-hash outpoint of the first txin
 	// sha256_update(rawtx->sha, (unsigned char *)&rawtx->txins[0].outpoint, sizeof(satoshi_outpoint_t));
@@ -349,11 +378,12 @@ void satoshi_rawtx_detach(satoshi_rawtx_t * rawtx)
 	rawtx->last_hashed_txin_index = -1;
 	memset(rawtx->txouts_hash, 0, sizeof(rawtx->txouts_hash));
 	
-	sha256_init(rawtx->sha);
+	sha256_init(&rawtx->sha[0]);
+	sha256_init(&rawtx->sha[1]);
 	return;
 }
 
-static int legacy_tx_get_digest(satoshi_rawtx_t * rawtx, 
+int satoshi_utxo_get_digest(satoshi_rawtx_t * rawtx, 
 	ssize_t cur_index, 
 	uint32_t hash_type,
 	const satoshi_txout_t * utxo,
@@ -362,7 +392,7 @@ static int legacy_tx_get_digest(satoshi_rawtx_t * rawtx,
 	assert(rawtx && rawtx->tx);
 	satoshi_tx_t * tx = rawtx->tx;
 	
-	assert(tx->txins && cur_index >= 0 && cur_index < tx->txin_count && utxo && hash);
+	assert(tx->txins && cur_index >= 0 && cur_index < tx->txin_count && hash);
 	sha256_ctx_t sha[1];
 
 	

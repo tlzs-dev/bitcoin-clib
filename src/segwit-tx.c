@@ -208,13 +208,15 @@ static inline void prehash_outputs(sha256_ctx_t * sha,
 	return;
 }
 
-static inline int segwit_v0_get_digest(satoshi_rawtx_t * rawtx, 
+int segwit_utxo_get_digest(satoshi_rawtx_t * rawtx, 
 	ssize_t cur_index,
 	uint32_t hash_type,
-	const satoshi_txout_t * utxo,
+	const satoshi_txout_t * utxo, 
 	uint256_t * digest)
 {
-	assert(rawtx && rawtx->tx);
+	
+	assert(rawtx && rawtx->tx && utxo);
+	debug_printf("utxo->flag=%d\n", utxo->flags);
 	satoshi_tx_t * tx = rawtx->tx;
 	assert(tx->txins && cur_index >= 0 && cur_index < tx->txin_count);
 
@@ -227,7 +229,7 @@ static inline int segwit_v0_get_digest(satoshi_rawtx_t * rawtx,
 	if(!anyone_canpay && hash_type == satoshi_tx_sighash_all)
 	{
 		// copy pre-hashed states
-		memcpy(sha, rawtx->sha, sizeof(sha));	// copy internal state ( common data pre-hashed )
+		memcpy(sha, &rawtx->sha[1], sizeof(sha));	// copy internal state ( common data pre-hashed )
 	}else // with anyone_canpay flag,  or is sighash_single,  or is sighash_none
 	{
 		// there's no convenient way to simplify operation, just hash from the very begining
@@ -325,9 +327,8 @@ satoshi_rawtx_t * satoshi_rawtx_attach_segwit_tx(satoshi_rawtx_t * rawtx, satosh
 	assert(rawtx);
 	
 	rawtx->tx = tx;
-	rawtx->get_digest = segwit_v0_get_digest;
 	
-	sha256_ctx_t * sha = rawtx->sha;
+	sha256_ctx_t * sha = &rawtx->sha[1];	
 	sha256_init(sha);
 	
 // pre-hash step1, step2, step3
@@ -430,8 +431,8 @@ int test_native_p2wpkh(int argc, char ** argv)
 // 1. Native P2WPKH
 	debug_printf("TEST: 1. Native P2WPKH ...");
 	satoshi_txout_t utxoes[2] = {
-		[0] = { .value = 625000000, },
-		[1] = { .value = 600000000, }
+		[0] = { .value = 625000000, .flags = 1},
+		[1] = { .value = 600000000, .flags = 2}
 	};
 	hex2bin("23" // vstr.length 
 		"2103c9f4836b9a4f77fc0d81f7bcb01b7f1b35916864b9476c241ce9fc198bd25432ac",
@@ -487,55 +488,69 @@ int test_native_p2wpkh(int argc, char ** argv)
 	assert(crypto);
 	satoshi_script_t * scripts = satoshi_script_init(NULL, crypto, NULL);
 	assert(scripts);
+	
 	scripts->attach_tx(scripts, tx);
 	
 	satoshi_txin_t * txins = tx->txins;
 	for(ssize_t i = 0; i < tx->txin_count; ++i)
 	{
+		int rc = 0;
 		varstr_t * vscripts = txins[i].scripts;
 		ssize_t cb_scripts = varstr_length(vscripts);
+		satoshi_txout_t * utxo = &utxoes[i];
 		
+		scripts->set_txin_info(scripts, i, utxo);
+		// parse txin
 		if(cb_scripts > 0)	// legacy tx
 		{
 			cb = scripts->parse(scripts, 
-				satoshi_tx_script_type_txin, varstr_getdata_ptr(vscripts), cb_scripts);
+				satoshi_tx_script_type_txin, 
+				varstr_getdata_ptr(vscripts), cb_scripts);
 			assert(cb == cb_scripts);
-		}else { // unsigned rawtx or segwit tx
-			if(tx->has_flag)
-			{
-				/**
-				 * The design of 'witness-data' might be affected by its implementation language, 
-				 * adding some unnecessary complexity and slightly affecting performance.
-				 * (The complexity is hidden by the programming language used.)
-				 * 
-				 * If it uses the same format as legacy txin to keep current witness_data (just use plain varstr),
-				 * it will be more convenient for general purpose programming.
-				 * 
-				 * Here, since each pushdata op is stored separately, 
-				 * we have to do some additional encoding processing.
+		}else
+		{
+			if(!tx->has_flag || NULL == tx->witnesses) {
+				/*
+				 * legacy-tx with no witnesses data, 
+				 * ignore this verification for compatibility with future unknown versions
 				 */
-				assert(tx->witnesses);
-				bitcoin_tx_witness_t * witness = &tx->witnesses[i];
-				assert(witness);
-				
-				for(ssize_t ii = 0; ii < witness->num_items; ++ii)
-				{
-					unsigned char * script_code = NULL;
-					cb_scripts = satoshi_script_pushdata_code_from_varstr(witness->items[ii], &script_code);
-					if(cb_scripts > 0)
-					{
-						cb = scripts->parse(scripts, 
-							satoshi_tx_script_type_txin, (unsigned char *)script_code , cb_scripts);
-						assert(cb == cb_scripts);
-					}
-					
-					free(script_code);
-				}
-				
+				continue;
 			}
-
-			
 		}
+		
+		
+		satoshi_script_stack_t * stack = scripts->main_stack;
+		printf("== stack status: count = %Zd\n", stack->count);
+		for(ssize_t ii = 0; ii < stack->count; ++ii)
+		{
+			satoshi_script_data_t * sdata = stack->data[stack->count - 1 - ii];
+			assert(sdata->type > satoshi_script_data_type_varstr);
+			dump_line("\t data: ", sdata->data, sdata->size);
+		}
+		
+		// parse utxo
+		printf("-- txins[%Zd] ---------------------------------------------\n", i);
+		dump_line("utxo: ", utxo->scripts, varstr_size(utxo->scripts));
+		cb_scripts = varstr_length(utxo->scripts);
+		if(cb_scripts > 0)
+		{
+			printf("== parse utxo ..., flags=%d\n", utxo->flags);
+			cb = scripts->parse(scripts, 
+				satoshi_tx_script_type_txout,
+				varstr_getdata_ptr(utxo->scripts), cb_scripts);
+			assert(cb == cb_scripts);
+		} 
+		
+		printf("== stack status: count = %Zd\n", stack->count);
+		for(ssize_t ii = 0; ii < stack->count; ++ii)
+		{
+			satoshi_script_data_t * sdata = stack->data[stack->count - 1 - ii];
+			if(sdata->type > satoshi_script_data_type_varstr)
+				dump_line("\t data: ", sdata->data, sdata->size);
+		}
+		
+		rc = scripts->verify(scripts);
+		assert(0 == rc);
 	}
 
 	return 0;
