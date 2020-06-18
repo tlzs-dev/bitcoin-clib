@@ -216,7 +216,6 @@ enum satoshi_tx_script_type
 	satoshi_tx_script_type_unknown = 0,
 	satoshi_tx_script_type_txin = 1,
 	satoshi_tx_script_type_txout = 2,
-	satoshi_tx_script_type_p2sh_redeem_scripts = 3,
 };
 
 typedef struct satoshi_script

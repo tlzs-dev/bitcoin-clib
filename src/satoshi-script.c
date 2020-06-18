@@ -679,7 +679,8 @@ static inline int parse_op_equal(satoshi_script_stack_t * stack)
 	return stack->push(stack, satoshi_script_data_new_boolean((0 == rc)));
 }
 
-static inline int parse_op_checksig(satoshi_script_stack_t * stack, satoshi_script_t * scripts)
+
+static inline int parse_op_checksigverify(satoshi_script_stack_t * stack, satoshi_script_t * scripts)
 {
 	int rc = 0;
 	crypto_pubkey_t * pubkey = NULL;
@@ -752,7 +753,7 @@ static inline int parse_op_checksig(satoshi_script_stack_t * stack, satoshi_scri
 	rc = crypto->verify(crypto, (unsigned char *)&digest, 32,
 		pubkey, 
 		sig_der, cb_sig_der);
-	stack->push(stack, satoshi_script_data_new_boolean((0 == rc)));
+	
 	if(rc)
 	{
 		scripts_parser_error_handler("verify signature failed.");
@@ -770,6 +771,13 @@ label_error:
 	if(pubkey) crypto_pubkey_free(pubkey);
 	if(sig) crypto_signature_free(sig);
 	
+	return rc;
+}
+
+static inline int parse_op_checksig(satoshi_script_stack_t * stack, satoshi_script_t * scripts)
+{
+	int rc = parse_op_checksigverify(stack, scripts);
+	if(0 == rc) stack->push(stack, s_sdata_true);
 	return rc;
 }
 
@@ -1154,7 +1162,7 @@ static inline int txin_p2sh_scripts_post_process(satoshi_script_t * scripts, sat
 	txin->redeem_scripts = varstr_new(sdata->data, sdata->size);
 	
 	cb = scripts->parse(scripts, 
-		satoshi_tx_script_type_p2sh_redeem_scripts, 
+		satoshi_tx_script_type_unknown,	// no additional processing 
 		sdata->data, sdata->size);
 	
 	if(cb == sdata->size) // if parsed ok, push back redeem_scripts
@@ -1413,6 +1421,12 @@ static ssize_t scripts_parse(struct satoshi_script * scripts,
 			debug_printf("parse op_checksig (0x%.2x)", op_code);
 			rc = parse_op_checksig(main_stack, scripts);
 			break;
+			
+		case satoshi_script_opcode_op_checksigverify:
+			debug_printf("parse op_checksig (0x%.2x)", op_code);
+			rc = parse_op_checksigverify(main_stack, scripts);
+			break;
+			
 		case satoshi_script_opcode_op_checkmultisig:
 			debug_printf("parse op_checkmultisig (0x%.2x)", op_code);
 			rc = parse_op_checkmultisig(main_stack, scripts);

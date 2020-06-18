@@ -436,6 +436,84 @@ void auto_cleanup_array2_satoshi_txout_t(void * ptr)
 }
 
 
+static int verify_tx(satoshi_tx_t * tx, satoshi_txout_t * utxoes)
+{
+	AUTO_FREE_(crypto_context_t) * crypto = crypto_context_init(NULL, crypto_backend_libsecp256, NULL);
+	assert(crypto);
+	AUTO_FREE_(satoshi_script_t) * scripts = satoshi_script_init(NULL, crypto, NULL);
+	assert(scripts);
+	
+	scripts->attach_tx(scripts, tx);
+	
+	// step 1. verify tx
+	satoshi_txin_t * txins = tx->txins;
+	int rc = 0;
+	for(ssize_t i = 0; i < tx->txin_count; ++i)
+	{
+		varstr_t * vscripts = txins[i].scripts;
+		ssize_t cb_scripts = varstr_length(vscripts);
+		satoshi_txout_t * utxo = &utxoes[i];
+		ssize_t cb = 0;
+		
+		scripts->set_txin_info(scripts, i, utxo);
+		// parse txin
+		if(cb_scripts > 0)	// legacy tx
+		{
+			cb = scripts->parse(scripts, 
+				satoshi_tx_script_type_txin, 
+				varstr_getdata_ptr(vscripts), cb_scripts);
+			assert(cb == cb_scripts);
+		}else
+		{
+			if(!tx->has_flag || NULL == tx->witnesses) {
+				/*
+				 * legacy-tx with no witnesses data, 
+				 * ignore this verification for compatibility with future unknown versions
+				 */
+				continue;
+			}
+		}
+		
+		
+		satoshi_script_stack_t * stack = scripts->main_stack;
+		printf("== stack status: count = %Zd\n", stack->count);
+		for(ssize_t ii = 0; ii < stack->count; ++ii)
+		{
+			satoshi_script_data_t * sdata = stack->data[stack->count - 1 - ii];
+			assert(sdata->type > satoshi_script_data_type_varstr);
+			dump_line("\t data: ", sdata->data, sdata->size);
+		}
+		
+		// parse utxo
+		printf("-- txins[%Zd] ---------------------------------------------\n", i);
+		dump_line("utxo: ", utxo->scripts, varstr_size(utxo->scripts));
+		cb_scripts = varstr_length(utxo->scripts);
+		if(cb_scripts > 0)
+		{
+			printf("== parse utxo ..., flags=%d\n", utxo->flags);
+			cb = scripts->parse(scripts, 
+				satoshi_tx_script_type_txout,
+				varstr_getdata_ptr(utxo->scripts), cb_scripts);
+			assert(cb == cb_scripts);
+		} 
+		
+		printf("== stack status: count = %Zd\n", stack->count);
+		for(ssize_t ii = 0; ii < stack->count; ++ii)
+		{
+			satoshi_script_data_t * sdata = stack->data[stack->count - 1 - ii];
+			if(sdata->type > satoshi_script_data_type_varstr)
+				dump_line("\t data: ", sdata->data, sdata->size);
+		}
+		
+		rc = scripts->verify(scripts);
+		assert(0 == rc);
+		if(rc) break;
+	}
+	return rc;
+}
+
+
+
 /*
  * Segwit v0 TEST data: 
  *  https://github.com/bitcoin/bips/blob/master/bip-0143.mediawiki
@@ -564,78 +642,7 @@ int test_native_p2wpkh(int argc, char ** argv)
 	assert(cb == cb_data);
 	satoshi_tx_dump(tx);
 	
-	AUTO_FREE_(crypto_context_t) * crypto = crypto_context_init(NULL, crypto_backend_libsecp256, NULL);
-	assert(crypto);
-	AUTO_FREE_(satoshi_script_t) * scripts = satoshi_script_init(NULL, crypto, NULL);
-	assert(scripts);
-	
-	scripts->attach_tx(scripts, tx);
-	
-	// step 1. verify tx
-	satoshi_txin_t * txins = tx->txins;
-	int rc = 0;
-	for(ssize_t i = 0; i < tx->txin_count; ++i)
-	{
-		varstr_t * vscripts = txins[i].scripts;
-		ssize_t cb_scripts = varstr_length(vscripts);
-		satoshi_txout_t * utxo = &utxoes[i];
-		
-		scripts->set_txin_info(scripts, i, utxo);
-		// parse txin
-		if(cb_scripts > 0)	// legacy tx
-		{
-			cb = scripts->parse(scripts, 
-				satoshi_tx_script_type_txin, 
-				varstr_getdata_ptr(vscripts), cb_scripts);
-			assert(cb == cb_scripts);
-		}else
-		{
-			if(!tx->has_flag || NULL == tx->witnesses) {
-				/*
-				 * legacy-tx with no witnesses data, 
-				 * ignore this verification for compatibility with future unknown versions
-				 */
-				continue;
-			}
-		}
-		
-		
-		satoshi_script_stack_t * stack = scripts->main_stack;
-		printf("== stack status: count = %Zd\n", stack->count);
-		for(ssize_t ii = 0; ii < stack->count; ++ii)
-		{
-			satoshi_script_data_t * sdata = stack->data[stack->count - 1 - ii];
-			assert(sdata->type > satoshi_script_data_type_varstr);
-			dump_line("\t data: ", sdata->data, sdata->size);
-		}
-		
-		// parse utxo
-		printf("-- txins[%Zd] ---------------------------------------------\n", i);
-		dump_line("utxo: ", utxo->scripts, varstr_size(utxo->scripts));
-		cb_scripts = varstr_length(utxo->scripts);
-		if(cb_scripts > 0)
-		{
-			printf("== parse utxo ..., flags=%d\n", utxo->flags);
-			cb = scripts->parse(scripts, 
-				satoshi_tx_script_type_txout,
-				varstr_getdata_ptr(utxo->scripts), cb_scripts);
-			assert(cb == cb_scripts);
-		} 
-		
-		printf("== stack status: count = %Zd\n", stack->count);
-		for(ssize_t ii = 0; ii < stack->count; ++ii)
-		{
-			satoshi_script_data_t * sdata = stack->data[stack->count - 1 - ii];
-			if(sdata->type > satoshi_script_data_type_varstr)
-				dump_line("\t data: ", sdata->data, sdata->size);
-		}
-		
-		rc = scripts->verify(scripts);
-		assert(0 == rc);
-		if(rc) break;
-	}
-	
-	return rc;
+	return verify_tx(tx, utxoes);
 }
 
 /*
@@ -699,7 +706,7 @@ int test_p2sh_p2wpkh(int argc, char ** argv)
 	static const int TEST_CASE = 2;
 	printf("\n======== TEST %d. %s() ========\n", TEST_CASE, __FUNCTION__);
 	
-	// 2. Native P2WPKH
+	// 2. P2SH-P2WPKH
 	AUTO_CLEANUP_ARRAY1_(satoshi_txout_t) utxoes[1] = {
 		[0] = { .value = 1000000000, .flags = 1},
 	};
@@ -732,81 +739,144 @@ int test_p2sh_p2wpkh(int argc, char ** argv)
 		(void **)&tx_data);
 	assert(tx_data && cb_data > 0);
 	
-	int rc = 0;
 	AUTO_CLEANUP_ARRAY1_(satoshi_tx_t) tx[1] = { 0 };
 	cb = satoshi_tx_parse(tx, cb_data, tx_data);
 	assert(cb == cb_data);
 	satoshi_tx_dump(tx);
 	
+	return verify_tx(tx, utxoes);
+}
+
+
+/*
+3. Native P2WSH
+This example shows how OP_CODESEPARATOR and out-of-range SIGHASH_SINGLE are processed:
+
+  The following is an unsigned transaction:
+    0100000002fe3dc9208094f3ffd12645477b3dc56f60ec4fa8e6f5d67c565d1c6b9216b36e0000000000ffffffff0815cf020f013ed6cf91d29f4202e8a58726b1ac6c79da47c23d1bee0a6925f80000000000ffffffff0100f2052a010000001976a914a30741f8145e5acadf23f751864167f32e0963f788ac00000000
+  
+    nVersion:  01000000
+    txin:      02 fe3dc9208094f3ffd12645477b3dc56f60ec4fa8e6f5d67c565d1c6b9216b36e 00000000 00 ffffffff
+                  0815cf020f013ed6cf91d29f4202e8a58726b1ac6c79da47c23d1bee0a6925f8 00000000 00 ffffffff
+    txout:     01 00f2052a01000000 1976a914a30741f8145e5acadf23f751864167f32e0963f788ac
+    nLockTime: 00000000
+  
+  The first input comes from an ordinary P2PK:
+    scriptPubKey: 21036d5c20fa14fb2f635474c1dc4ef5909d4568e5569b79fc94d3448486e14685f8ac value: 1.5625
+    private key:  b8f28a772fccbf9b4f58a4f027e07dc2e35e7cd80529975e292ea34f84c4580c
+    signature:    304402200af4e47c9b9629dbecc21f73af989bdaa911f7e6f6c2e9394588a3aa68f81e9902204f3fcf6ade7e5abb1295b6774c8e0abd94ae62217367096bc02ee5e435b67da201 (SIGHASH_ALL)
+  
+  The second input comes from a native P2WSH witness program:
+    scriptPubKey : 00205d1b56b63d714eebe542309525f484b7e9d6f686b3781b6f61ef925d66d6f6a0, value: 49
+    witnessScript: 21026dccc749adc2a9d0d89497ac511f760f45c47dc5ed9cf352a58ac706453880aeadab210255a9626aebf5e29c0e6538428ba0d1dcf6ca98ffdf086aa8ced5e0d0215ea465ac
+                   <026dccc749adc2a9d0d89497ac511f760f45c47dc5ed9cf352a58ac706453880ae> CHECKSIGVERIFY CODESEPARATOR <0255a9626aebf5e29c0e6538428ba0d1dcf6ca98ffdf086aa8ced5e0d0215ea465> CHECKSIG
+  
+  To sign it with a nHashType of 3 (SIGHASH_SINGLE):
+  
+  hashPrevouts:
+    dSHA256(fe3dc9208094f3ffd12645477b3dc56f60ec4fa8e6f5d67c565d1c6b9216b36e000000000815cf020f013ed6cf91d29f4202e8a58726b1ac6c79da47c23d1bee0a6925f800000000)
+  = ef546acf4a020de3898d1b8956176bb507e6211b5ed3619cd08b6ea7e2a09d41
+  
+    nVersion:     01000000
+    hashPrevouts: ef546acf4a020de3898d1b8956176bb507e6211b5ed3619cd08b6ea7e2a09d41
+    hashSequence: 0000000000000000000000000000000000000000000000000000000000000000
+    outpoint:     0815cf020f013ed6cf91d29f4202e8a58726b1ac6c79da47c23d1bee0a6925f800000000
+    scriptCode:   (see below)
+    amount:       0011102401000000
+    nSequence:    ffffffff
+    hashOutputs:  0000000000000000000000000000000000000000000000000000000000000000 (this is the second input but there is only one output)
+    nLockTime:    00000000
+    nHashType:    03000000
+  
+  scriptCode:  4721026dccc749adc2a9d0d89497ac511f760f45c47dc5ed9cf352a58ac706453880aeadab210255a9626aebf5e29c0e6538428ba0d1dcf6ca98ffdf086aa8ced5e0d0215ea465ac
+                                                                                       ^^
+               (please note that the not-yet-executed OP_CODESEPARATOR is not removed from the scriptCode)
+  preimage:    01000000ef546acf4a020de3898d1b8956176bb507e6211b5ed3619cd08b6ea7e2a09d4100000000000000000000000000000000000000000000000000000000000000000815cf020f013ed6cf91d29f4202e8a58726b1ac6c79da47c23d1bee0a6925f8000000004721026dccc749adc2a9d0d89497ac511f760f45c47dc5ed9cf352a58ac706453880aeadab210255a9626aebf5e29c0e6538428ba0d1dcf6ca98ffdf086aa8ced5e0d0215ea465ac0011102401000000ffffffff00000000000000000000000000000000000000000000000000000000000000000000000003000000
+  sigHash:     82dde6e4f1e94d02c2b7ad03d2115d691f48d064e9d52f58194a6637e4194391
+  public key:  026dccc749adc2a9d0d89497ac511f760f45c47dc5ed9cf352a58ac706453880ae
+  private key: 8e02b539b1500aa7c81cf3fed177448a546f19d2be416c0c61ff28e577d8d0cd
+  signature:   3044022027dc95ad6b740fe5129e7e62a75dd00f291a2aeb1200b84b09d9e3789406b6c002201a9ecd315dd6a0e632ab20bbb98948bc0c6fb204f2c286963bb48517a7058e2703
+  
+  scriptCode:  23210255a9626aebf5e29c0e6538428ba0d1dcf6ca98ffdf086aa8ced5e0d0215ea465ac
+               (everything up to the last executed OP_CODESEPARATOR, including that OP_CODESEPARATOR, are removed)
+  preimage:    01000000ef546acf4a020de3898d1b8956176bb507e6211b5ed3619cd08b6ea7e2a09d4100000000000000000000000000000000000000000000000000000000000000000815cf020f013ed6cf91d29f4202e8a58726b1ac6c79da47c23d1bee0a6925f80000000023210255a9626aebf5e29c0e6538428ba0d1dcf6ca98ffdf086aa8ced5e0d0215ea465ac0011102401000000ffffffff00000000000000000000000000000000000000000000000000000000000000000000000003000000
+  sigHash:     fef7bd749cce710c5c052bd796df1af0d935e59cea63736268bcbe2d2134fc47
+  public key:  0255a9626aebf5e29c0e6538428ba0d1dcf6ca98ffdf086aa8ced5e0d0215ea465
+  private key: 86bf2ed75935a0cbef03b89d72034bb4c189d381037a5ac121a70016db8896ec
+  signature:   304402200de66acf4527789bfda55fc5459e214fa6083f936b430a762c629656216805ac0220396f550692cd347171cbc1ef1f51e15282e837bb2b30860dc77c8f78bc8501e503
+  
+  The serialized signed transaction is: 01000000000102fe3dc9208094f3ffd12645477b3dc56f60ec4fa8e6f5d67c565d1c6b9216b36e000000004847304402200af4e47c9b9629dbecc21f73af989bdaa911f7e6f6c2e9394588a3aa68f81e9902204f3fcf6ade7e5abb1295b6774c8e0abd94ae62217367096bc02ee5e435b67da201ffffffff0815cf020f013ed6cf91d29f4202e8a58726b1ac6c79da47c23d1bee0a6925f80000000000ffffffff0100f2052a010000001976a914a30741f8145e5acadf23f751864167f32e0963f788ac000347304402200de66acf4527789bfda55fc5459e214fa6083f936b430a762c629656216805ac0220396f550692cd347171cbc1ef1f51e15282e837bb2b30860dc77c8f78bc8501e503473044022027dc95ad6b740fe5129e7e62a75dd00f291a2aeb1200b84b09d9e3789406b6c002201a9ecd315dd6a0e632ab20bbb98948bc0c6fb204f2c286963bb48517a7058e27034721026dccc749adc2a9d0d89497ac511f760f45c47dc5ed9cf352a58ac706453880aeadab210255a9626aebf5e29c0e6538428ba0d1dcf6ca98ffdf086aa8ced5e0d0215ea465ac00000000
+ 
+*/
+
+int test_native_p2wsh(int argc, char ** argv)
+{
+	static const int TEST_CASE = 3;
+	printf("\n======== TEST %d. %s() ========\n", TEST_CASE, __FUNCTION__);
 	
-	AUTO_FREE_(satoshi_script_t) * scripts = satoshi_script_init(NULL, NULL, NULL);
-	assert(scripts);
-	scripts->attach_tx(scripts, tx);
+	// 3. Native P2WSH
+	AUTO_CLEANUP_ARRAY2_(satoshi_txout_t) utxoes[2] = {
+		[0] = { .value = 156250000LL, .flags = satoshi_txout_type_legacy},
+		[1] = { .value = 4900000000LL, .flags = satoshi_txout_type_segwit_utxo},
+	};
+	hex2bin("23" // vstr.length 
+		"21036d5c20fa14fb2f635474c1dc4ef5909d4568e5569b79fc94d3448486e14685f8ac",
+		-1, (void **)&utxoes[0].scripts);
+	hex2bin("22" // vstr.length 
+		"00205d1b56b63d714eebe542309525f484b7e9d6f686b3781b6f61ef925d66d6f6a0",
+		-1, (void **)&utxoes[1].scripts);
 	
-	satoshi_txin_t * txins = tx->txins;
-	for(ssize_t i = 0; i < tx->txin_count; ++i)
-	{
-		varstr_t * vscripts = txins[i].scripts;
-		ssize_t cb_scripts = varstr_length(vscripts);
-		satoshi_txout_t * utxo = &utxoes[i];
-		
-		scripts->set_txin_info(scripts, i, utxo);
-		// parse txin
-		if(cb_scripts > 0)	// legacy tx
-		{
-			cb = scripts->parse(scripts, 
-				satoshi_tx_script_type_txin, 
-				varstr_getdata_ptr(vscripts), cb_scripts);
-			assert(cb == cb_scripts);
-		}else
-		{
-			if(!tx->has_flag || NULL == tx->witnesses) {
-				/*
-				 * legacy-tx with no witnesses data, 
-				 * ignore this verification for compatibility with future unknown versions
-				 */
-				continue;
-			}
-		}
-		
-		
-		satoshi_script_stack_t * stack = scripts->main_stack;
-		printf("== stack status: count = %Zd\n", stack->count);
-		for(ssize_t ii = 0; ii < stack->count; ++ii)
-		{
-			satoshi_script_data_t * sdata = stack->data[stack->count - 1 - ii];
-			assert(sdata->type > satoshi_script_data_type_varstr);
-			dump_line("\t data: ", sdata->data, sdata->size);
-		}
-		
-		// parse utxo
-		printf("-- txins[%Zd] ---------------------------------------------\n", i);
-		dump_line("utxo: ", utxo->scripts, varstr_size(utxo->scripts));
-		cb_scripts = varstr_length(utxo->scripts);
-		if(cb_scripts > 0)
-		{
-			printf("== parse utxo ..., flags=%d\n", utxo->flags);
-			cb = scripts->parse(scripts, 
-				satoshi_tx_script_type_txout,
-				varstr_getdata_ptr(utxo->scripts), cb_scripts);
-			assert(cb == cb_scripts);
-		} 
-		
-		printf("== stack status: count = %Zd\n", stack->count);
-		for(ssize_t ii = 0; ii < stack->count; ++ii)
-		{
-			satoshi_script_data_t * sdata = stack->data[stack->count - 1 - ii];
-			if(sdata->type > satoshi_script_data_type_varstr)
-				dump_line("\t data: ", sdata->data, sdata->size);
-		}
-		
-		rc = scripts->verify(scripts);
-		assert(0 == rc);
-		if(rc) break;
-	}
+	ssize_t cb = 0;
+	AUTO_FREE_PTR unsigned char * tx_data = NULL;	// serialized tx data
+	ssize_t cb_data = hex2bin(
+		"01000000"
+		"0001"
+		"02"
+			"fe3dc9208094f3ffd12645477b3dc56f60ec4fa8e6f5d67c565d1c6b9216b36e" "00000000"
+			"48"
+				"47"
+					"3044"
+						"02200af4e47c9b9629dbecc21f73af989bdaa911f7e6f6c2e9394588a3aa68f81e99"
+						"02204f3fcf6ade7e5abb1295b6774c8e0abd94ae62217367096bc02ee5e435b67da2"
+					"01"
+			"ffffffff"
+			"0815cf020f013ed6cf91d29f4202e8a58726b1ac6c79da47c23d1bee0a6925f8" "00000000"
+			"00"
+			"ffffffff"
+		"01"
+			"00f2052a01000000" "1976a914a30741f8145e5acadf23f751864167f32e0963f788ac"
+		// witnesses data
+		"00"
+		"03"
+			"47"
+				"3044"
+					"02200de66acf4527789bfda55fc5459e214fa6083f936b430a762c629656216805ac"
+					"0220396f550692cd347171cbc1ef1f51e15282e837bb2b30860dc77c8f78bc8501e5"
+				"03"	// sighash_single
+		"47"
+			"3044"
+				"022027dc95ad6b740fe5129e7e62a75dd00f291a2aeb1200b84b09d9e3789406b6c0"
+				"02201a9ecd315dd6a0e632ab20bbb98948bc0c6fb204f2c286963bb48517a7058e27"
+			"03"
+		"47"
+			"21" "026dccc749adc2a9d0d89497ac511f760f45c47dc5ed9cf352a58ac706453880ae"
+			"ad"	// op_checksigverify
+			"ab"	// op_codeseparator
+			"21" "0255a9626aebf5e29c0e6538428ba0d1dcf6ca98ffdf086aa8ced5e0d0215ea465"
+			"ac" // op_checksig
+		"00000000",
+		-1,
+		(void **)&tx_data);
+	assert(tx_data && cb_data > 0);
 	
+	AUTO_CLEANUP_ARRAY1_(satoshi_tx_t) tx[1] = { 0 };
+	cb = satoshi_tx_parse(tx, cb_data, tx_data);
+	assert(cb == cb_data);
+	satoshi_tx_dump(tx);
 	
-	return rc;
+	///< @todo  add support for out-of-range sighash_single.
+	printf("\e[31mTODO: sighash_single : out-of-range. \e[39m\n");
+	return verify_tx(tx, utxoes);
 }
 
 
@@ -814,6 +884,8 @@ int test_segwit_v0(int argc, char ** argv)
 {
 	test_(native_p2wpkh);
 	test_(p2sh_p2wpkh);
+	
+	test_(native_p2wsh);
 	return 0;
 }
 #endif
