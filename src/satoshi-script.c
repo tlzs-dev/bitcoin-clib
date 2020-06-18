@@ -1255,7 +1255,7 @@ static inline const unsigned char * txout_scripts_pre_process(satoshi_script_t *
 			); 
 			assert(cb == cb_scripts);
 			if(cb != cb_scripts) return NULL;
-		}else if(cb_scripts <= 0xff)
+		}else if(cb_scripts < 0xFD)	// varstr uses 1 byte to indicate the length
 		{
 			cb = parse_op_push_data(scripts->main_stack, 
 				satoshi_script_opcode_op_pushdata1,		// op_code
