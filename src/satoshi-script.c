@@ -1206,27 +1206,57 @@ static inline const unsigned char * txout_scripts_pre_process(satoshi_script_t *
 	
 	// segwit program
 	unsigned char version_byte = *p++;
-	assert(version_byte == 0);		// currently only supports segwit_v0
+	if(version_byte != 0) return NULL;	// currently only supports segwit_v0
+	//	assert(version_byte == 0);			// currently only supports segwit_v0
 	
 	if(p > p_end) return NULL;
 	
 	unsigned char program_length = p[0];
 	if((p + program_length) > p_end) return NULL;
 	
+	int is_p2wsh = 0;
+	
 	if(program_length == 20)
 	{
 		cur_txin->redeem_scripts = satoshi_script_generate_p2pkh_script(p + 1, program_length);
-		return p;
+		
 	}else if(program_length == 32)
 	{
+		is_p2wsh = 1;
 		// todo
 	}else
 	{
 		fprintf(stderr, "[ERROR]: %s(): invalid segwit program length (%u)\n", 
 			__FUNCTION__, 
 			(uint32_t)program_length);
+		return NULL;
 	}
-	return NULL;
+	
+	// push witnesses_data
+	assert(tx->witnesses);
+	bitcoin_tx_witness_t * witness = &tx->witnesses[txin_index];
+	for(ssize_t i = 0; i < witness->num_items; ++i)
+	{
+		unsigned char * scripts_code = varstr_getdata_ptr(witness->items[i]);
+		ssize_t cb_scripts = varstr_length(witness->items[i]);
+		ssize_t cb = 0;
+		assert(cb_scripts > 0 
+			// must be a pushdata op, and the size MUST not exceed the size specified by the consensus 
+			&& scripts_code[0] < satoshi_script_opcode_op_pushdata4
+		);
+		
+		cb = scripts->parse(scripts, 
+			satoshi_tx_script_type_unknown, // no additional processing
+			scripts_code, cb_scripts);
+		assert(cb == cb_scripts);
+	}
+	
+	if(is_p2wsh)
+	{
+		// todo
+	}
+
+	return p;
 }
 
 static ssize_t scripts_parse(struct satoshi_script * scripts, 
