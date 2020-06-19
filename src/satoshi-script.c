@@ -1392,11 +1392,8 @@ static inline const unsigned char * txout_scripts_pre_process(satoshi_script_t *
 		}
 		satoshi_script_data_free(stack->pop(stack));
 		
-		rc = stack->push(stack, 
-				satoshi_script_data_new_ptr(segwit_scripts_data, (segwit_scripts_end - segwit_scripts_data))
-		);
-		
-		satoshi_script_data_free(sdata);
+		//  push sdata(redeem_scripts) back to the stack
+		rc = stack->push(stack, sdata);
 		sdata = NULL;
 		
 		if(rc) return NULL;

@@ -382,6 +382,7 @@ satoshi_rawtx_t * satoshi_rawtx_attach_segwit_tx(satoshi_rawtx_t * rawtx, satosh
 			"----------------------------------------\n",				\
 			#name, 														\
 			(0==rc)?"\e[32mPASSED\e[39m":"\e[31mFAILED\e[39m");			\
+		assert(0 == rc);												\
 	} while(0)
 
 #define AUTO_FREE_PTR __attribute__((cleanup(auto_free_ptr)))
