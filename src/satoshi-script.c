@@ -1327,9 +1327,11 @@ static inline const unsigned char * txout_scripts_pre_process(satoshi_script_t *
 			unsigned char * scripts_data = varstr_getdata_ptr(witness->items[i]);
 			ssize_t cb_scripts = varstr_length(witness->items[i]); // length of vstr.data
 
-			assert(cb_scripts > 0);	///< @todo check length <= consensus.max_script_length
-			if(cb_scripts <= 0) return NULL;	
-			
+			assert(cb_scripts >= 0);	///< @todo check length <= consensus.max_script_length
+			if(cb_scripts < 0) return NULL;	
+			if(cb_scripts == 0) {	// p2sh-p2wsh witness data
+				continue;			// bypass
+			}
 			rc = scripts->main_stack->push(scripts->main_stack,
 				satoshi_script_data_new_ptr(scripts_data, cb_scripts));
 			if(rc) return NULL;
@@ -1350,7 +1352,7 @@ static inline const unsigned char * txout_scripts_pre_process(satoshi_script_t *
 		satoshi_script_private_t * priv = scripts->priv;
 		assert(priv && priv->utxo);
 		satoshi_txout_t * utxo = (satoshi_txout_t *)priv->utxo;
-		utxo->flags = satoshi_txout_type_p2sh_to_segwit;
+		utxo->flags |= satoshi_txout_type_p2sh_segwit_flags;
 	
 		//  cur_txin->scripts_data is a segwit script
 		varstr_t * vscripts = (varstr_t *)varstr_getdata_ptr(cur_txin->scripts);
@@ -1370,15 +1372,30 @@ static inline const unsigned char * txout_scripts_pre_process(satoshi_script_t *
 			if(rc) return NULL;
 			return p_end;
 			
-		}else if(program_length == 32)
+		}else if(program_length == 32)	// p2sh --> p2wsh
 		{
 			// parse the redeem-scripts of p2sh
 			rc = txin_p2sh_scripts_post_process(scripts, tx, txin_index);
 			assert(0 == rc);
 			
+			satoshi_script_stack_t * stack = scripts->main_stack;
+			assert(stack->count > 0);
+			// discard the data which be pushed by legacy method
+			satoshi_script_data_free(stack->pop(stack));
+			
+			// push segwit_scripts to stack
+			
+			varstr_t * segwit_scripts = (varstr_t *)varstr_getdata_ptr(cur_txin->scripts);	// the segwit_scripts of p2sh-p2wsh 
+	#if defined(_VERBOSE) && (_VERBOSE > 1)
+			dump_line("segwit_scripts: ", segwit_scripts, varstr_size(segwit_scripts)); 
+	#endif
+	
+			rc = stack->push(stack, 
+				satoshi_script_data_new_ptr(varstr_getdata_ptr(segwit_scripts), varstr_length(segwit_scripts)));
+			
 			if(rc) return NULL;
+			return p;
 		}
-		
 		return p;
 	}
 	
@@ -1410,7 +1427,6 @@ static int parse_op_codeseparator(satoshi_script_t * scripts, const unsigned cha
 	
 #if defined(_VERBOSE) && (_VERBOSE > 1)
 	dump_line("redeem_scripts: ", varstr_getdata_ptr(redeem_scripts), varstr_length(redeem_scripts));
-	dump_line("payload: ", payload, p_end - payload);
 #endif
 	unsigned char * p_redeem_scripts_begin = varstr_getdata_ptr(redeem_scripts);
 	unsigned char * p_redeem_scripts_end = ((unsigned char *)redeem_scripts) + varstr_size(redeem_scripts);

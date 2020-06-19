@@ -298,17 +298,16 @@ int satoshi_rawtx_get_digest(satoshi_rawtx_t * rawtx,
 		uint256_t * digest)
 {
 	assert(utxo);
-	int flags = utxo->flags; // 0: for legacy-utxo verification, 1: for segwit-utxo verification 
-	switch(flags)
-	{
-	case satoshi_txout_type_unknown:
-	case satoshi_txout_type_legacy: return satoshi_utxo_get_digest(rawtx, cur_index, hash_type, utxo, digest);
 	
-	case satoshi_txout_type_p2sh_to_segwit:
-	case satoshi_txout_type_segwit_utxo: return segwit_utxo_get_digest(rawtx, cur_index, hash_type, utxo, digest);
-	default:
-		fprintf(stderr, "%s()::unknown utxo type.\n", __FUNCTION__);
-		break;
+	int flags = utxo->flags & satoshi_txout_type_masks;
+	int p2sh_segwit_flags = utxo->flags & satoshi_txout_type_p2sh_segwit_flags;
+	
+	if(p2sh_segwit_flags || flags == satoshi_txout_type_segwit) {
+		return segwit_utxo_get_digest(rawtx, cur_index, hash_type, utxo, digest);
+	}
+	if(flags == satoshi_txout_type_legacy)
+	{
+		return satoshi_utxo_get_digest(rawtx, cur_index, hash_type, utxo, digest);
 	}
 	return -1;
 }

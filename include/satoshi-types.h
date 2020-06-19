@@ -177,8 +177,10 @@ enum satoshi_txout_type
 {
 	satoshi_txout_type_unknown = 0,
 	satoshi_txout_type_legacy = 1,
-	satoshi_txout_type_segwit_utxo = 2,
-	satoshi_txout_type_p2sh_to_segwit = 3,		// p2sh-p2wphk or p2sh-p2wsh
+	satoshi_txout_type_segwit = 2,	// native p2wphk or p2wsh
+	
+	satoshi_txout_type_masks = 0x7FFF,
+	satoshi_txout_type_p2sh_segwit_flags = 0x8000,	// (p2sh --> p2wphk or p2wsh)
 };
 
 typedef struct satoshi_txout

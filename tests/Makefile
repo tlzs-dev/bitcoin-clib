@@ -72,7 +72,7 @@ test_satoshi-tx: $(BASE_OBJECTS) $(UTILS_OBJECTS) \
 		$(SRC_DIR)/satoshi-tx.c $(SRC_DIR)/segwit-tx.c \
 		$(SRC_DIR)/satoshi-types.c $(SRC_DIR)/crypto.c $(SRC_DIR)/satoshi-script.c
 	echo "build $@ ..."
-	$(CC) -o $@ $(CFLAGS) $(LIBS) $^ -D_TEST_SATOSHI_TX -D_STAND_ALONE -lsecp256k1
+	$(CC) -o $@ $(CFLAGS) $(LIBS) $^ -D_TEST_SATOSHI_TX -D_STAND_ALONE -lsecp256k1 -D_VERBOSE=7
 
 .PHONY: do_init clean
 do_init:
