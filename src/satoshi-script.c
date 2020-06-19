@@ -1315,6 +1315,35 @@ static inline const unsigned char * txout_scripts_pre_process(satoshi_script_t *
 	const unsigned char * p_witness_program_end = p_end;
 	if(cur_txin->is_p2sh) return p;	// legacy p2sh tx, use the original processing method 
 	
+	
+	satoshi_script_stack_t * stack = scripts->main_stack;
+	satoshi_script_data_t * sdata = NULL;
+	
+	if(p[0] > 16) { // legacy utxo
+		
+		if( !tx->has_flag 		// not segwit 
+			|| (0 == tx->witnesses[txin_index].num_items) // not p2sh-p2wphk or p2sh-pwsh 
+		){
+			// set redeem_scripts: use current utxo's scripts directly
+			if(NULL == cur_txin->redeem_scripts) cur_txin->redeem_scripts = varstr_new(p, (p_end - p));
+			return p;	// use the original(legacy) processing method 
+		}
+		
+		/**
+		 * is p2sh-segwit scripts
+		 * pop the segwit_scripts from the main_stack.
+		 * ( the segwit_scripts should have been pushed when parsing txin->scripts )
+		 */
+		 if(stack->count <= 0)
+		{
+			fprintf(stderr, "line %d: %s(): segwit scripts not found.\n", __LINE__, __FUNCTION__);
+			return NULL;
+		}
+		
+		sdata = stack->pop(stack);
+		assert(sdata && sdata->data && sdata->size > 0);
+	}
+	
 	if(tx->has_flag && tx->witnesses[txin_index].num_items > 0)
 	{
 		// push witnesses_data
@@ -1337,62 +1366,52 @@ static inline const unsigned char * txout_scripts_pre_process(satoshi_script_t *
 				satoshi_script_data_new_ptr(scripts_data, cb_scripts));
 			if(rc) return NULL;
 		}
-	}
-	
-	if(p[0] > 16) { // legacy utxo
+	}	
 		
-		if( !tx->has_flag 		// not segwit 
-			|| (0 == tx->witnesses[txin_index].num_items) // not p2sh-p2wphk or p2sh-pwsh 
-		){
-			// set redeem_scripts: use current utxo's scripts directly
-			if(NULL == cur_txin->redeem_scripts) cur_txin->redeem_scripts = varstr_new(p, (p_end - p));
-			return p;	// use the original(legacy) processing method 
-		}
-		
-		// set utxo flags for later use
-		satoshi_script_private_t * priv = scripts->priv;
-		assert(priv && priv->utxo);
-		satoshi_txout_t * utxo = (satoshi_txout_t *)priv->utxo;
-		utxo->flags |= satoshi_txout_type_p2sh_segwit_flags;
-	
-		/**
-		 * Parse the segwit scripts which located in the txin's scripts.
-		 * the vsrt.data of cur_txin->scripts is a varstr(segwit-scripts)
-		 */
-		varstr_t * vscripts = (varstr_t *)varstr_getdata_ptr(cur_txin->scripts);
-	#if defined(_VERBOSE) && (_VERBOSE > 1)
-			dump_line("segwit_scripts: ", vscripts, varstr_size(vscripts)); 
-	#endif
-		
-		unsigned char * segwit_scripts_data = varstr_getdata_ptr(vscripts);
-		unsigned char * segwit_scripts_end = segwit_scripts_data + varstr_length(vscripts);
+	if(sdata) { // p2sh-segwit 
+		unsigned char * segwit_scripts_data = sdata->data;
+		unsigned char * segwit_scripts_end = segwit_scripts_data + sdata->size;
 		
 		if((segwit_scripts_data + 2) >= segwit_scripts_end)
 		{
 			fprintf(stderr, "%s(): invalid segwit scripts format.\n", __FUNCTION__);
-			return NULL;
+			goto label_error;
 		}
-		rc = parse_segwit_script(scripts, tx, txin_index, segwit_scripts_data, segwit_scripts_end);
-		if(rc) return NULL;
 		
+		rc = parse_segwit_script(scripts, tx, txin_index, segwit_scripts_data, segwit_scripts_end);
+		if(rc) goto label_error;
 		/**
 		 * In order to be able to reuse the original processing method while being compatible with BIP143, 
 		 * it is nesscessary to pop the top-item out and push {segwit_scripts_data} to the main_stack,
 		 */
-		satoshi_script_stack_t * stack = scripts->main_stack;
+		
+		if(stack->count <= 0)
+		{
+			fprintf(stderr, "%s(): parse segwit scripts failed.\n", __FUNCTION__);
+			goto label_error;
+		}
+		satoshi_script_data_free(stack->pop(stack));
+		
 		rc = stack->push(stack, 
 				satoshi_script_data_new_ptr(segwit_scripts_data, (segwit_scripts_end - segwit_scripts_data))
 		);
+		
+		satoshi_script_data_free(sdata);
+		sdata = NULL;
+		
 		if(rc) return NULL;
 		return p;	// use legacy method to parse utxo's p2sh-scripts
 	}
-	
 	
 	// native segwit utxo
 	rc = parse_segwit_script(scripts, tx, txin_index, p, p_witness_program_end);
 	if(rc) return NULL;
 	
 	return p_end;	// No further processing
+
+label_error:
+	if(sdata) satoshi_script_data_free(sdata);
+	return NULL;
 }
 
 static int parse_op_codeseparator(satoshi_script_t * scripts, const unsigned char * p)
