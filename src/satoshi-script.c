@@ -1356,21 +1356,46 @@ static inline const unsigned char * txout_scripts_pre_process(satoshi_script_t *
 	
 		//  cur_txin->scripts_data is a segwit script
 		varstr_t * vscripts = (varstr_t *)varstr_getdata_ptr(cur_txin->scripts);
-		unsigned char * segwit_scripts = varstr_getdata_ptr(vscripts);
-		unsigned char * segwit_scripts_end = segwit_scripts + varstr_length(vscripts);
+	#if defined(_VERBOSE) && (_VERBOSE > 1)
+			dump_line("segwit_scripts: ", vscripts, varstr_size(vscripts)); 
+	#endif
 		
+		unsigned char * segwit_scripts_data = varstr_getdata_ptr(vscripts);
+		unsigned char * segwit_scripts_end = segwit_scripts_data + varstr_length(vscripts);
 		
-		unsigned char version_byte = *segwit_scripts++;
-		unsigned char program_length = *segwit_scripts++;
-		assert((segwit_scripts + program_length) == segwit_scripts_end);
+		if((segwit_scripts_data + 2) >= segwit_scripts_end)
+		{
+			fprintf(stderr, "%s(): invalid segwit scripts format.\n", __FUNCTION__);
+			return NULL;
+		}
+		
+		unsigned char version_byte = segwit_scripts_data[0];
+		unsigned char program_length = segwit_scripts_data[1];
+		satoshi_script_stack_t * stack = scripts->main_stack;
+		
+		if(version_byte != 0)
+		{
+			fprintf(stderr, "%s()::unknown version.\n", __FUNCTION__);
+			return NULL;
+		//	return p_end;	// unknown version, bypass this verification to support future versions 
+		}
+		
+		if((segwit_scripts_data + 2 + program_length) != segwit_scripts_end)
+		{
+			fprintf(stderr, "%s(): invalid segwit scripts format.\n", __FUNCTION__);
+			return NULL;
+		}
 		
 		assert(version_byte == 0);	// segwit_v0 only
+		assert((segwit_scripts_data + 2 + program_length) == segwit_scripts_end);
+		
 		if(program_length == 20) //  p2sh --> p2wpkh
 		{
-			rc = parse_p2sh_p2wpkh_scripts(scripts, tx, txin_index, segwit_scripts, program_length);
-			assert(0 == rc);
+			rc = parse_p2sh_p2wpkh_scripts(scripts, tx, txin_index, &segwit_scripts_data[2], program_length);
 			if(rc) return NULL;
-			return p_end;
+			
+			rc = scripts->verify(scripts);	// verify segwit_scripts
+			if(rc) return NULL;
 			
 		}else if(program_length == 32)	// p2sh --> p2wsh
 		{
@@ -1378,25 +1403,23 @@ static inline const unsigned char * txout_scripts_pre_process(satoshi_script_t *
 			rc = txin_p2sh_scripts_post_process(scripts, tx, txin_index);
 			assert(0 == rc);
 			
-			satoshi_script_stack_t * stack = scripts->main_stack;
-			assert(stack->count > 0);
+			if(stack->count <= 0) return NULL;
+			
 			// discard the data which be pushed by legacy method
+			assert(stack->count > 0);
 			satoshi_script_data_free(stack->pop(stack));
-			
-			// push segwit_scripts to stack
-			
-			varstr_t * segwit_scripts = (varstr_t *)varstr_getdata_ptr(cur_txin->scripts);	// the segwit_scripts of p2sh-p2wsh 
-	#if defined(_VERBOSE) && (_VERBOSE > 1)
-			dump_line("segwit_scripts: ", segwit_scripts, varstr_size(segwit_scripts)); 
-	#endif
-	
-			rc = stack->push(stack, 
-				satoshi_script_data_new_ptr(varstr_getdata_ptr(segwit_scripts), varstr_length(segwit_scripts)));
-			
-			if(rc) return NULL;
-			return p;
+
+		}else 
+		{
+			return NULL;
 		}
-		return p;
+		
+		// push segwit_scripts as redeem_scripts
+		rc = stack->push(stack, 
+				satoshi_script_data_new_ptr(segwit_scripts_data, (segwit_scripts_end - segwit_scripts_data))
+		);
+		if(rc) return NULL;
+		return p;	// use legacy method to parse utxo's p2sh-scripts
 	}
 	
 	rc = parse_segwit_script(scripts, tx, txin_index, p, p_witness_program_end);
