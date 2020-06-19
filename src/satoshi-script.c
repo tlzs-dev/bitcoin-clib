@@ -1313,6 +1313,7 @@ static inline const unsigned char * txout_scripts_pre_process(satoshi_script_t *
 	int rc = 0;
 	satoshi_txin_t * cur_txin = &tx->txins[txin_index];
 	const unsigned char * p_witness_program_end = p_end;
+	if(cur_txin->is_p2sh) return p;	// legacy p2sh tx, use the original processing method 
 	
 	if(tx->has_flag && tx->witnesses[txin_index].num_items > 0)
 	{
@@ -1339,7 +1340,6 @@ static inline const unsigned char * txout_scripts_pre_process(satoshi_script_t *
 	}
 	
 	if(p[0] > 16) { // legacy utxo
-		if(cur_txin->is_p2sh) return p;		// use the original(legacy) processing method 
 		
 		if( !tx->has_flag 		// not segwit 
 			|| (0 == tx->witnesses[txin_index].num_items) // not p2sh-p2wphk or p2sh-pwsh 
@@ -1349,12 +1349,16 @@ static inline const unsigned char * txout_scripts_pre_process(satoshi_script_t *
 			return p;	// use the original(legacy) processing method 
 		}
 		
+		// set utxo flags for later use
 		satoshi_script_private_t * priv = scripts->priv;
 		assert(priv && priv->utxo);
 		satoshi_txout_t * utxo = (satoshi_txout_t *)priv->utxo;
 		utxo->flags |= satoshi_txout_type_p2sh_segwit_flags;
 	
-		//  cur_txin->scripts_data is a segwit script
+		/**
+		 * Parse the segwit scripts which located in the txin's scripts.
+		 * the vsrt.data of cur_txin->scripts is a varstr(segwit-scripts)
+		 */
 		varstr_t * vscripts = (varstr_t *)varstr_getdata_ptr(cur_txin->scripts);
 	#if defined(_VERBOSE) && (_VERBOSE > 1)
 			dump_line("segwit_scripts: ", vscripts, varstr_size(vscripts)); 
@@ -1368,53 +1372,14 @@ static inline const unsigned char * txout_scripts_pre_process(satoshi_script_t *
 			fprintf(stderr, "%s(): invalid segwit scripts format.\n", __FUNCTION__);
 			return NULL;
 		}
+		rc = parse_segwit_script(scripts, tx, txin_index, segwit_scripts_data, segwit_scripts_end);
+		if(rc) return NULL;
 		
-		unsigned char version_byte = segwit_scripts_data[0];
-		unsigned char program_length = segwit_scripts_data[1];
+		/**
+		 * In order to be able to reuse the original processing method while being compatible with BIP143, 
+		 * it is nesscessary to pop the top-item out and push {segwit_scripts_data} to the main_stack,
+		 */
 		satoshi_script_stack_t * stack = scripts->main_stack;
-		
-		if(version_byte != 0)
-		{
-			fprintf(stderr, "%s()::unknown version.\n", __FUNCTION__);
-			return NULL;
-		//	return p_end;	// unknown version, bypass this verification to support future versions 
-		}
-		
-		if((segwit_scripts_data + 2 + program_length) != segwit_scripts_end)
-		{
-			fprintf(stderr, "%s(): invalid segwit scripts format.\n", __FUNCTION__);
-			return NULL;
-		}
-		
-		assert(version_byte == 0);	// segwit_v0 only
-		assert((segwit_scripts_data + 2 + program_length) == segwit_scripts_end);
-		
-		if(program_length == 20) //  p2sh --> p2wpkh
-		{
-			rc = parse_p2sh_p2wpkh_scripts(scripts, tx, txin_index, &segwit_scripts_data[2], program_length);
-			if(rc) return NULL;
-			
-			rc = scripts->verify(scripts);	// verify segwit_scripts
-			if(rc) return NULL;
-			
-		}else if(program_length == 32)	// p2sh --> p2wsh
-		{
-			// parse the redeem-scripts of p2sh
-			rc = txin_p2sh_scripts_post_process(scripts, tx, txin_index);
-			assert(0 == rc);
-			
-			if(stack->count <= 0) return NULL;
-			
-			// discard the data which be pushed by legacy method
-			assert(stack->count > 0);
-			satoshi_script_data_free(stack->pop(stack));
-
-		}else 
-		{
-			return NULL;
-		}
-		
-		// push segwit_scripts as redeem_scripts
 		rc = stack->push(stack, 
 				satoshi_script_data_new_ptr(segwit_scripts_data, (segwit_scripts_end - segwit_scripts_data))
 		);
@@ -1422,10 +1387,12 @@ static inline const unsigned char * txout_scripts_pre_process(satoshi_script_t *
 		return p;	// use legacy method to parse utxo's p2sh-scripts
 	}
 	
+	
+	// native segwit utxo
 	rc = parse_segwit_script(scripts, tx, txin_index, p, p_witness_program_end);
 	if(rc) return NULL;
 	
-	return p_end;
+	return p_end;	// No further processing
 }
 
 static int parse_op_codeseparator(satoshi_script_t * scripts, const unsigned char * p)
