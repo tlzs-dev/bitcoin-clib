@@ -44,10 +44,16 @@ typedef char * string;
 			__FILE__, __LINE__, __FUNCTION__,						\
 			##__VA_ARGS__);											\
 	} while(0)
+	
+#define debug_dump_line(prefix, data, length) do {				\
+		fprintf(stderr, "\e[33m" "%s", prefix); 				\
+		dump2(stderr, data, length); 							\
+		fprintf(stderr, "\e[39m\n");							\
+	} while(0)
 #else
 #define debug_printf(fmt, ...) do { } while(0)
+#define debug_dump_line(prefix, data, length) do { } while(0)
 #endif
-
 
 #ifdef __cplusplus
 }

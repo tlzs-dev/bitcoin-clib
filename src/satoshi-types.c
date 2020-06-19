@@ -416,6 +416,33 @@ varstr_t * satoshi_txin_get_redeem_scripts(const satoshi_txin_t * txin)
 	return varstr_new(scripts_data, (p_end - scripts_data));
 }
 
+ssize_t satoshi_txin_query_redeem_scripts_data(const satoshi_txin_t * txin, const unsigned char ** p_data)
+{
+	if(NULL == txin || NULL == txin->redeem_scripts) return -1;
+	varstr_t * redeem_scripts = txin->redeem_scripts;
+	
+	const unsigned char * p = varstr_getdata_ptr(redeem_scripts);
+	const unsigned char * p_end = p + varstr_length(redeem_scripts);
+	
+	p += txin->redeem_scripts_start_pos;
+	if(p > p_end) return -1;
+	
+	*p_data = p;
+	return p_end - p;
+}
+
+varstr_t * satoshi_txin_set_redeem_scripts(satoshi_txin_t * txin, const unsigned char * data, size_t length)
+{
+	if(NULL == txin) return NULL;
+	
+	varstr_t * redeem_scripts = varstr_new(data, length);
+	varstr_free(txin->redeem_scripts);
+	txin->redeem_scripts = redeem_scripts;
+	txin->redeem_scripts_start_pos = 0;
+	return redeem_scripts;
+}
+
+
 ssize_t satoshi_txin_parse(satoshi_txin_t * txin, ssize_t length, const void * payload)
 {
 	assert(txin && (length > 0) && payload);

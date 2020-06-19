@@ -170,7 +170,8 @@ ssize_t satoshi_txin_parse(satoshi_txin_t * txin, ssize_t length, const void * p
 ssize_t satoshi_txin_serialize(const satoshi_txin_t * txin, unsigned char ** p_data);
 void satoshi_txin_cleanup(satoshi_txin_t * txin);
 varstr_t * satoshi_txin_get_redeem_scripts(const satoshi_txin_t * txin);
-
+ssize_t satoshi_txin_query_redeem_scripts_data(const satoshi_txin_t * txin, const unsigned char ** p_data);
+varstr_t * satoshi_txin_set_redeem_scripts(satoshi_txin_t * txin, const unsigned char * data, size_t length);
 
 enum satoshi_txout_type
 {

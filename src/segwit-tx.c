@@ -218,7 +218,7 @@ int segwit_utxo_get_digest(satoshi_rawtx_t * rawtx,
 {
 	
 	assert(rawtx && rawtx->tx && utxo);
-	debug_printf("utxo->flag=%d", utxo->flags);
+	debug_printf("utxo->flag=%d, hash_type=%u", utxo->flags, hash_type);
 	satoshi_tx_t * tx = rawtx->tx;
 	assert(tx->txins && cur_index >= 0 && cur_index < tx->txin_count);
 
@@ -278,7 +278,6 @@ int segwit_utxo_get_digest(satoshi_rawtx_t * rawtx,
 	cb_image += 4;
 
 	//  8. hashOutputs (32-byte hash)
-	debug_printf("hash_type: %u", hash_type);
 	switch(hash_type)
 	{
 	case satoshi_tx_sighash_all:
@@ -309,9 +308,6 @@ int segwit_utxo_get_digest(satoshi_rawtx_t * rawtx,
 	sha256_update(sha, (unsigned char *)&hash_type, sizeof(uint32_t));
 	cb_image += 4;
 	
-	debug_printf("hash_type: %u", hash_type);
-	debug_printf("preimage length: %ld", cb_image);
-	
 	sha256_final(sha, hash);
 	
 	// double hash
@@ -320,6 +316,8 @@ int segwit_utxo_get_digest(satoshi_rawtx_t * rawtx,
 	
 	// write result
 	sha256_final(sha, (unsigned char *)digest);	
+
+	debug_dump_line("\t--> digest: ", digest, 32);
 	return 0;
 }
 
@@ -452,7 +450,6 @@ static int verify_tx(satoshi_tx_t * tx, satoshi_txout_t * utxoes)
 	
 	scripts->attach_tx(scripts, tx);
 	
-	// step 1. verify tx
 	satoshi_txin_t * txins = tx->txins;
 	int rc = 0;
 	for(ssize_t i = 0; i < tx->txin_count; ++i)
@@ -481,21 +478,25 @@ static int verify_tx(satoshi_tx_t * tx, satoshi_txout_t * utxoes)
 			}
 		}
 		
-		
 		satoshi_script_stack_t * stack = scripts->main_stack;
 		printf("\e[35m-- " "txin[%d].scripts parsed. stack status: count = %Zd" "\e[39m\n", (int)i, stack->count);
 		for(ssize_t ii = 0; ii < stack->count; ++ii)
 		{
 			satoshi_script_data_t * sdata = stack->data[stack->count - 1 - ii];
-			assert(sdata->type > satoshi_script_data_type_varstr);
-			dump_line("\t data: ", sdata->data, sdata->size);
+			if(sdata->type >= satoshi_script_data_type_varstr){
+				dump_line("\t data: ", sdata->data, sdata->size);
+			}else 
+			{
+				printf("\tdata_type=%d, ", sdata->type);
+				dump_line("value=(hex)", sdata->h256, sdata->size);
+			}
 		}
 		
 		// parse utxo
-		dump_line("utxo: ", utxo->scripts, varstr_size(utxo->scripts));
+		
 		cb_scripts = varstr_length(utxo->scripts);
 		printf("\e[35m-- " "parse utxo of txins[%Zd], flags = %d, cb=%Zd ..." "\e[39m\n", i, utxo->flags, cb_scripts);
-		
+		dump_line("\t utxo: ", utxo->scripts, varstr_size(utxo->scripts));
 		if(cb_scripts > 0)
 		{
 			cb = scripts->parse(scripts, 
@@ -860,17 +861,17 @@ int test_native_p2wsh(int argc, char ** argv)
 					"02200de66acf4527789bfda55fc5459e214fa6083f936b430a762c629656216805ac"
 					"0220396f550692cd347171cbc1ef1f51e15282e837bb2b30860dc77c8f78bc8501e5"
 				"03"	// sighash_single
-		"47"
-			"3044"
-				"022027dc95ad6b740fe5129e7e62a75dd00f291a2aeb1200b84b09d9e3789406b6c0"
-				"02201a9ecd315dd6a0e632ab20bbb98948bc0c6fb204f2c286963bb48517a7058e27"
-			"03"
-		"47"
-			"21" "026dccc749adc2a9d0d89497ac511f760f45c47dc5ed9cf352a58ac706453880ae"
-			"ad"	// op_checksigverify
-			"ab"	// op_codeseparator
-			"21" "0255a9626aebf5e29c0e6538428ba0d1dcf6ca98ffdf086aa8ced5e0d0215ea465"
-			"ac" // op_checksig
+			"47"
+				"3044"
+					"022027dc95ad6b740fe5129e7e62a75dd00f291a2aeb1200b84b09d9e3789406b6c0"
+					"02201a9ecd315dd6a0e632ab20bbb98948bc0c6fb204f2c286963bb48517a7058e27"
+				"03"
+			"47"
+				"21" "026dccc749adc2a9d0d89497ac511f760f45c47dc5ed9cf352a58ac706453880ae"
+				"ad"	// op_checksigverify
+				"ab"	// op_codeseparator
+				"21" "0255a9626aebf5e29c0e6538428ba0d1dcf6ca98ffdf086aa8ced5e0d0215ea465"
+				"ac" // op_checksig
 		"00000000",
 		-1,
 		(void **)&tx_data);

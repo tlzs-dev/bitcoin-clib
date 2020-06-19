@@ -40,16 +40,6 @@
 #include <inttypes.h>
 #include "satoshi-script.h"
 
-#ifdef _DEBUG
-#define debug_dump_line(prefix, data, length) do {				\
-		fprintf(stderr, "\e[33m%s@%d::%s()::%s:", 				\
-			__FILE__, __LINE__, __FUNCTION__, prefix); 			\
-		dump2(stderr, data, length); 							\
-		fprintf(stderr, "\e[39m\n");							\
-	} while(0)
-#else
-#define debug_dump_line(prefix, data, length) do { } while(0)
-#endif
 
 #ifndef debug_printf
 #define debug_printf(fmt, ...) do { \
@@ -415,12 +405,9 @@ int satoshi_utxo_get_digest(satoshi_rawtx_t * rawtx,
 	}
 	assert(cur_index >= rawtx->last_hashed_txin_index);	// pre-hashed index, (from tx.begin() to the end of txins[cur_index].outpoint) 
 	
-	// set pkscript_code
-	unsigned char * redeem_scripts_begin = varstr_getdata_ptr(cur_txin->redeem_scripts);
-	unsigned char * redeem_scripts_end = redeem_scripts_begin + varstr_length(cur_txin->redeem_scripts);
-	redeem_scripts_begin += cur_txin->redeem_scripts_start_pos; 	// discard data before last executed op_codeseperator
-	
-	varstr_t * redeem_scripts = varstr_new(redeem_scripts_begin, (redeem_scripts_end - redeem_scripts_begin));
+	// set redeem_scripts code (pk_scripts)
+	// discard data before last executed op_codeseperator
+	varstr_t * redeem_scripts = satoshi_txin_get_redeem_scripts(cur_txin);
 	raw_txins[cur_index].scripts = redeem_scripts; // unify all modes (p2pk, p2phk, p2sh, p2wphk, p2wsh ...)
 
 	// pre-hash txins when needed

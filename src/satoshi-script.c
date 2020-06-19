@@ -430,6 +430,7 @@ static int stack_push(struct satoshi_script_stack * stack, satoshi_script_data_t
 	
 	stack->data[stack->count++] = sdata;
 	
+#if defined(_VERBOSE) && (_VERBOSE > 1)
 	fprintf(stderr, "\t --> stack_push()::data_type=%d, size=%zd, stack.count=%d\n",
 		sdata->type,
 		sdata->size,
@@ -438,6 +439,7 @@ static int stack_push(struct satoshi_script_stack * stack, satoshi_script_data_t
 	dump_line("\t\t --> data pushed: ", 
 		(sdata->type >= satoshi_script_data_type_varstr)?sdata->data:sdata->h256, 
 		sdata->size);
+#endif
 	return 0;
 }
 
@@ -448,7 +450,7 @@ satoshi_script_data_t * stack_pop(struct satoshi_script_stack * stack)
 	satoshi_script_data_t * sdata = stack->data[--stack->count];
 	stack->data[stack->count] = NULL;
 	
-	
+#if defined(_VERBOSE) && (_VERBOSE > 1)	
 	printf("\t --> stack_pop()::data_type=%d, size=%zd, stack.count=%d\n",
 		sdata->type,
 		sdata->size,
@@ -456,7 +458,7 @@ satoshi_script_data_t * stack_pop(struct satoshi_script_stack * stack)
 	dump_line("\t\t --> data popped: ", 
 		(sdata->type >= satoshi_script_data_type_varstr)?sdata->data:sdata->h256, 
 		sdata->size);
-		
+#endif
 	return sdata;
 }
 
@@ -589,6 +591,7 @@ label_error:
 
 static inline ssize_t parse_op_push_data(satoshi_script_stack_t * stack, uint8_t op_code, const unsigned char * p, const unsigned char * p_end)
 {
+	debug_printf("parse op_pushdata (0x%.2x)", op_code);
 	assert(op_code <= satoshi_script_opcode_op_pushdata4);
 	int rc = 0;
 	uint32_t data_size = op_code;
@@ -1162,13 +1165,17 @@ static inline int txin_p2sh_scripts_post_process(satoshi_script_t * scripts, sat
 	}
 	
 	debug_printf("parse redeem_scripts %p, length=%ld...", sdata->data, (long)sdata->size);
+#if defined(_VERBOSE) && (_VERBOSE > 1)
 	dump_line("redeem scripts: ", sdata->data, sdata->size);
+#endif
 	
-	txin->redeem_scripts = varstr_new(sdata->data, sdata->size);
+	// txin->redeem_scripts = varstr_new(sdata->data, sdata->size);
+	varstr_t * redeem_scripts = satoshi_txin_set_redeem_scripts(txin, sdata->data, sdata->size);
+	assert(redeem_scripts);
 	
 	cb = scripts->parse(scripts, 
 		satoshi_tx_script_type_unknown,	// no additional processing 
-		varstr_getdata_ptr(txin->redeem_scripts), varstr_length(txin->redeem_scripts));
+		varstr_getdata_ptr(redeem_scripts), varstr_length(redeem_scripts));
 	
 	if(cb == sdata->size) // if parsed ok, push back redeem_scripts
 	{
@@ -1381,6 +1388,47 @@ static inline const unsigned char * txout_scripts_pre_process(satoshi_script_t *
 	return p_end;
 }
 
+static int parse_op_codeseparator(satoshi_script_t * scripts, const unsigned char * p)
+{
+	/* 
+	 * Description: 
+	 * ( https://en.bitcoin.it/wiki/Script ) :
+	 * 	All of the signature checking words will only match signatures to the data after the most recently-executed OP_CODESEPARATOR.
+	 */
+	/**
+	 * Explanation:
+	 *  Remove everything before this op_code (including the op_code) in the redeem_scripts.
+	 *  This means that current payload MUST be the redeem_scripts (or part of the redeem_scripts)
+	 */
+	satoshi_script_private_t * priv = scripts->priv;
+	assert(priv && priv->tx);
+	if( !(priv->txin_index >= 0 && priv->txin_index < priv->tx->txin_count) ) return -1;
+	
+	satoshi_txin_t * cur_txin = &priv->tx->txins[priv->txin_index];
+	varstr_t * redeem_scripts = cur_txin->redeem_scripts;
+	if(NULL == redeem_scripts) return -1;
+	
+#if defined(_VERBOSE) && (_VERBOSE > 1)
+	dump_line("redeem_scripts: ", varstr_getdata_ptr(redeem_scripts), varstr_length(redeem_scripts));
+	dump_line("payload: ", payload, p_end - payload);
+#endif
+	unsigned char * p_redeem_scripts_begin = varstr_getdata_ptr(redeem_scripts);
+	unsigned char * p_redeem_scripts_end = ((unsigned char *)redeem_scripts) + varstr_size(redeem_scripts);
+	
+	// to confirm that current payload MUST be or within the redeem_scripts
+	assert(p >= p_redeem_scripts_begin && p < p_redeem_scripts_end); 
+	
+	
+	ptrdiff_t start_pos = p - p_redeem_scripts_begin;
+	debug_printf("move the start position of redeem_scripts from %d to %d", 
+		(int)cur_txin->redeem_scripts_start_pos,
+		(int)start_pos);
+	cur_txin->redeem_scripts_start_pos = start_pos;	// update the start position
+	
+	return 0;
+} 
+
+
 static ssize_t scripts_parse(struct satoshi_script * scripts, 
 	enum satoshi_tx_script_type type, 	// if is_txin, only allows opcode < OP_PUSHDATA4
 	const unsigned char * payload, size_t length
@@ -1434,7 +1482,6 @@ static ssize_t scripts_parse(struct satoshi_script * scripts,
 		{
 			assert(op_code < satoshi_script_opcode_op_pushdata4); // LIMIT the scripts length can not exceed 65535 bytes
 			
-			debug_printf("parse op_pushdata (0x%.2x)", op_code);
 			data_size = parse_op_push_data(main_stack, op_code, p, p_end);
 			
 			if(data_size < 0) return -1;
@@ -1542,40 +1589,9 @@ static ssize_t scripts_parse(struct satoshi_script * scripts,
 			continue;
 			
 		case satoshi_script_opcode_op_codeseparator:
-			/* 
-			 * Description: 
-			 * ( https://en.bitcoin.it/wiki/Script ) :
-			 * 	All of the signature checking words will only match signatures to the data after the most recently-executed OP_CODESEPARATOR.
-			 */
-			 /**
-			  * Explanation:
-			  *  Remove everything before this op_code (including the op_code) in the redeem_scripts.
-			  *  This means that current payload MUST be the redeem_scripts (or part of the redeem_scripts)
-			  */
-			{
-				debug_printf("op_code=satoshi_script_opcode_op_codeseparator");
-				assert(priv->tx && priv->txin_index >= 0 && priv->txin_index < priv->tx->txin_count);
-				satoshi_txin_t * cur_txin = &priv->tx->txins[priv->txin_index];
-				
-				varstr_t * redeem_scripts = cur_txin->redeem_scripts;
-				assert(redeem_scripts);
-				
-				dump_line("redeem_scripts: ", varstr_getdata_ptr(redeem_scripts), varstr_length(redeem_scripts));
-				dump_line("payload: ", payload, p_end - payload);
-				
-				unsigned char * p_redeem_scripts_begin = varstr_getdata_ptr(redeem_scripts);
-				unsigned char * p_redeem_scripts_end = ((unsigned char *)redeem_scripts) + varstr_size(redeem_scripts);
-				
-				// to confirm that current payload MUST be or within the redeem_scripts
-				assert(p >= p_redeem_scripts_begin && p < p_redeem_scripts_end); 
-				
-				cur_txin->redeem_scripts_start_pos = (p - p_redeem_scripts_begin);	// update the start position
-				continue;
-			}
+			rc = parse_op_codeseparator(scripts, p);
+			break;
 			 
-			 
-			
-			
 
 		/**
 		 * ignores:
@@ -1605,11 +1621,11 @@ static ssize_t scripts_parse(struct satoshi_script * scripts,
 		case satoshi_script_opcode_op_reserved1:
 		case satoshi_script_opcode_op_reserved2:
 		default:
-			debug_printf("unsupporting op_code (0x%.2x)", op_code);
+			debug_printf("using reserved (or unassigned) op_code (0x%.2x)", op_code);
 			goto label_error;	// parse failed
 		}
-		if(rc) goto label_error;
 		
+		if(rc) goto label_error;
 	}
 	
 	if(p != p_end){ // only allows push-data opcodes
