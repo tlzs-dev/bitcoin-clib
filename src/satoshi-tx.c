@@ -409,15 +409,19 @@ int satoshi_utxo_get_digest(satoshi_rawtx_t * rawtx,
 	satoshi_txin_t * cur_txin = &tx->txins[cur_index];
 	unsigned char vint[9] = { 0 };
 	
-	
-	
+
 	if(rawtx->last_hashed_txin_index < 0) {
 		rawtx->last_hashed_txin_index = 0;
 	}
 	assert(cur_index >= rawtx->last_hashed_txin_index);	// pre-hashed index, (from tx.begin() to the end of txins[cur_index].outpoint) 
 	
 	// set pkscript_code
-	raw_txins[cur_index].scripts = cur_txin->redeem_scripts;	// unify all modes (p2pk, p2phk, p2sh, p2wphk, p2wsh ...)
+	unsigned char * redeem_scripts_begin = varstr_getdata_ptr(cur_txin->redeem_scripts);
+	unsigned char * redeem_scripts_end = redeem_scripts_begin + varstr_length(cur_txin->redeem_scripts);
+	redeem_scripts_begin += cur_txin->redeem_scripts_start_pos; 	// discard data before last executed op_codeseperator
+	
+	varstr_t * redeem_scripts = varstr_new(redeem_scripts_begin, (redeem_scripts_end - redeem_scripts_begin));
+	raw_txins[cur_index].scripts = redeem_scripts; // unify all modes (p2pk, p2phk, p2sh, p2wphk, p2wsh ...)
 
 	// pre-hash txins when needed
 	if(anyone_canpay)	{ // sign only current txin, do not use the states of rawtx's sha_ctx
@@ -461,6 +465,8 @@ int satoshi_utxo_get_digest(satoshi_rawtx_t * rawtx,
 	}
 	// restore raw_txin's scripts
 	raw_txins[cur_index].scripts = (varstr_t *)varstr_empty;
+	varstr_free(redeem_scripts);
+	
 	
 	// hash txouts
 	if(hash_type == satoshi_tx_sighash_all)
@@ -615,21 +621,6 @@ static inline varstr_t * get_p2wpkh_redeem_scripts(const satoshi_txout_t * utxo)
 	memcpy(&redeem_scripts[4], scripts_data, 20); // copy h160 data
 	return (varstr_t *)redeem_scripts;
 }
-
-/**
- * @deprecated
- */
-varstr_t * satoshi_txin_get_redeem_scripts(
-	unsigned char segwit_program_version_byte,	// [ 0 .. 16 ]
-	unsigned char segwit_program_length,	// MUST be 20 or 32 for segwit_v0
-	const satoshi_txout_t * utxo)
-{
-	if(segwit_program_version_byte == -1) return varstr_clone(utxo->scripts);
-	assert(segwit_program_version_byte == 0);	// segwit_v0 only
-	
-	return get_p2wpkh_redeem_scripts(utxo);
-}
-				
 
 /**************************************************************************************
  * TEST Module

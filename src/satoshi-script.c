@@ -777,7 +777,8 @@ label_error:
 static inline int parse_op_checksig(satoshi_script_stack_t * stack, satoshi_script_t * scripts)
 {
 	int rc = parse_op_checksigverify(stack, scripts);
-	if(0 == rc) stack->push(stack, s_sdata_true);
+	debug_printf("rc=%d", rc);
+	rc = stack->push(stack, satoshi_script_data_new_boolean((0 == rc)));
 	return rc;
 }
 
@@ -785,6 +786,8 @@ static inline int parse_op_checkmultisig(satoshi_script_stack_t * stack, satoshi
 {
 	int rc = -1;
 	int num_pubkeys = 0, num_sigs = 0;
+	
+	
 	
 	satoshi_script_private_t * priv = scripts->priv;
 	satoshi_rawtx_t * rawtx = priv->rawtx;
@@ -924,6 +927,8 @@ label_error:
 		free(sigs);
 	}
 	
+	
+	debug_printf("rc=%d", rc);
 	return rc;
 }
 
@@ -1163,7 +1168,7 @@ static inline int txin_p2sh_scripts_post_process(satoshi_script_t * scripts, sat
 	
 	cb = scripts->parse(scripts, 
 		satoshi_tx_script_type_unknown,	// no additional processing 
-		sdata->data, sdata->size);
+		varstr_getdata_ptr(txin->redeem_scripts), varstr_length(txin->redeem_scripts));
 	
 	if(cb == sdata->size) // if parsed ok, push back redeem_scripts
 	{
@@ -1176,10 +1181,12 @@ static inline int txin_p2sh_scripts_post_process(satoshi_script_t * scripts, sat
 		 * so, when we are processing the txin scripts, 
 		 * we need to manually pop this extra value from the stack before push back redeem scripts
 		 */
+		
 		satoshi_script_data_free(main_stack->pop(main_stack));
 		
 		// push back redeem_scripts
 		main_stack->push(main_stack, sdata);
+
 	}else
 	{
 		satoshi_script_data_free(sdata);
@@ -1201,6 +1208,8 @@ static inline int txin_p2sh_scripts_post_process(satoshi_script_t * scripts, sat
 static inline int parse_segwit_script(satoshi_script_t * scripts, satoshi_tx_t * tx, ssize_t txin_index,
 	const unsigned char * p, const unsigned char * p_end)
 {
+	debug_printf("txin_index: %d", (int)txin_index);
+	
 	satoshi_txin_t * cur_txin = &tx->txins[txin_index];
 	
 	unsigned char version_byte = *p++;
@@ -1211,24 +1220,7 @@ static inline int parse_segwit_script(satoshi_script_t * scripts, satoshi_tx_t *
 	
 	const unsigned char * witness_program = p;
 
-	// push witnesses_data
-	assert(tx->witnesses);
 	int rc = 0;
-	bitcoin_tx_witness_t * witness = &tx->witnesses[txin_index];
-	assert(witness->num_items > 0);
-	
-	for(ssize_t i = 0; i < witness->num_items; ++i)
-	{
-		unsigned char * scripts_data = varstr_getdata_ptr(witness->items[i]);
-		ssize_t cb_scripts = varstr_length(witness->items[i]); // length of vstr.data
-
-		assert(cb_scripts > 0);	///< @todo check length <= consensus.max_script_length
-		if(cb_scripts <= 0) return -1;	
-		
-		rc = scripts->main_stack->push(scripts->main_stack,
-			satoshi_script_data_new_ptr(scripts_data, cb_scripts));
-		if(rc) return -1;
-	}
 
 	if(program_length == 20)	// p2wpkh
 	{
@@ -1243,11 +1235,28 @@ static inline int parse_segwit_script(satoshi_script_t * scripts, satoshi_tx_t *
 			satoshi_tx_script_type_unknown,	// no addition processing
 			varstr_getdata_ptr(cur_txin->redeem_scripts), cb_scripts);
 		assert(cb == cb_scripts);
+		
 		if(cb != cb_scripts) return -1;
 	}else if(program_length == 32)	// p2wsh
 	{
+		// verify p2sh scripts
 		rc = txin_p2sh_scripts_post_process(scripts, tx, txin_index);
 		if(rc) return -1;
+		
+		// pop the top item and compare the single SHA256(sdata->data) value with witness_program
+		satoshi_script_data_t * sdata = scripts->main_stack->pop(scripts->main_stack);
+		assert(sdata);
+		
+		unsigned char hash[32];
+		sha256_ctx_t sha[1];
+		sha256_init(sha);
+		sha256_update(sha, sdata->data, sdata->size);
+		sha256_final(sha, hash);
+		satoshi_script_data_free(sdata);
+		
+		rc = scripts->main_stack->push(scripts->main_stack, 
+			satoshi_script_data_new_boolean((0 == memcmp(hash, witness_program, 32)))
+		); 
 	}else
 	{
 		fprintf(stderr, "[ERROR]: %s(): invalid segwit program length (%u)\n", 
@@ -1260,6 +1269,30 @@ static inline int parse_segwit_script(satoshi_script_t * scripts, satoshi_tx_t *
 	return 0;
 }
 
+static inline int parse_p2sh_p2wpkh_scripts(satoshi_script_t * scripts, 
+	satoshi_tx_t * tx, ssize_t txin_index,
+	const unsigned char * witness_program,
+	ssize_t program_length)
+{
+	satoshi_txin_t * cur_txin = &tx->txins[txin_index];
+	if(NULL == cur_txin->redeem_scripts) // if redeem_scripts has not been set.  ( eg. been manually set for signing tx , or for testing ...) 
+	{
+		cur_txin->redeem_scripts = satoshi_script_generate_p2pkh_script(witness_program, program_length);
+	}
+	
+	// verify redeem scripts 
+	ssize_t cb_scripts = varstr_length(cur_txin->redeem_scripts);
+	ssize_t cb = scripts->parse(scripts, 
+		satoshi_tx_script_type_unknown,	// no addition processing
+		varstr_getdata_ptr(cur_txin->redeem_scripts), cb_scripts);
+	assert(cb == cb_scripts);
+	
+	if(cb != cb_scripts) return -1;
+	
+	return 0;
+}
+
+
 static inline const unsigned char * txout_scripts_pre_process(satoshi_script_t * scripts, 
 	satoshi_tx_t * tx, ssize_t txin_index,
 	const unsigned char * p, const unsigned char * p_end)
@@ -1268,9 +1301,33 @@ static inline const unsigned char * txout_scripts_pre_process(satoshi_script_t *
 	assert(txin_index < tx->txin_count);
 	assert(p < p_end);
 	
+	debug_printf("txin_index: %d", (int)txin_index);
+	
 	int rc = 0;
-	satoshi_txin_t * cur_txin = &tx->txins[txin_index];;
+	satoshi_txin_t * cur_txin = &tx->txins[txin_index];
 	const unsigned char * p_witness_program_end = p_end;
+	
+	if(tx->has_flag && tx->witnesses[txin_index].num_items > 0)
+	{
+		// push witnesses_data
+		assert(tx->witnesses);
+		int rc = 0;
+		bitcoin_tx_witness_t * witness = &tx->witnesses[txin_index];
+		assert(witness->num_items > 0);
+		
+		for(ssize_t i = 0; i < witness->num_items; ++i)
+		{
+			unsigned char * scripts_data = varstr_getdata_ptr(witness->items[i]);
+			ssize_t cb_scripts = varstr_length(witness->items[i]); // length of vstr.data
+
+			assert(cb_scripts > 0);	///< @todo check length <= consensus.max_script_length
+			if(cb_scripts <= 0) return NULL;	
+			
+			rc = scripts->main_stack->push(scripts->main_stack,
+				satoshi_script_data_new_ptr(scripts_data, cb_scripts));
+			if(rc) return NULL;
+		}
+	}
 	
 	if(p[0] > 16) { // legacy utxo
 		if(cur_txin->is_p2sh) return p;		// use the original(legacy) processing method 
@@ -1283,26 +1340,39 @@ static inline const unsigned char * txout_scripts_pre_process(satoshi_script_t *
 			return p;	// use the original(legacy) processing method 
 		}
 		
-		//  p2sh --> (p2wpkh or p2wsh)
 		satoshi_script_private_t * priv = scripts->priv;
 		assert(priv && priv->utxo);
 		satoshi_txout_t * utxo = (satoshi_txout_t *)priv->utxo;
 		utxo->flags = satoshi_txout_type_p2sh_to_segwit;
+	
+		//  cur_txin->scripts_data is a segwit script
+		varstr_t * vscripts = (varstr_t *)varstr_getdata_ptr(cur_txin->scripts);
+		unsigned char * segwit_scripts = varstr_getdata_ptr(vscripts);
+		unsigned char * segwit_scripts_end = segwit_scripts + varstr_length(vscripts);
 		
-		// verify p2sh utxo first
-		ssize_t cb = scripts->parse(scripts, 
-			satoshi_tx_script_type_unknown, // no additional processing
-			p, p_end - p);
-		if(cb != (p_end - p))
+		
+		unsigned char version_byte = *segwit_scripts++;
+		unsigned char program_length = *segwit_scripts++;
+		assert((segwit_scripts + program_length) == segwit_scripts_end);
+		
+		assert(version_byte == 0);	// segwit_v0 only
+		if(program_length == 20) //  p2sh --> p2wpkh
 		{
-			fprintf(stderr, "verify p2sh utxo failed.\n");
-			return NULL;
+			rc = parse_p2sh_p2wpkh_scripts(scripts, tx, txin_index, segwit_scripts, program_length);
+			assert(0 == rc);
+			if(rc) return NULL;
+			return p_end;
+			
+		}else if(program_length == 32)
+		{
+			// parse the redeem-scripts of p2sh
+			rc = txin_p2sh_scripts_post_process(scripts, tx, txin_index);
+			assert(0 == rc);
+			
+			if(rc) return NULL;
 		}
 		
-		// use cur_txin->scripts as segwit-scripts
-		varstr_t * segwit_scripts = (varstr_t *)varstr_getdata_ptr(cur_txin->scripts);	// the data of cur_txin->scripts is a varstr 
-		p = varstr_getdata_ptr(segwit_scripts);
-		p_witness_program_end = p + varstr_length(segwit_scripts);
+		return p;
 	}
 	
 	rc = parse_segwit_script(scripts, tx, txin_index, p, p_witness_program_end);
@@ -1313,7 +1383,8 @@ static inline const unsigned char * txout_scripts_pre_process(satoshi_script_t *
 
 static ssize_t scripts_parse(struct satoshi_script * scripts, 
 	enum satoshi_tx_script_type type, 	// if is_txin, only allows opcode < OP_PUSHDATA4
-	const unsigned char * payload, size_t length)
+	const unsigned char * payload, size_t length
+	)
 {
 	assert(scripts && scripts->priv && payload && (length > 0));
 	
@@ -1469,6 +1540,42 @@ static ssize_t scripts_parse(struct satoshi_script * scripts,
 		 */
 		// todo:
 			continue;
+			
+		case satoshi_script_opcode_op_codeseparator:
+			/* 
+			 * Description: 
+			 * ( https://en.bitcoin.it/wiki/Script ) :
+			 * 	All of the signature checking words will only match signatures to the data after the most recently-executed OP_CODESEPARATOR.
+			 */
+			 /**
+			  * Explanation:
+			  *  Remove everything before this op_code (including the op_code) in the redeem_scripts.
+			  *  This means that current payload MUST be the redeem_scripts (or part of the redeem_scripts)
+			  */
+			{
+				debug_printf("op_code=satoshi_script_opcode_op_codeseparator");
+				assert(priv->tx && priv->txin_index >= 0 && priv->txin_index < priv->tx->txin_count);
+				satoshi_txin_t * cur_txin = &priv->tx->txins[priv->txin_index];
+				
+				varstr_t * redeem_scripts = cur_txin->redeem_scripts;
+				assert(redeem_scripts);
+				
+				dump_line("redeem_scripts: ", varstr_getdata_ptr(redeem_scripts), varstr_length(redeem_scripts));
+				dump_line("payload: ", payload, p_end - payload);
+				
+				unsigned char * p_redeem_scripts_begin = varstr_getdata_ptr(redeem_scripts);
+				unsigned char * p_redeem_scripts_end = ((unsigned char *)redeem_scripts) + varstr_size(redeem_scripts);
+				
+				// to confirm that current payload MUST be or within the redeem_scripts
+				assert(p >= p_redeem_scripts_begin && p < p_redeem_scripts_end); 
+				
+				cur_txin->redeem_scripts_start_pos = (p - p_redeem_scripts_begin);	// update the start position
+				continue;
+			}
+			 
+			 
+			
+			
 
 		/**
 		 * ignores:

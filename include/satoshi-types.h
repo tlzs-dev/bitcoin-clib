@@ -8,6 +8,7 @@
 extern "C" {
 #endif
 
+#include <stddef.h>
 
 /**
  * varint
@@ -148,16 +149,28 @@ typedef struct satoshi_txin
 	ssize_t num_signatures;	
 	varstr_t ** signatures;
 
-	//~ ssize_t cb_redeem_scripts;	// pubkey or redeem script
-	//~ const unsigned char * redeem_scripts;
 	varstr_t * redeem_scripts; 	// { (varint_length) , (pubkey or redeem script) }
-
+	
+	/**
+	 * redeem_scripts_start_pos: The position after the most recently-executed op_codeseparator.
+	 * 
+	 * According to 'https://en.bitcoin.it/wiki/Script': 
+	 * "All of the signature checking words will only match signatures 
+	 * to the data after the most recently-executed OP_CODESEPARATOR."
+	 * 
+	 * This means if any op_codeseparator exists in the redeem_scripts,  
+	 * the data required by the next checksig-ops will start 
+	 * from the most recently-executed op_codeseparator.
+	 */
+	ptrdiff_t redeem_scripts_start_pos;
 	
 }satoshi_txin_t;
 
 ssize_t satoshi_txin_parse(satoshi_txin_t * txin, ssize_t length, const void * payload);
 ssize_t satoshi_txin_serialize(const satoshi_txin_t * txin, unsigned char ** p_data);
 void satoshi_txin_cleanup(satoshi_txin_t * txin);
+varstr_t * satoshi_txin_get_redeem_scripts(const satoshi_txin_t * txin);
+
 
 enum satoshi_txout_type
 {

@@ -403,29 +403,18 @@ static inline const unsigned char * parse_varstr(
 }
 
 
-
-static inline int verify_sig_hashtype_format(varstr_t * vsig_hashtype)
+varstr_t * satoshi_txin_get_redeem_scripts(const satoshi_txin_t * txin)
 {
-	unsigned char * p = varstr_getdata_ptr(vsig_hashtype);
-	ssize_t cb_sig_hashtype = varstr_length(vsig_hashtype);
+	if(NULL == txin || NULL == txin->redeem_scripts) return NULL;
 	
-	// step 1 parse signature: DER encoding. ( type | data.length | data )
-	if((p[0] != 0x30)) {		// DER format: type tag indicating SEQUENCE
-		message_parser_error_handler("parse signature failed: %s.", "invalid DER encoding");
-	}
-	ssize_t cb_sig_der = p[1]; 	// data.length 
-	if(cb_sig_der <= 0) {
-		message_parser_error_handler("parse signature failed: %s.", "invalid DER length");
-	}
-	if( (2 + cb_sig_der + 1 ) != cb_sig_hashtype)
-	{
-		message_parser_error_handler("parse signature failed: %s.", "invalid payload length");
-	}
-	return 0;
-label_error:
-	return -1;
+	const unsigned char * scripts_data = varstr_getdata_ptr(txin->redeem_scripts);
+	const unsigned char * p_end = scripts_data + varstr_length(txin->redeem_scripts);
+	
+	scripts_data += txin->redeem_scripts_start_pos;
+	if(scripts_data >= p_end) return NULL;
+	
+	return varstr_new(scripts_data, (p_end - scripts_data));
 }
-
 
 ssize_t satoshi_txin_parse(satoshi_txin_t * txin, ssize_t length, const void * payload)
 {

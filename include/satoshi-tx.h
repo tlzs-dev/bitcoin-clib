@@ -75,9 +75,7 @@ int satoshi_tx_get_digest(
 	uint32_t hash_type,
 	const satoshi_txout_t * utxo,
 	uint256_t * hash);
-varstr_t * satoshi_txin_get_redeem_scripts(unsigned char segwit_program_version_byte,	// [ 0 .. 16 ]
-	unsigned char segwit_program_length,	// MUST be 20 or 32 for segwit_v0
-	const satoshi_txout_t * utxo);
+
 /**
  * @}
  */

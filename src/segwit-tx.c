@@ -172,7 +172,9 @@ static inline void prehash_outputs(sha256_ctx_t * sha,
 	uint256_t * txouts_hash 	// if is_null --> update sha; else --> save current result   
 )
 {
-	if(txout_count == 0) sha256_update(sha, (unsigned char *)uint256_zero, 32);	// sighash_none
+	if(txout_count == 0) {
+		sha256_update(sha, (unsigned char *)uint256_zero, 32);	// sighash_none
+	}
 	else {
 		sha256_ctx_t temp_sha[1];
 		unsigned char hash[32];
@@ -202,7 +204,7 @@ static inline void prehash_outputs(sha256_ctx_t * sha,
 			memcpy(txouts_hash, hash, 32);
 		}
 		else { // update sha
-			sha256_update(sha, hash, 32);					
+			sha256_update(sha, hash, 32);
 		}
 	}
 	return;
@@ -216,7 +218,7 @@ int segwit_utxo_get_digest(satoshi_rawtx_t * rawtx,
 {
 	
 	assert(rawtx && rawtx->tx && utxo);
-	debug_printf("utxo->flag=%d\n", utxo->flags);
+	debug_printf("utxo->flag=%d", utxo->flags);
 	satoshi_tx_t * tx = rawtx->tx;
 	assert(tx->txins && cur_index >= 0 && cur_index < tx->txin_count);
 
@@ -259,10 +261,13 @@ int segwit_utxo_get_digest(satoshi_rawtx_t * rawtx,
 	cb_image += sizeof(satoshi_outpoint_t);
 	
 	//  5. scriptCode of the input (serialized as scripts inside CTxOuts)
-	assert(txins[cur_index].redeem_scripts);
-	ssize_t cb_redeem_scripts = varstr_size(txins[cur_index].redeem_scripts);
-	sha256_update(sha, (unsigned char *)txins[cur_index].redeem_scripts, cb_redeem_scripts);	
+	varstr_t * redeem_scripts = satoshi_txin_get_redeem_scripts(&txins[cur_index]);
+	assert(redeem_scripts);
+	
+	ssize_t cb_redeem_scripts = varstr_size(redeem_scripts);
+	sha256_update(sha, (unsigned char *)redeem_scripts, cb_redeem_scripts);	
 	cb_image += cb_redeem_scripts;
+	varstr_free(redeem_scripts);
 	
 	//  6. value of the output spent by this input (8-byte little endian)
 	sha256_update(sha, (unsigned char *)&utxo->value, sizeof(int64_t));
@@ -273,6 +278,7 @@ int segwit_utxo_get_digest(satoshi_rawtx_t * rawtx,
 	cb_image += 4;
 
 	//  8. hashOutputs (32-byte hash)
+	debug_printf("hash_type: %u", hash_type);
 	switch(hash_type)
 	{
 	case satoshi_tx_sighash_all:
@@ -283,7 +289,8 @@ int segwit_utxo_get_digest(satoshi_rawtx_t * rawtx,
 		prehash_outputs(sha, 0, -1, NULL, NULL);
 		break;
 	case satoshi_tx_sighash_single:
-		prehash_outputs(sha, tx->txout_count, cur_index, tx->txouts, NULL);
+		if(cur_index >= tx->txout_count) sha256_update(sha, (unsigned char *)uint256_zero, 32);
+		else prehash_outputs(sha, tx->txout_count, cur_index, tx->txouts, NULL);
 		break;
 	default:
 		fprintf(stderr, "[ERROR]: %s@%d::%s(): unknown hash_type %u(0x%.8x).\n",
@@ -476,7 +483,7 @@ static int verify_tx(satoshi_tx_t * tx, satoshi_txout_t * utxoes)
 		
 		
 		satoshi_script_stack_t * stack = scripts->main_stack;
-		printf("== stack status: count = %Zd\n", stack->count);
+		printf("\e[35m-- " "txin[%d].scripts parsed. stack status: count = %Zd" "\e[39m\n", (int)i, stack->count);
 		for(ssize_t ii = 0; ii < stack->count; ++ii)
 		{
 			satoshi_script_data_t * sdata = stack->data[stack->count - 1 - ii];
@@ -485,19 +492,19 @@ static int verify_tx(satoshi_tx_t * tx, satoshi_txout_t * utxoes)
 		}
 		
 		// parse utxo
-		printf("-- txins[%Zd] ---------------------------------------------\n", i);
 		dump_line("utxo: ", utxo->scripts, varstr_size(utxo->scripts));
 		cb_scripts = varstr_length(utxo->scripts);
+		printf("\e[35m-- " "parse utxo of txins[%Zd], flags = %d, cb=%Zd ..." "\e[39m\n", i, utxo->flags, cb_scripts);
+		
 		if(cb_scripts > 0)
 		{
-			printf("== parse utxo ..., flags=%d\n", utxo->flags);
 			cb = scripts->parse(scripts, 
 				satoshi_tx_script_type_txout,
 				varstr_getdata_ptr(utxo->scripts), cb_scripts);
 			assert(cb == cb_scripts);
 		} 
 		
-		printf("== stack status: count = %Zd\n", stack->count);
+		printf("utxo of txin[%d] parsed. stack status: count = %Zd\n", (int)i, stack->count);
 		for(ssize_t ii = 0; ii < stack->count; ++ii)
 		{
 			satoshi_script_data_t * sdata = stack->data[stack->count - 1 - ii];
@@ -874,8 +881,6 @@ int test_native_p2wsh(int argc, char ** argv)
 	assert(cb == cb_data);
 	satoshi_tx_dump(tx);
 	
-	///< @todo  add support for out-of-range sighash_single.
-	printf("\e[31mTODO: sighash_single : out-of-range. \e[39m\n");
 	return verify_tx(tx, utxoes);
 }
 
