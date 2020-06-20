@@ -1183,13 +1183,11 @@ static inline int txin_p2sh_scripts_post_process(satoshi_script_t * scripts, sat
 		if(0 == rc) {
 			// push back redeem_scripts
 			rc = main_stack->push(main_stack, sdata);
+			sdata = NULL;
 		}
-	}else
-	{
-		satoshi_script_data_free(sdata);
-		return -1;
 	}
-
+	
+	if(sdata) satoshi_script_data_free(sdata);
 	return rc;
 }
 

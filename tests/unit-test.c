@@ -31,22 +31,26 @@
 #include <string.h>
 #include <assert.h>
 
+#include <sys/types.h>
+#include <limits.h>
+
 #include "utils.h"
 #include "satoshi-types.h"
 
 void test_uint256(void);
 void test_parse_blocks(void);
 
+void test_blockchain_load_data();
+
+
 int main(int argc, char **argv)
 {
 	test_uint256();
 	test_parse_blocks();
+	
+	test_blockchain_load_data(NULL, NULL, 0);
 	return 0;
 }
-
-#define dump_line(prefix, data, length) do {							\
-		printf(prefix); dump(data, length); printf("\e[39m\n");	\
-	} while(0)
 
 void test_uint256(void)
 {
@@ -182,5 +186,107 @@ void test_parse_blocks(void)
 	
 	satoshi_block_cleanup(block);
 	
+	return;
+}
+
+static ssize_t load_data(const char * filename, unsigned char ** p_data)
+{
+	debug_printf("filename: %s", filename);
+	ssize_t cb = 0;
+	FILE * fp = fopen(filename, "rb");
+	if(NULL == fp) return -1;
+	
+	fseek(fp, 0, SEEK_END);
+	ssize_t file_size = ftell(fp);
+	printf("file_size: %Zd\n", file_size);
+	fseek(fp, 0, SEEK_SET);
+	
+	unsigned char * data = *p_data;
+	if(file_size > 0) {
+		if(NULL == data) {
+			data = malloc(file_size);
+			assert(data);
+			*p_data = data;
+		}
+		
+		cb = fread(data, 1, file_size, fp);
+		assert(cb == file_size);
+	}
+	fclose(fp);
+	
+	printf("\t--> num_bytes: %Zd\n", cb);
+	return cb;
+}
+
+struct block_file_header
+{
+	uint32_t magic;
+	uint32_t length;
+};
+
+
+void test_blockchain_load_data(const char * data_dir, const char * file_prefix, int start_index)
+{
+	if(NULL == data_dir) data_dir = "./blocks";	
+	if(NULL == file_prefix) file_prefix = "blk";
+	
+	if(start_index < 0) start_index = 0;
+	int blocks_height = 0;
+	
+	while(1)
+	{
+		char path_name[PATH_MAX] = "";
+		snprintf(path_name, sizeof(path_name), "%s/%s%.5d.dat", data_dir, file_prefix, start_index);
+		
+		unsigned char * blocks_data = NULL;
+		ssize_t cb_blocks_data = load_data(path_name, &blocks_data);
+		if(cb_blocks_data <= 0) break;
+		++start_index;
+		assert(blocks_data);
+		
+		unsigned char * p = blocks_data;
+		unsigned char * p_end = p + cb_blocks_data;
+		
+		while(p < p_end)
+		{
+			satoshi_block_t block[1];
+			memset(block, 0, sizeof(block));
+			
+			struct block_file_header * hdr = (struct block_file_header *)p;
+			p += sizeof(*hdr);
+			
+			assert(hdr->magic == 0xD9B4BEF9);	// mainnet
+			ssize_t length = hdr->length;
+			assert(length > 0);
+			
+			ssize_t cb = satoshi_block_parse(block, length, p);
+			assert(cb == length);
+			
+			printf("== block %d: \n", blocks_height);
+			printf("\t-> num transctions: %d\n", (int)block->txn_count);
+			// todo: verify coinbase tx ...
+	
+			// skip coinbase tx
+			for(ssize_t i = 1; i < block->txn_count; ++i)
+			{
+				satoshi_tx_t * tx = &block->txns[i];
+				// todo: utxoes = get_utxos(tx);
+				// toto tx->verify
+				
+				assert(tx);
+			}
+			
+			satoshi_block_cleanup(block);
+			++blocks_height;
+			p += cb;
+		}
+		assert(p == p_end);
+		
+		free(blocks_data);
+		blocks_data = NULL;
+	}
+	
+	printf("num_files : %d\n", start_index);
+	printf("num_blocks: %d\n", blocks_height);
 	return;
 }
