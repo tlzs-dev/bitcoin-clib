@@ -789,8 +789,7 @@ static inline int parse_op_checkmultisig(satoshi_script_stack_t * stack, satoshi
 {
 	int rc = -1;
 	int num_pubkeys = 0, num_sigs = 0;
-	
-	
+	int8_t successed = 0;
 	
 	satoshi_script_private_t * priv = scripts->priv;
 	satoshi_rawtx_t * rawtx = priv->rawtx;
@@ -908,8 +907,8 @@ static inline int parse_op_checkmultisig(satoshi_script_stack_t * stack, satoshi
 		free(sig_der);
 	}
 	
-	int8_t ok = (num_verified == num_sigs);
-	rc= stack->push(stack, satoshi_script_data_new_boolean(ok));
+	successed = (num_verified == num_sigs);
+	rc = stack->push(stack, satoshi_script_data_new_boolean(successed));
 	
 label_error:
 	if(pubkeys)
@@ -930,8 +929,7 @@ label_error:
 		free(sigs);
 	}
 	
-	
-	debug_printf("rc=%d", rc);
+	debug_printf("successed=%d", successed);
 	return rc;
 }
 
@@ -1153,6 +1151,7 @@ static inline int txin_p2sh_scripts_post_process(satoshi_script_t * scripts, sat
 	txin->is_p2sh = 1;
 	satoshi_script_data_t * sdata = NULL;
 	ssize_t cb = 0;
+	int rc = -1;
 	
 	satoshi_script_stack_t * main_stack = scripts->main_stack;
 	// parse redeem scripts;
@@ -1179,28 +1178,19 @@ static inline int txin_p2sh_scripts_post_process(satoshi_script_t * scripts, sat
 	
 	if(cb == sdata->size) // if parsed ok, push back redeem_scripts
 	{
-		/**
-		 * There might be a bug on p2sh design:
-		 * By definition, the last op_code(OP_CHECKMULTISIG) will push a 'true/false' value to the stack, 
-		 * but nowhere else can this value be used.
-		 * It might be more reasonable if OP_CHECKMULTISIGVERIFY is used here.
-		 * 
-		 * so, when we are processing the txin scripts, 
-		 * we need to manually pop this extra value from the stack before push back redeem scripts
-		 */
-		
-		satoshi_script_data_free(main_stack->pop(main_stack));
-		
-		// push back redeem_scripts
-		main_stack->push(main_stack, sdata);
-
+		// verify the op_checkmultisig result
+		rc = scripts->verify(scripts); 
+		if(0 == rc) {
+			// push back redeem_scripts
+			rc = main_stack->push(main_stack, sdata);
+		}
 	}else
 	{
 		satoshi_script_data_free(sdata);
 		return -1;
 	}
 
-	return 0;
+	return rc;
 }
 
 
@@ -1311,6 +1301,7 @@ static inline const unsigned char * txout_scripts_pre_process(satoshi_script_t *
 	debug_printf("txin_index: %d", (int)txin_index);
 	
 	int rc = 0;
+	
 	satoshi_txin_t * cur_txin = &tx->txins[txin_index];
 	const unsigned char * p_witness_program_end = p_end;
 	if(cur_txin->is_p2sh) return p;	// legacy p2sh tx, use the original processing method 
@@ -1334,6 +1325,11 @@ static inline const unsigned char * txout_scripts_pre_process(satoshi_script_t *
 		 * pop the segwit_scripts from the main_stack.
 		 * ( the segwit_scripts should have been pushed when parsing txin->scripts )
 		 */
+		 
+		satoshi_script_private_t * priv = scripts->priv;
+		satoshi_txout_t * utxo = (satoshi_txout_t *)priv->utxo;
+		utxo->flags |= satoshi_txout_type_p2sh_segwit_flags;	// update utxo flags for later use
+	
 		 if(stack->count <= 0)
 		{
 			fprintf(stderr, "line %d: %s(): segwit scripts not found.\n", __LINE__, __FUNCTION__);
