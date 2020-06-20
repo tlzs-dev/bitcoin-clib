@@ -298,6 +298,7 @@ void test_blockchain_load_data(const char * data_dir, const char * file_prefix, 
 			
 			assert(0 == memcmp(block->hdr.merkle_root, &mtree->merkle_root, 32));
 			
+			uint256_merkle_tree_free(mtree);
 			satoshi_block_cleanup(block);
 			++blocks_height;
 			p += cb;

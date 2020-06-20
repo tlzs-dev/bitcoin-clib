@@ -126,13 +126,13 @@ static int merkle_tree_recalc(struct uint256_merkle_tree * mtree, int start_inde
 		int i;
 		for(i = 0; i < count / 2; ++i)
 		{
-			hash256(&items[i * 2], 64, layer->items[i].val);
+			mtree->hash_func(&items[i * 2], 64, layer->items[i].val);
 		}
 		if(count & 0x01)
 		{
 			data[0] = items[count - 1];
 			data[1] = data[0];
-			hash256(data, 64, layer->items[i].val);
+			mtree->hash_func(data, 64, layer->items[i].val);
 		}
 		
 		layer->count = layer_size;
