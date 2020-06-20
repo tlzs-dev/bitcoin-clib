@@ -218,11 +218,23 @@ static ssize_t load_data(const char * filename, unsigned char ** p_data)
 	return cb;
 }
 
+static inline int satoshi_tx_get_hash(const satoshi_tx_t * tx, uint256_t * hash)
+{
+	unsigned char * tx_data = NULL;
+	ssize_t cb_data = satoshi_tx_serialize(tx, &tx_data);
+	assert(cb_data > 0 && tx_data);
+	
+	hash256(tx_data, cb_data, (unsigned char *)hash);
+	free(tx_data);
+	return 0;
+}
+
 struct block_file_header
 {
 	uint32_t magic;
 	uint32_t length;
 };
+
 
 
 void test_blockchain_load_data(const char * data_dir, const char * file_prefix, int start_index)
@@ -264,21 +276,32 @@ void test_blockchain_load_data(const char * data_dir, const char * file_prefix, 
 			
 			printf("== block %d: \n", blocks_height);
 			printf("\t-> num transctions: %d\n", (int)block->txn_count);
-			// todo: verify coinbase tx ...
-	
-			// skip coinbase tx
-			for(ssize_t i = 1; i < block->txn_count; ++i)
+			
+			// verify merkle tree
+			uint256_merkle_tree_t * mtree = uint256_merkle_tree_new(block->txn_count, NULL);
+			for(ssize_t i = 0; i < block->txn_count; ++i)
 			{
+				uint256_t tx_hash[1];
 				satoshi_tx_t * tx = &block->txns[i];
+				assert(tx);
+				
+				satoshi_tx_get_hash(tx, tx_hash);
+				mtree->add(mtree, 1, tx_hash);
+				
 				// todo: utxoes = get_utxos(tx);
 				// toto tx->verify
-				
-				assert(tx);
 			}
+			mtree->recalc(mtree, 0, -1);
+			
+			dump_line("             block::merkle_root: ", block->hdr.merkle_root, 32);
+			dump_line("merkle_tree_recalc::merkle_root: ", &mtree->merkle_root, 32);
+			
+			assert(0 == memcmp(block->hdr.merkle_root, &mtree->merkle_root, 32));
 			
 			satoshi_block_cleanup(block);
 			++blocks_height;
 			p += cb;
+			
 		}
 		assert(p == p_end);
 		

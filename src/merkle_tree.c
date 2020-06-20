@@ -100,7 +100,10 @@ static int merkle_tree_recalc(struct uint256_merkle_tree * mtree, int start_inde
 	
 	if(count < 0) count = (mtree->count - start_index);
 	
-	if(mtree->count <= 1) return 0;	// no need to recalc
+	if(mtree->count <= 1) {
+		if(mtree->count == 1) memcpy(&mtree->merkle_root, &mtree->items[0], 32);
+		return 0;	// no need to recalc
+	}
 	assert(start_index >= 0 && start_index < mtree->count);
 	
 	if(count <= 0) count = mtree->count - start_index;
@@ -215,6 +218,8 @@ uint256_merkle_tree_t * uint256_merkle_tree_new(ssize_t max_size, void * user_da
 
 	merkle_tree_private_t * priv = merkle_tree_private_new(mtree);
 	assert(priv && priv->mtree == mtree && mtree->priv == priv);
+	
+	merkle_tree_resize(mtree, max_size);
 	
 	return mtree;
 }
