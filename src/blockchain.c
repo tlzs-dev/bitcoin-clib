@@ -882,15 +882,11 @@ void test_utxoes(bitcoin_utxo_db_t * utxo_db, const char * db_home)
 	outpoints[1].index = 456;
 	
 	txouts[0].value = 10000;
-	txouts[0].cb_scripts = 4;
-	txouts[0].scripts = calloc(4, 1);
-	*(uint32_t *)txouts[0].scripts = 0x11223344;
+	txouts[0].scripts = varstr_new((unsigned char []){4, 0x44, 0x33, 0x22, 0x11}, 5);
 	
 	txouts[1].value = 20000;
-	txouts[1].cb_scripts = 4;
-	txouts[1].scripts = calloc(4, 1);
-	*(uint32_t *)txouts[1].scripts = 0xabababab;
-	
+	txouts[1].scripts = varstr_new((unsigned char []){4, 0xab, 0xab, 0xab, 0xab}, 5);
+
 	db_record_utxo_t utxo[1];
 	memset(utxo, 0, sizeof(utxo));
 	
@@ -933,8 +929,8 @@ void test_utxoes(bitcoin_utxo_db_t * utxo_db, const char * db_home)
 		"\t cb_script=%u \n"
 		"\t scripts=0x%.8x \n",
 		txout->value,
-		(uint32_t)txout->cb_script,
-		*(uint32_t *)txout->scripts);
+		(unsigned int)varstr_length(txout->scripts),
+		*(uint32_t *)varstr_getdata_ptr(txout->scripts));
 	satoshi_txout_cleanup(txout);
 
 
@@ -980,8 +976,8 @@ void test_utxoes(bitcoin_utxo_db_t * utxo_db, const char * db_home)
 		"\t cb_script=%u \n"
 		"\t scripts=0x%.8x \n",
 		txout->value,
-		(uint32_t)txout->cb_script,
-		*(uint32_t *)txout->scripts);
+		(unsigned int)varstr_length(txout->scripts),
+		*(uint32_t *)varstr_getdata_ptr(txout->scripts));
 	satoshi_txout_cleanup(txout);
 	
 	

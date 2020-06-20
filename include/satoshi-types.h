@@ -103,6 +103,64 @@ ssize_t uint256_from_string(uint256_t * u256, int from_little_endian, const char
 char * uint256_to_string(const uint256_t * u256, int to_little_endian, char ** p_hex);
 
 
+/**
+ * @defgroup compact_int
+ *  Use a 32-bit integer(little-endian) to approximate a 256-bit integer.
+ * 
+ * @details 
+ *  The Bitcoin network has a global block difficulty. 
+ *  Valid blocks must have a hash below this target. 
+ *  The target is a 256-bit number (extremely large) that all Bitcoin clients share. 
+ *  The dSHA256 hash of a block's header must be lower than or equal to the current target 
+ *  for the block to be accepted by the network. 
+ *  The lower the target, the more difficult it is to generate a block.
+ * 
+ *  It should be noted here that, the dSHA256 hash value SHOULD be regarded as little-endian.
+ * 	(Perhaps to avoid confusion, the designer specified all integers as little-endian.)
+ * 	 
+ *  The target value was stored in a compact format(uint32_t) int the 'bit' field of block header. 
+ *  --> the lower 24 bits represent an integer value, 
+ *  --> the upper 8 bits indicate how many bits need to be shifted left.
+ *  for example:
+ * 	    bits: 0x1b0404cb
+ * 	    target= (0x0404cb << 0x1b)
+ * 		TARGET= 0x0000000000 0404CB (000000000000000000000000000000000000000000000000)
+ * 		dSHA256=  (000000000000000000000000000000000000000000000000) CB0404 0000000000
+ *	 PS. The parts enclosed in parentheses are ignored. (not used when calculating the target)
+ * @{
+ * @}
+ */
+union compact_int
+{
+	uint32_t bits;		// 
+	struct
+	{
+		uint8_t mantissa[3];
+		uint8_t exp;
+	}__attribute__((packed));
+}__attribute__((packed));
+
+typedef union compact_int compact_int_t;
+compact_int_t uint256_to_compact_int(const uint256_t * target);
+uint256_t compact_int_to_uint256(compact_int_t * cint);
+
+/**
+ * helpler functions to calculate difficulty.
+ * 
+ * 	compact_int_div(): use to calc bdiff
+ * 	uint256_div():     use to calc pdiff
+ * 
+ * For the explanation of A and B, please refer to 'https://en.bitcoin.it/wiki/Difficulty'
+ */
+compact_int_t compact_int_div(const compact_int_t * n, const compact_int_t * d);
+compact_int_t uint256_div(const uint256_t * n, const uint256_t * d);
+
+
+/**
+ * @defgroup merkle_tree
+ * @{
+ * @}
+ */
 typedef struct uint256_merkle_tree
 {
 	void * user_data;

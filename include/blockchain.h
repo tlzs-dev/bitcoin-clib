@@ -80,33 +80,24 @@ void bitcoin_utxo_db_cleanup(bitcoin_utxo_db_t * db);
  ******************************************************/
 struct db_record_block_data
 {
-	int32_t height;
+	// block info
 	struct satoshi_block_header hdr;
-	int32_t file_index;
-	int64_t start_pos;
-
+	int32_t txn_count;
+	int32_t height;			// index of the secondary_db
+	
+	// block.dat file info
+	int64_t file_index;
+	int64_t start_pos;		// the begining of the block_data (just after block_file_hdr{magic, size} )
+	
+	// used to verify block_file_hdr : assert( start_pos >= 8 && (*(uint32_t *)(start-8) == magic)  && (*(uint32_t *)(start-4) == block_size) );
 	uint32_t magic;
 	uint32_t block_size;
 }__attribute__((packed));
 
 struct db_record_block
 {
-	uint256_t hash;		// primary key
-	union
-	{
-		struct db_record_block_data data;
-		struct
-		{
-			int32_t height;		// secondary key
-			struct satoshi_block_header hdr;
-			int32_t file_index;
-			int64_t start_pos;		// without block_file_hdr({magic, size})
-			
-			// to verify block_file_hdr : assert( start_pos >= 8 && (*(uint32_t *)(start-8) == magic)  && (*(uint32_t *)(start-4) == block_size) );
-			uint32_t magic;
-			uint32_t block_size;
-		}__attribute__((packed));;
-	};
+	uint256_t hash;						// primary key
+	struct db_record_block_data data;	// value
 }__attribute__((packed));
 typedef struct db_record_block db_record_block_t;
 
