@@ -78,7 +78,9 @@ test_satoshi-tx: $(BASE_OBJECTS) $(UTILS_OBJECTS) \
 compact_int: test_compact_int
 test_compact_int: $(SRC_DIR)/compact_int.c
 	echo "build $@ ..."
-	$(CC) -o $@ $(CFLAGS) $(LIBS) $^ -D_TEST_COMPACT_INT -D_STAND_ALONE -D_VERBOSE=7
+	$(CC) -o $@ $(CFLAGS) $(LIBS) $^ \
+	-lgmp \
+	-D_TEST_COMPACT_INT -D_STAND_ALONE -D_VERBOSE=7
 
 .PHONY: do_init clean
 do_init:

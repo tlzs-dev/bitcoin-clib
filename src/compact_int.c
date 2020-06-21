@@ -33,6 +33,7 @@
 
 #include "satoshi-types.h"
 #include <math.h>
+#include <gmp.h>
 
 #ifndef debug_printf 
 #define debug_printf(fmt, ...) do { \
@@ -92,8 +93,8 @@ uint256_t compact_int_to_uint256(compact_int_t * cint)
 
 double compact_int_div(const compact_int_t * n, const compact_int_t * d)
 {
-	if((0 == (n->bits & 0x0FFFFFF)) || (n->exp >= 32) || (n->exp == 0)) return 0.0;
 	if((0 == (d->bits & 0x0FFFFFF)) || (d->exp >= 32) || (d->exp == 0)) return NAN;	
+	if((0 == (n->bits & 0x0FFFFFF)) || (n->exp >= 32) || (n->exp == 0)) return 0.0;
 	
 	double a = (double)( n->bits & 0x0FFFFFF);
 	double b = (double)(d->bits & 0x0FFFFFF);
@@ -102,6 +103,31 @@ double compact_int_div(const compact_int_t * n, const compact_int_t * d)
 	double coef = pow(2.0, exponent_diff);
 	
 	return a / b * coef;
+}
+
+double uint256_div(const uint256_t * n, const uint256_t * d)
+{
+	mpz_t divident, divisor;
+	mpz_inits(divident, divisor, NULL);
+	mpz_import(divident, 1, -1, 32, 
+		-1, 
+		0, n);
+	mpz_import(divisor, 1, -1, 32, 
+		-1, 
+		0, d);
+	
+	mpf_t a, b, rop;
+	mpf_set_default_prec(256);
+	
+	mpf_inits(a, b, rop, NULL);
+	mpf_set_z(a, divident);
+	mpf_set_z(b, divisor);
+	mpf_div(rop, a, b);
+	
+	double result = mpf_get_d(rop);
+	mpz_clears(divident, divisor, NULL);
+	mpf_clears(a, b, rop, NULL);
+	return result;
 }
 
 
@@ -216,7 +242,20 @@ int main(int argc, char **argv)
 	cint.bits = BITS;	// 0x1b0404cb;
 	
 	double result = compact_int_div(&compact_int_difficulty_one, &cint);
-	printf("result: %.8f\n", result);
+	printf("bdiff: %.8f\n", result);
+	
+	
+	/*
+	 * test pdiff: 
+	 * 0x00000000FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF / 0x00000000000404CB000000000000000000000000000000000000000000000000 
+	 * = 16307.669773817162 (pdiff)
+	 */
+	target = TARGET;
+	uint256_t difficulty_one = uint256_difficulty_one;
+	result = uint256_div(&difficulty_one, &target);
+	dump_line("\tDIFF_ONE: ", &difficulty_one, 32);
+	dump_line("\tTARGET: ", &target, 32);
+	printf("pdiff: %.8f\n", result);
 	
 	return 0;
 }
