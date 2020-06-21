@@ -149,6 +149,12 @@ typedef union compact_int compact_int_t;
 compact_int_t uint256_to_compact_int(const uint256_t * target);
 uint256_t compact_int_to_uint256(compact_int_t * cint);
 
+#define compact_int_zero 	((compact_int_t){.exp = 0, })
+#define compact_int_NaN 	((compact_int_t){.exp = 0xff, })	// Not a Number
+
+// The highest possible target (difficulty 1) is defined as 0x1d00ffff
+#define compact_int_difficulty_one  ((compact_int_t){.bits = 0x1d00ffff, })
+
 /**
  * helpler functions to calculate difficulty.
  * 
@@ -157,8 +163,8 @@ uint256_t compact_int_to_uint256(compact_int_t * cint);
  * 
  * For the explanation of 'bdiff' and 'pdiff', please refer to 'https://en.bitcoin.it/wiki/Difficulty'
  */
-compact_int_t compact_int_div(const compact_int_t * n, const compact_int_t * d);
-compact_int_t uint256_div(const uint256_t * n, const uint256_t * d);
+double compact_int_div(const compact_int_t * n, const compact_int_t * d);
+double uint256_div(const uint256_t * n, const uint256_t * d);
 
 
 /**

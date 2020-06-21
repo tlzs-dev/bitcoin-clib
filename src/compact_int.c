@@ -32,6 +32,7 @@
 #include <assert.h>
 
 #include "satoshi-types.h"
+#include <math.h>
 
 #ifndef debug_printf 
 #define debug_printf(fmt, ...) do { \
@@ -75,7 +76,6 @@ uint256_t compact_int_to_uint256(compact_int_t * cint)
 	debug_printf("num_zeros: %d, num_bytes: %d, exp: 0x%.2x", num_zeros, num_bytes, (int)cint->exp);
 	
 	unsigned char * p = (unsigned char *)&target + cint->exp - num_bytes;
-	
 	memcpy(p, cint->mantissa, num_bytes);
 
 	return target;
@@ -89,8 +89,21 @@ uint256_t compact_int_to_uint256(compact_int_t * cint)
  * 
  * For the explanation of 'bdiff' and 'pdiff', please refer to 'https://en.bitcoin.it/wiki/Difficulty'
  */
-compact_int_t compact_int_div(const compact_int_t * n, const compact_int_t * d);
-compact_int_t uint256_div(const uint256_t * n, const uint256_t * d);
+
+double compact_int_div(const compact_int_t * n, const compact_int_t * d)
+{
+	if((0 == (n->bits & 0x0FFFFFF)) || (n->exp >= 32) || (n->exp == 0)) return 0.0;
+	if((0 == (d->bits & 0x0FFFFFF)) || (d->exp >= 32) || (d->exp == 0)) return NAN;	
+	
+	double a = (double)( n->bits & 0x0FFFFFF);
+	double b = (double)(d->bits & 0x0FFFFFF);
+
+	int exponent_diff = ((int)n->exp - (int)d->exp) * 8;	// bytes to bits
+	double coef = pow(2.0, exponent_diff);
+	
+	return a / b * coef;
+}
+
 
 #if defined(_TEST_COMPACT_INT) && defined(_STAND_ALONE)
 
@@ -193,6 +206,18 @@ int main(int argc, char **argv)
 	printf("\tcint    : 0x%.8x\n", cint.bits); 
 	dump_line("\tcintdata:   ", &cint, sizeof(cint));
 	assert(cint.bits == BITS_test_5_6);
+	
+	
+	/* 
+	 * test bdiff
+	 * 0x00000000FFFF0000000000000000000000000000000000000000000000000000 / 0x00000000000404CB000000000000000000000000000000000000000000000000 
+	 * = 16307.420938523983 (bdiff)
+	 */
+	cint.bits = BITS;	// 0x1b0404cb;
+	
+	double result = compact_int_div(&compact_int_difficulty_one, &cint);
+	printf("result: %.8f\n", result);
+	
 	return 0;
 }
 #endif
