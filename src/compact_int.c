@@ -52,17 +52,21 @@ compact_uint256_t uint256_to_compact(const uint256_t * target)
 	while(num_zeros < 32 && (p_end[-1] == 0)) { --p_end; ++num_zeros;}
 	
 	debug_printf("num_zeros: %d", num_zeros);
-	if(num_zeros == 0) { // out of the range that a compact_uint256 can represent
-		return compact_uint256_NaN; 
-	}
-	else if(num_zeros == 32) { 
+	if(num_zeros == 32) { 
 		return compact_uint256_zero;
 	}
 
 	// make sure that the mantissa represents a positive value 
-	if((p_end[-1]  & 0x80)) {
+	if((p_end[-1]  & 0x80)) { // (int)mantissa < 0
+		if(num_zeros == 0) { 
+			/*
+			 * out of the range that a compact_uint256 can represent.
+			 * (the highest bit of the mantissa is '1' and cannot borrow '0' from uint256)
+			 */
+			return compact_uint256_NaN; 
+		}
 		++p_end;
-		--num_zeros;
+		--num_zeros;	// borrow a '0' from uint256
 	}
 	
 	int num_bytes = 3;	// 24 bits

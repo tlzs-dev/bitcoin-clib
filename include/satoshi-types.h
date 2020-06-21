@@ -175,7 +175,7 @@ double uint256_div(const uint256_t * restrict n, const uint256_t * restrict d);
 /**
  * compare functions:
  * @return 
- * 	 <0 if (a  < b);
+ *   <0 if (a  < b);
  *   =0 if (a == b);
  *   >0 if (a  > b);
  * 

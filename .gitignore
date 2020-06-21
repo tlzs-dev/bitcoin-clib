@@ -10,6 +10,10 @@
 # allow Makefile LICENSE .gitignore
 !Makefile
 !LICENSE
+!src
+!include
+!tests/*
+!tests/Makefile
 
 # ignore files
 *.so
