@@ -41,9 +41,9 @@
 	} while(0)
 #endif
 
-compact_int_t uint256_to_compact_int(const uint256_t * target)
+compact_uint256_t uint256_to_compact(const uint256_t * target)
 {
-	compact_int_t cint = { .bits = 0 };
+	compact_uint256_t cint = { .bits = 0 };
 	
 	int num_zeros = 0;
 	const unsigned char * p_end = (const unsigned char *)target + 32;
@@ -53,18 +53,30 @@ compact_int_t uint256_to_compact_int(const uint256_t * target)
 	
 	debug_printf("num_zeros: %d", num_zeros);
 	
+	// make sure that the mantissa represents a positive value 
+	if((p_end[-1]  & 0x80)) {
+		if(num_zeros == 0) { // out of the range that a compact_uint256 can represent
+			return compact_uint256_NaN;
+		}
+		++p_end;
+		--num_zeros;
+	}
+	
 	int num_bytes = 3;	// 24 bits
 	cint.exp = 32 - num_zeros;
+	debug_printf("exp: %d (0x%.2x)", (int)cint.exp, (int)cint.exp);
 	
 	if((cint.exp + num_bytes) >= 32) num_bytes = 32 - cint.exp; 
 	if((num_zeros + num_bytes) >= 32) num_bytes = 32 - num_zeros;
 	
-	debug_printf("exp: %d (0x%.2x)", (int)cint.exp, (int)cint.exp);
+	
+	
+	
 	
 	memcpy(cint.mantissa, (p_end - num_bytes), num_bytes);
 	return cint;
 }
-uint256_t compact_int_to_uint256(compact_int_t * cint)
+uint256_t compact_to_uint256(compact_uint256_t * cint)
 {
 	uint256_t target = *uint256_zero;
 	if(cint->exp >= 32) return target;
@@ -91,7 +103,7 @@ uint256_t compact_int_to_uint256(compact_int_t * cint)
  * For the explanation of 'bdiff' and 'pdiff', please refer to 'https://en.bitcoin.it/wiki/Difficulty'
  */
 
-double compact_int_div(const compact_int_t * n, const compact_int_t * d)
+double compact_uint256_div(const compact_uint256_t * n, const compact_uint256_t * d)
 {
 	if((0 == (d->bits & 0x0FFFFFF)) || (d->exp >= 32) || (d->exp == 0)) return NAN;	
 	if((0 == (n->bits & 0x0FFFFFF)) || (n->exp >= 32) || (n->exp == 0)) return 0.0;
@@ -153,21 +165,20 @@ int main(int argc, char **argv)
 		},
 	};
 	static const uint32_t BITS = 0x1b0404cb;
-	
-	compact_int_t cint = {.bits = 0x1b0404cb };
+	compact_uint256_t cint = {.bits = 0x1b0404cb };
 	
 	printf("== test1: compact_int_to_uint256() ...\n");
 	printf("\tcint    : 0x%.8x\n", cint.bits); 
 	dump_line("\tcintdata:   ", &cint, sizeof(cint));
 	
-	uint256_t target = compact_int_to_uint256(&cint);
+	uint256_t target = compact_to_uint256(&cint);
 	dump_line("\ttarget: ", &target, 32);
 	dump_line("\tTARGET: ", &TARGET, 32);
 	
 	assert(0 == memcmp(&target, &TARGET, 32));
 	
 	printf("== test2: uint256_to_compact_int() ...\n");
-	cint = uint256_to_compact_int(&TARGET);
+	cint = uint256_to_compact(&TARGET);
 	
 	dump_line("\tTARGET: ", &TARGET, 32);
 	printf("\tcint    : 0x%.8x\n", cint.bits); 
@@ -189,7 +200,7 @@ int main(int argc, char **argv)
 	cint.mantissa[0] = 0xcb;
 	cint.mantissa[1] = 0x04;
 	
-	target = compact_int_to_uint256(&cint);
+	target = compact_to_uint256(&cint);
 	printf("\tcint    : 0x%.8x\n", cint.bits); 
 	dump_line("\tcintdata:   ", &cint, sizeof(cint));
 	dump_line("\ttarget: ", &target, 32);
@@ -197,7 +208,7 @@ int main(int argc, char **argv)
 
 	printf("== test4: uint256_to_cint() ==> cint=0x%.8x ...\n", BITS_test_3_4);
 	cint.bits = 0;
-	cint = uint256_to_compact_int(&target);
+	cint = uint256_to_compact(&target);
 	dump_line("\ttarget: ", &target, 32);
 	printf("\tcint    : 0x%.8x\n", cint.bits); 
 	dump_line("\tcintdata:   ", &cint, sizeof(cint));
@@ -218,7 +229,7 @@ int main(int argc, char **argv)
 	cint.mantissa[0] = 0xcb;
 	cint.mantissa[1] = 0x04;
 	
-	target = compact_int_to_uint256(&cint);
+	target = compact_to_uint256(&cint);
 	printf("\tcint    : 0x%.8x\n", cint.bits); 
 	dump_line("\tcintdata:   ", &cint, sizeof(cint));
 	dump_line("\ttarget: ", &target, 32);
@@ -227,12 +238,35 @@ int main(int argc, char **argv)
 	
 	printf("== test6: uint256_to_cint() ==> cint=0x%.8x...\n", BITS_test_5_6);
 	cint.bits = 0;
-	cint = uint256_to_compact_int(&target);
+	cint = uint256_to_compact(&target);
 	dump_line("\ttarget: ", &target, 32);
 	printf("\tcint    : 0x%.8x\n", cint.bits); 
 	dump_line("\tcintdata:   ", &cint, sizeof(cint));
 	assert(cint.bits == BITS_test_5_6);
 	
+	
+	static const uint32_t BITS_test_7_8 = 0x1d00ffff;	// difficulty one
+	static const uint256_t TARGET_test_7_8 = {
+		.val = {
+			[26] = 0xff,
+			[27] = 0xff,
+		},
+	};
+	printf("== test7: compact_int_to_uint256(cint=0x%.8x) ...\n", BITS_test_7_8);
+	cint.bits = BITS_test_7_8;
+	target = compact_to_uint256(&cint);
+	printf("\tcint    : 0x%.8x\n", cint.bits); 
+	dump_line("\tcintdata:   ", &cint, sizeof(cint));
+	dump_line("\ttarget: ", &target, 32);
+	assert(0 == memcmp(&target, &TARGET_test_7_8, 32));
+
+	
+	printf("== test8: uint256_to_cint() ==> cint=0x%.8x...\n", BITS_test_7_8);
+	cint = uint256_to_compact(&target);
+	dump_line("\ttarget: ", &target, 32);
+	printf("\tcint    : 0x%.8x\n", cint.bits); 
+	dump_line("\tcintdata:   ", &cint, sizeof(cint));
+	assert(cint.bits == BITS_test_7_8);
 	
 	/* 
 	 * test bdiff
@@ -241,7 +275,7 @@ int main(int argc, char **argv)
 	 */
 	cint.bits = BITS;	// 0x1b0404cb;
 	
-	double result = compact_int_div(&compact_int_difficulty_one, &cint);
+	double result = compact_uint256_div(&compact_uint256_difficulty_one, &cint);
 	printf("bdiff: %.8f\n", result);
 	
 	

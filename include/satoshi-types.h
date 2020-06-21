@@ -122,7 +122,9 @@ char * uint256_to_string(const uint256_t * u256, int to_little_endian, char ** p
  * 	(Perhaps to avoid confusion, the designer specified all integers as little-endian.)
  * 	 
  *  The target value was stored in a compact format(uint32_t) int the 'bit' field of block header. 
- *  --> the lower 24 bits represent an integer value, 
+ *  --> the lower 24 bits represent an signed integer value, and must be positive (the highest bit cannot be 1).
+ *      When converting from an 'uint256_t', if the lower24 bits value is negative, 
+ *      then need to add an extra 0 to the hightest byte (need to borrow a 0 from the tailing-zeros of the uint256)
  *  --> the upper 8 bits indicate that how many bytes remained 
  * 		after removing the tailing-0s(if regarded as big-endian) or leading-0s(if regarded as little-endian)
  * 
@@ -135,25 +137,25 @@ char * uint256_to_string(const uint256_t * u256, int to_little_endian, char ** p
  * @{
  * @}
  */
-union compact_int
+union compact_uint256
 {
 	uint32_t bits;		// 
 	struct
 	{
-		uint8_t mantissa[3];
+		uint8_t mantissa[3]; 
 		uint8_t exp;
 	}__attribute__((packed));
 }__attribute__((packed));
 
-typedef union compact_int compact_int_t;
-compact_int_t uint256_to_compact_int(const uint256_t * target);
-uint256_t compact_int_to_uint256(compact_int_t * cint);
+typedef union compact_uint256 compact_uint256_t;
+compact_uint256_t uint256_to_compact(const uint256_t * target);
+uint256_t compact_to_uint256(compact_uint256_t * cint);
 
-#define compact_int_zero 	((compact_int_t){.exp = 0, })
-#define compact_int_NaN 	((compact_int_t){.exp = 0xff, })	// Not a Number
+#define compact_uint256_zero 	((compact_uint256_t){.exp = 0, })
+#define compact_uint256_NaN 	((compact_uint256_t){.exp = 0xff, })	// Not a Number
 
 // The highest possible target (difficulty 1) is defined as 0x1d00ffff
-#define compact_int_difficulty_one  ((compact_int_t){.bits = 0x1d00ffff, })
+#define compact_uint256_difficulty_one  ((compact_uint256_t){.bits = 0x1d00ffff, })
 #define uint256_difficulty_one ((uint256_t){.val = {			\
 		0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 		\
 		0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,			\
@@ -167,7 +169,7 @@ uint256_t compact_int_to_uint256(compact_int_t * cint);
  * 
  * For the explanation of 'bdiff' and 'pdiff', please refer to 'https://en.bitcoin.it/wiki/Difficulty'
  */
-double compact_int_div(const compact_int_t * n, const compact_int_t * d);
+double compact_uint256_div(const compact_uint256_t * n, const compact_uint256_t * d);
 double uint256_div(const uint256_t * n, const uint256_t * d);
 
 
