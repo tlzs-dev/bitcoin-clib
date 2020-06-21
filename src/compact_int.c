@@ -52,12 +52,15 @@ compact_uint256_t uint256_to_compact(const uint256_t * target)
 	while(num_zeros < 32 && (p_end[-1] == 0)) { --p_end; ++num_zeros;}
 	
 	debug_printf("num_zeros: %d", num_zeros);
-	
+	if(num_zeros == 0) { // out of the range that a compact_uint256 can represent
+		return compact_uint256_NaN; 
+	}
+	else if(num_zeros == 32) { 
+		return compact_uint256_zero;
+	}
+
 	// make sure that the mantissa represents a positive value 
 	if((p_end[-1]  & 0x80)) {
-		if(num_zeros == 0) { // out of the range that a compact_uint256 can represent
-			return compact_uint256_NaN;
-		}
 		++p_end;
 		--num_zeros;
 	}
@@ -69,14 +72,10 @@ compact_uint256_t uint256_to_compact(const uint256_t * target)
 	if((cint.exp + num_bytes) >= 32) num_bytes = 32 - cint.exp; 
 	if((num_zeros + num_bytes) >= 32) num_bytes = 32 - num_zeros;
 	
-	
-	
-	
-	
-	memcpy(cint.mantissa, (p_end - num_bytes), num_bytes);
+	if(num_bytes > 0) memcpy(cint.mantissa, (p_end - num_bytes), num_bytes);
 	return cint;
 }
-uint256_t compact_to_uint256(compact_uint256_t * cint)
+uint256_t compact_to_uint256(const compact_uint256_t * cint)
 {
 	uint256_t target = *uint256_zero;
 	if(cint->exp >= 32) return target;
@@ -103,7 +102,7 @@ uint256_t compact_to_uint256(compact_uint256_t * cint)
  * For the explanation of 'bdiff' and 'pdiff', please refer to 'https://en.bitcoin.it/wiki/Difficulty'
  */
 
-double compact_uint256_div(const compact_uint256_t * n, const compact_uint256_t * d)
+double compact_uint256_div(const compact_uint256_t * restrict n, const compact_uint256_t * restrict d)
 {
 	if((0 == (d->bits & 0x0FFFFFF)) || (d->exp >= 32) || (d->exp == 0)) return NAN;	
 	if((0 == (n->bits & 0x0FFFFFF)) || (n->exp >= 32) || (n->exp == 0)) return 0.0;
@@ -117,7 +116,7 @@ double compact_uint256_div(const compact_uint256_t * n, const compact_uint256_t 
 	return a / b * coef;
 }
 
-double uint256_div(const uint256_t * n, const uint256_t * d)
+double uint256_div(const uint256_t * restrict n, const uint256_t * restrict d)
 {
 	mpz_t divident, divisor;
 	mpz_inits(divident, divisor, NULL);
@@ -140,6 +139,41 @@ double uint256_div(const uint256_t * n, const uint256_t * d)
 	mpz_clears(divident, divisor, NULL);
 	mpf_clears(a, b, rop, NULL);
 	return result;
+}
+
+
+
+int compact_uint256_compare(const compact_uint256_t * restrict a, const compact_uint256_t * restrict b)
+{
+	int value_a = a->bits & 0x0ffffff;
+	int value_b = b->bits & 0x0ffffff;
+	int exp_a = a->exp;
+	int exp_b = b->exp;
+	
+	if(value_a & 0x800000) { ++exp_a; value_a >>= 8; }
+	if(value_b & 0x800000) { ++exp_b; value_b >>= 8; }
+	
+	if(exp_a == exp_b) return value_a - value_b;
+	return exp_a - exp_b;
+}
+
+int uint256_compare(const uint256_t * restrict  _a, const uint256_t * restrict _b)
+{
+	// treat uint256 as little-endian
+	uint32_t * a = (uint32_t *)_a;
+	uint32_t * b = (uint32_t *)_b;
+	for(int i = 7; i >= 0; --i)
+	{
+		if(a[i] == b[i]) continue;
+		return (a[i] > b[i])?1:-1;
+	}
+	return 0;
+}
+
+int uint256_compare_with_compact(const uint256_t * restrict hash, const compact_uint256_t * restrict _target)
+{
+	uint256_t target = compact_to_uint256(_target);
+	return uint256_compare(hash, &target);
 }
 
 
@@ -290,6 +324,50 @@ int main(int argc, char **argv)
 	dump_line("\tDIFF_ONE: ", &difficulty_one, 32);
 	dump_line("\tTARGET: ", &target, 32);
 	printf("pdiff: %.8f\n", result);
+	
+	
+	printf("==== compact_uint256_compare(0x%.8x, 0x%.8x): \n", compact_uint256_difficulty_one.bits, cint.bits);
+	int diff = compact_uint256_compare(&compact_uint256_difficulty_one, &cint);
+	printf("diff = %d\n", diff);
+	assert(diff > 0);
+	
+	printf("==== compact_uint256_compare(0x%.8x, 0x%.8x): \n", cint.bits, compact_uint256_difficulty_one.bits);
+	diff = compact_uint256_compare(&cint, &compact_uint256_difficulty_one);
+	printf("diff = %d\n", diff);
+	assert(diff < 0);
+	
+	printf("==== uint256_compare(a, b): \n");
+	dump_line("\ta=", &difficulty_one, 32);
+	dump_line("\tb=", &target, 32);
+	diff = uint256_compare(&difficulty_one, &target);
+	printf("diff = %d\n", diff);
+	assert(diff > 0);
+	
+	printf("==== uint256_compare(a, b): \n");
+	dump_line("\ta=", &target, 32);
+	dump_line("\tb=", &difficulty_one, 32);
+	
+	diff = uint256_compare(&target, &difficulty_one);
+	printf("diff = %d\n", diff);
+	assert(diff < 0);
+	
+	
+	printf("==== uint256_compare(hash, target): \n");
+	dump_line("\thash=", &difficulty_one, 32);
+	printf("\ttarget=0x%.8x", cint.bits);
+	
+	diff = uint256_compare_with_compact(&difficulty_one, &cint);
+	printf("diff = %d\n", diff);
+	assert(diff > 0);
+	
+	
+	printf("==== uint256_compare(hash, target): \n");
+	dump_line("\thash=", &target, 32);
+	printf("\ttarget=0x%.8x", compact_uint256_difficulty_one.bits);
+	
+	diff = uint256_compare_with_compact(&target, &compact_uint256_difficulty_one);
+	printf("diff = %d\n", diff);
+	assert(diff < 0);
 	
 	return 0;
 }

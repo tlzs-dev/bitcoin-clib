@@ -149,7 +149,7 @@ union compact_uint256
 
 typedef union compact_uint256 compact_uint256_t;
 compact_uint256_t uint256_to_compact(const uint256_t * target);
-uint256_t compact_to_uint256(compact_uint256_t * cint);
+uint256_t compact_to_uint256(const compact_uint256_t * cint);
 
 #define compact_uint256_zero 	((compact_uint256_t){.exp = 0, })
 #define compact_uint256_NaN 	((compact_uint256_t){.exp = 0xff, })	// Not a Number
@@ -169,9 +169,24 @@ uint256_t compact_to_uint256(compact_uint256_t * cint);
  * 
  * For the explanation of 'bdiff' and 'pdiff', please refer to 'https://en.bitcoin.it/wiki/Difficulty'
  */
-double compact_uint256_div(const compact_uint256_t * n, const compact_uint256_t * d);
-double uint256_div(const uint256_t * n, const uint256_t * d);
+double compact_uint256_div(const compact_uint256_t * restrict n, const compact_uint256_t * restrict d);
+double uint256_div(const uint256_t * restrict n, const uint256_t * restrict d);
 
+/**
+ * compare functions:
+ * @return 
+ * 	 <0 if (a  < b);
+ *   =0 if (a == b);
+ *   >0 if (a  > b);
+ * 
+ * @{
+ */
+int compact_uint256_compare(const compact_uint256_t * restrict a, const compact_uint256_t * restrict b);
+int uint256_compare(const uint256_t * restrict a, const uint256_t * restrict b);
+int uint256_compare_with_compact(const uint256_t * restrict hash, const compact_uint256_t * restrict target);
+/**
+ * @}
+ */
 
 /**
  * @defgroup merkle_tree
