@@ -74,6 +74,12 @@ test_satoshi-tx: $(BASE_OBJECTS) $(UTILS_OBJECTS) \
 	echo "build $@ ..."
 	$(CC) -o $@ $(CFLAGS) $(LIBS) $^ -D_TEST_SATOSHI_TX -D_STAND_ALONE -lsecp256k1 -D_VERBOSE=7
 
+
+compact_int: test_compact_int
+test_compact_int: $(SRC_DIR)/compact_int.c
+	echo "build $@ ..."
+	$(CC) -o $@ $(CFLAGS) $(LIBS) $^ -D_TEST_COMPACT_INT -D_STAND_ALONE -D_VERBOSE=7
+
 .PHONY: do_init clean
 do_init:
 	mkdir -p ../obj/base ../obj/utils

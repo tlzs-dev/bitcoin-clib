@@ -111,8 +111,6 @@ reduces from O(n2) to O(n).
 
 #include "utils.h"
 
-static const uint256_t uint256_zero[1];
-
 // step 2.
 static inline void prehash_prevouts(sha256_ctx_t * sha, ssize_t txin_count, const satoshi_txin_t * txins)
 {

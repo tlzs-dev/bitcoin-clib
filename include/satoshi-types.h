@@ -98,6 +98,9 @@ typedef struct uint256
 	uint8_t val[32];
 }uint256, uint256_t;
 #endif
+//~ extern const uint256_t uint256_zero[1];
+#define uint256_zero (&(uint256_t){{0}})
+
 void uint256_reverse(uint256_t * u256);
 ssize_t uint256_from_string(uint256_t * u256, int from_little_endian, const char * hex_string, ssize_t length);
 char * uint256_to_string(const uint256_t * u256, int to_little_endian, char ** p_hex);
@@ -120,10 +123,12 @@ char * uint256_to_string(const uint256_t * u256, int to_little_endian, char ** p
  * 	 
  *  The target value was stored in a compact format(uint32_t) int the 'bit' field of block header. 
  *  --> the lower 24 bits represent an integer value, 
- *  --> the upper 8 bits indicate how many bits need to be shifted left.
+ *  --> the upper 8 bits indicate that how many bytes remain 
+ * 		after removing the tailing-0s(if regarded as big-endian) or leading-0s(if regarded as little-endian)
+ * 
  *  for example:
- * 	    bits: 0x1b0404cb
- * 	    target= (0x0404cb << 0x1b)
+ * 	    bits: 0x 1b 0404cb
+ * 	    target= (0x0404cb << ((0x1b - 3) * 8))
  * 		TARGET= 0x0000000000 0404CB (000000000000000000000000000000000000000000000000)
  * 		dSHA256=  (000000000000000000000000000000000000000000000000) CB0404 0000000000
  *	 PS. The parts enclosed in parentheses are ignored. (not used when calculating the target)
@@ -150,7 +155,7 @@ uint256_t compact_int_to_uint256(compact_int_t * cint);
  * 	compact_int_div(): use to calc bdiff
  * 	uint256_div():     use to calc pdiff
  * 
- * For the explanation of A and B, please refer to 'https://en.bitcoin.it/wiki/Difficulty'
+ * For the explanation of 'bdiff' and 'pdiff', please refer to 'https://en.bitcoin.it/wiki/Difficulty'
  */
 compact_int_t compact_int_div(const compact_int_t * n, const compact_int_t * d);
 compact_int_t uint256_div(const uint256_t * n, const uint256_t * d);
