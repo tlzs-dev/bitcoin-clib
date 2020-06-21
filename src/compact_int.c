@@ -33,6 +33,12 @@
 
 #include "satoshi-types.h"
 
+#ifndef debug_printf 
+#define debug_printf(fmt, ...) do { \
+		printf("\e[33m" "%s()::"fmt "\e[39m""\n", __FUNCTION__, ##__VA_ARGS__);	\
+	} while(0)
+#endif
+
 compact_int_t uint256_to_compact_int(const uint256_t * target)
 {
 	compact_int_t cint = { .bits = 0 };
@@ -42,33 +48,32 @@ compact_int_t uint256_to_compact_int(const uint256_t * target)
 	
 	// count the number of 0s at the end
 	while(num_zeros < 32 && (p_end[-1] == 0)) { --p_end; ++num_zeros;}
-
-	cint.exp = 32 - num_zeros;
+	
+	debug_printf("num_zeros: %d", num_zeros);
 	
 	int num_bytes = 3;	// 24 bits
-	if((num_zeros + num_bytes) > 32) num_bytes = 32 - num_zeros; 
+	cint.exp = 32 - num_zeros;
 	
-	// unsigned char[] to little-endian int
-	if(num_bytes > 0) cint.mantissa[2] = *--p_end;
-	if(num_bytes > 1) cint.mantissa[1] = *--p_end;
-	if(num_bytes > 2) cint.mantissa[0] = *--p_end;
+	if((cint.exp + num_bytes) >= 32) num_bytes = 32 - cint.exp; 
+	debug_printf("exp: %d (0x%.2x)", (int)cint.exp, (int)cint.exp);
 	
+	memcpy(cint.mantissa, (p_end - num_bytes), num_bytes);
 	return cint;
 }
 uint256_t compact_int_to_uint256(compact_int_t * cint)
 {
 	uint256_t target = *uint256_zero;
 	if(cint->exp >= 32) return target;
-	
+
 	int num_bytes = 3;
-	if((cint->exp + num_bytes) > 32) num_bytes = 32 - cint->exp; 
-	unsigned char * p_end = (unsigned char *)&target + cint->exp;
+	int num_zeros = 32 - cint->exp;
+	debug_printf("num_zeros: %d, num_bytes: %d, exp: 0x%.2x", num_zeros, num_bytes, (int)cint->exp);
+
+	if((cint->exp + num_bytes) >= 32) num_bytes = 32 - cint->exp; 
+	unsigned char * p = (unsigned char *)&target + cint->exp - num_bytes;
 	
-	// little-endian int to unsigned char[]
-	if(num_bytes > 0) *--p_end = cint->mantissa[2];
-	if(num_bytes > 1) *--p_end = cint->mantissa[1];
-	if(num_bytes > 2) *--p_end = cint->mantissa[0];
-	
+	memcpy(p, cint->mantissa, num_bytes);
+
 	return target;
 }
 
@@ -108,7 +113,7 @@ int main(int argc, char **argv)
 	
 	compact_int_t cint = {.bits = 0x1b0404cb };
 	
-	printf("test1: compact_int_to_uint256() ...\n");
+	printf("== test1: compact_int_to_uint256() ...\n");
 	printf("\tcint    : 0x%.8x\n", cint.bits); 
 	dump_line("\tcintdata:   ", &cint, sizeof(cint));
 	
@@ -118,7 +123,7 @@ int main(int argc, char **argv)
 	
 	assert(0 == memcmp(&target, &TARGET, 32));
 	
-	printf("test1: uint256_to_compact_int() ...\n");
+	printf("== test2: uint256_to_compact_int() ...\n");
 	cint = uint256_to_compact_int(&TARGET);
 	
 	dump_line("\tTARGET: ", &TARGET, 32);
@@ -126,6 +131,26 @@ int main(int argc, char **argv)
 	dump_line("\tcintdata:   ", &cint, sizeof(cint));
 	
 	assert(cint.bits == BITS);
+	
+	
+	printf("== test3: compact_int_to_uint256(cint=0x1e0004cb) ...\n");
+	cint.bits = 0;
+	cint.exp = 30;
+	cint.mantissa[0] = 0xcb;
+	cint.mantissa[1] = 0x04;
+	
+	target = compact_int_to_uint256(&cint);
+	printf("\tcint    : 0x%.8x\n", cint.bits); 
+	dump_line("\tcintdata:   ", &cint, sizeof(cint));
+	dump_line("\ttarget: ", &target, 32);
+	
+	
+	printf("== test4: uint256_to_cint() ==> cint=0x1e0004cb...\n");
+	cint.bits = 0;
+	cint = uint256_to_compact_int(&target);
+	dump_line("\ttarget: ", &target, 32);
+	printf("\tcint    : 0x%.8x\n", cint.bits); 
+	dump_line("\tcintdata:   ", &cint, sizeof(cint));
 	
 	return 0;
 }
