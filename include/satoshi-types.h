@@ -123,7 +123,7 @@ char * uint256_to_string(const uint256_t * u256, int to_little_endian, char ** p
  * 	 
  *  The target value was stored in a compact format(uint32_t) int the 'bit' field of block header. 
  *  --> the lower 24 bits represent an integer value, 
- *  --> the upper 8 bits indicate that how many bytes remain 
+ *  --> the upper 8 bits indicate that how many bytes remained 
  * 		after removing the tailing-0s(if regarded as big-endian) or leading-0s(if regarded as little-endian)
  * 
  *  for example:
