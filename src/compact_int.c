@@ -82,7 +82,7 @@ compact_uint256_t uint256_to_compact(const uint256_t * target)
 uint256_t compact_to_uint256(const compact_uint256_t * cint)
 {
 	uint256_t target = *uint256_zero;
-	if(cint->exp >= 32) return target;
+	if(cint->exp > 32) return uint256_NaN;
 
 	int num_bytes = 3;
 	int num_zeros = 32 - cint->exp;
@@ -330,6 +330,8 @@ int main(int argc, char **argv)
 	printf("pdiff: %.8f\n", result);
 	
 	
+	
+	// test comare functions
 	printf("==== compact_uint256_compare(0x%.8x, 0x%.8x): \n", compact_uint256_difficulty_one.bits, cint.bits);
 	int diff = compact_uint256_compare(&compact_uint256_difficulty_one, &cint);
 	printf("diff = %d\n", diff);
@@ -356,20 +358,71 @@ int main(int argc, char **argv)
 	assert(diff < 0);
 	
 	
-	printf("==== uint256_compare(hash, target): \n");
+	printf("==== uint256_compare_with_compact(hash, target): \n");
 	dump_line("\thash=", &difficulty_one, 32);
-	printf("\ttarget=0x%.8x", cint.bits);
+	printf("\ttarget=0x%.8x\n", cint.bits);
 	
 	diff = uint256_compare_with_compact(&difficulty_one, &cint);
 	printf("diff = %d\n", diff);
 	assert(diff > 0);
 	
 	
-	printf("==== uint256_compare(hash, target): \n");
+	printf("==== uint256_compare_with_compact(hash, target): \n");
 	dump_line("\thash=", &target, 32);
 	printf("\ttarget=0x%.8x", compact_uint256_difficulty_one.bits);
 	
 	diff = uint256_compare_with_compact(&target, &compact_uint256_difficulty_one);
+	printf("diff = %d\n", diff);
+	assert(diff < 0);
+	
+	// test NaN
+	printf("==== uint256_compare_with_compactNaN(hash, NaN): \n");
+	dump_line("\thash=", &target, 32);
+	printf("\tNaN=0x%.8x\n", compact_uint256_NaN.bits);
+	
+	diff = uint256_compare_with_compact(&target, &compact_uint256_NaN);
+	printf("diff = %d\n", diff);
+	assert(diff < 0);
+	
+	printf("==== uint256_compare_with_compact(NaN, target): \n");
+	dump_line("\thash=", &uint256_NaN, 32);
+	printf("\tNaN=0x%.8x\n", cint.bits);
+	
+	diff = uint256_compare_with_compact(&uint256_NaN, &cint);
+	printf("diff = %d\n", diff);
+	assert(diff > 0);
+	
+	
+	printf("==== uint256_compare(a, b): \n");
+	dump_line("\ta=(NaN)", &uint256_NaN, 32);
+	dump_line("\tb=(one)", &difficulty_one, 32);
+	
+	diff = uint256_compare(&uint256_NaN, &difficulty_one);
+	printf("diff = %d\n", diff);
+	assert(diff > 0);
+	
+	printf("==== uint256_compare(a, b): \n");
+	dump_line("\ta=(one)", &difficulty_one, 32);
+	dump_line("\tb=(NaN)", &uint256_NaN, 32);
+	
+	diff = uint256_compare(&difficulty_one, &uint256_NaN);
+	printf("diff = %d\n", diff);
+	assert(diff < 0);
+	
+	
+	printf("==== compact_uint256_compare(a, b): \n");
+	printf("\ta=(one)0x%.8x\n", compact_uint256_NaN.bits);
+	printf("\tb=(NaN)0x%.8x\n", compact_uint256_difficulty_one.bits);
+	
+	diff = compact_uint256_compare(&compact_uint256_NaN, &compact_uint256_difficulty_one);
+	printf("diff = %d\n", diff);
+	assert(diff > 0);
+	
+	printf("==== compact_uint256_compare(a, b): \n");
+	printf("\ta=(one)0x%.8x\n", compact_uint256_difficulty_one.bits);
+	printf("\tb=(NaN)0x%.8x\n", compact_uint256_NaN.bits);
+	
+	diff = compact_uint256_compare(&compact_uint256_difficulty_one, &compact_uint256_NaN);
 	printf("diff = %d\n", diff);
 	assert(diff < 0);
 	

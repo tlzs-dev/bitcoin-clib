@@ -154,6 +154,12 @@ uint256_t compact_to_uint256(const compact_uint256_t * cint);
 #define compact_uint256_zero 	((compact_uint256_t){.exp = 0, })
 #define compact_uint256_NaN 	((compact_uint256_t){.exp = 0xff, })	// Not a Number
 
+#define uint256_NaN	((uint256_t){.val = {						\
+		0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 		\
+		0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,			\
+		0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,			\
+		0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff }})
+
 // The highest possible target (difficulty 1) is defined as 0x1d00ffff
 #define compact_uint256_difficulty_one  ((compact_uint256_t){.bits = 0x1d00ffff, })
 #define uint256_difficulty_one ((uint256_t){.val = {			\
