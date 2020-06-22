@@ -316,6 +316,18 @@ typedef struct satoshi_tx
 	bitcoin_tx_witness_t * witnesses;
 	uint32_t lock_time;
 	
+	/*
+	 *  Definition of txid remains unchanged: the double SHA256 of the traditional serialization format:
+	 *   [nVersion][txins][txouts][nLockTime]
+	 */
+	uint256_t txid[1];
+	
+	/*
+	 * (https://github.com/bitcoin/bips/blob/master/bip-0141.mediawiki)
+	 * A new wtxid is defined: the double SHA256 of the new serialization with witness data:
+	 * [nVersion][marker][flag][txins][txouts][witness][nLockTime]
+	 */
+	uint256_t wtxid[1];
 }satoshi_tx_t;
 ssize_t satoshi_tx_parse(satoshi_tx_t * tx, ssize_t length, const void * payload);
 void satoshi_tx_cleanup(satoshi_tx_t * tx);

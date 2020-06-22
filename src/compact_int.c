@@ -199,7 +199,7 @@ int main(int argc, char **argv)
 		.val = {
 			[24] = 0xcb,
 			[25] = 0x04,
-			[26] = 0x04,	
+			[26] = 0x04,
 		},
 	};
 	static const uint32_t BITS = 0x1b0404cb;

@@ -286,6 +286,7 @@ void test_blockchain_load_data(const char * data_dir, const char * file_prefix, 
 				assert(tx);
 				
 				satoshi_tx_get_hash(tx, tx_hash);
+				assert(0 == memcmp(tx_hash, tx->txid, 32));
 				mtree->add(mtree, 1, tx_hash);
 				
 				// todo: utxoes = get_utxos(tx);

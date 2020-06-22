@@ -4,7 +4,8 @@ CC=gcc -std=gnu99 -Wall
 LINKER=gcc -std=gnu99 -Wall
 
 CFLAGS = -g -I../include -D_DEBUG
-LIBS = -lm -lpthread -ljson-c -ldb
+LIBS = -lm -lpthread -ljson-c -ldb 
+LIBS += -lgmp
 
 SRC_DIR := ../src
 OBJ_DIR := ../obj
@@ -26,7 +27,7 @@ UTILS_OBJECTS := $(UTILS_SOURCES:$(UTILS_SRC_DIR)/%.c=$(UTILS_OBJ_DIR)/%.o)
 
 all: do_init $(TARGET)
 
-$(TARGET): $(BASE_OBJECTS) $(OBJECTS) $(UTILS_OBJECTS) unit-test.c
+$(TARGET): $(BASE_OBJECTS) $(OBJECTS) $(UTILS_OBJECTS) unit-test.c 
 	echo "objects: $(OBJECTS)"
 	echo "sources: $(SOURCES)"
 	$(CC) -o $@ $^ $(CFLAGS) $(LIBS) -lsecp256k1
@@ -62,7 +63,8 @@ test_crypto: $(BASE_OBJECTS) $(UTILS_OBJECTS) $(SRC_DIR)/crypto.c
 	$(CC) -o $@ $(CFLAGS) $(LIBS) $^ -D_TEST_CRYPTO -D_STAND_ALONE -lsecp256k1
 
 satoshi-types: test_satoshi-types
-test_satoshi-types: $(BASE_OBJECTS) $(UTILS_OBJECTS) $(SRC_DIR)/satoshi-types.c
+test_satoshi-types: $(BASE_OBJECTS) $(UTILS_OBJECTS) \
+	$(SRC_DIR)/satoshi-types.c $(SRC_DIR)/compact_int.c
 	echo "build $@ ..."
 	$(CC) -o $@ $(CFLAGS) $(LIBS) $^ -D_TEST_SATOSHI_TYPES -D_STAND_ALONE
 

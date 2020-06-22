@@ -667,11 +667,15 @@ ssize_t satoshi_tx_parse(satoshi_tx_t * tx, ssize_t length, const void * payload
 	const unsigned char * p = payload;
 	const unsigned char * p_end = p + length;
 	
+	sha256_ctx_t sha[1];	// calc tx_hash
+	sha256_init(sha);
+	
 	// parse version
 	p = parse_data(p, p_end, int32_t, tx->version);
 	if(NULL == p) {
 		message_parser_error_handler("parse version failed: %s", "invalid payload length");
 	}
+	sha256_update(sha, (unsigned char *)&tx->version, sizeof(tx->version));	// hash [nVersion]
 	
 	// parse witness flag, If present, always 0001, and indicates the presence of witness data
 	if((p + 2) > p_end){
@@ -691,16 +695,20 @@ ssize_t satoshi_tx_parse(satoshi_tx_t * tx, ssize_t length, const void * payload
 	// parse txins
 	if(p >= p_end) message_parser_error_handler("parse txins failed: %s", "invalid payload length");
 	
+	varint_t * num_txins = (varint_t *)p;
 	p = parse_varint(p, p_end, &tx->txin_count);
 	if(NULL == p)
 	{
 		message_parser_error_handler("parse txin_count failed: %s", "invalid payload length");
 	}
+
 	if(tx->txin_count <= 0) message_parser_error_handler("invalid txins count: %d", (int)tx->txin_count);
 	
 	satoshi_txin_t * txins = calloc(tx->txin_count, sizeof(*txins));
 	assert(txins);
 	tx->txins = txins;
+	
+	const unsigned char * txins_data = p;
 	for(ssize_t i = 0; i < tx->txin_count; ++i)
 	{
 		if(p >= p_end) message_parser_error_handler("no txins[%d] data.", (int)i);
@@ -709,15 +717,21 @@ ssize_t satoshi_tx_parse(satoshi_tx_t * tx, ssize_t length, const void * payload
 		p += cb_payload;
 	}
 	
+	// hash [txins]: {num_txins, txins_data}
+	sha256_update(sha, (unsigned char *)num_txins, varint_size(num_txins));
+	sha256_update(sha, txins_data, (p - txins_data));
+	
 	// parse txouts
+	varint_t * num_txouts = (varint_t *)p;
 	p = parse_varint(p, p_end, &tx->txout_count);
 	if(NULL == p) message_parser_error_handler("parse txout failed: %s", "invalid payload length");
-	
 	if(tx->txout_count <= 0) message_parser_error_handler("invalid txouts count: %d", (int)tx->txout_count);
 	
 	satoshi_txout_t * txouts = calloc(tx->txout_count, sizeof(*txouts));
 	assert(txouts);
 	tx->txouts = txouts;
+	
+	const unsigned char * txouts_data = p;
 	for(ssize_t i = 0; i < tx->txout_count; ++i)
 	{
 		if(p >= p_end) message_parser_error_handler("no txout[%d] data.", (int)i);
@@ -725,6 +739,10 @@ ssize_t satoshi_tx_parse(satoshi_tx_t * tx, ssize_t length, const void * payload
 		if(cb_payload <= 0) message_parser_error_handler("parse txout[%d] failed.", (int)i);
 		p += cb_payload;
 	}
+	
+	// hash [txouts]: {num_txouts, txouts_data}
+	sha256_update(sha, (unsigned char *)num_txouts, varint_size(num_txouts));
+	sha256_update(sha, txouts_data, (p - txouts_data));
 	
 	// parse witnesses_data if has
 	tx->cb_witnesses = 0;
@@ -738,7 +756,6 @@ ssize_t satoshi_tx_parse(satoshi_tx_t * tx, ssize_t length, const void * payload
 		 * each txin is associated with a witness field
 		 * if a txin is non-witness, set witness to 0x00.
 		 */
-		
 		assert(tx->txin_count > 0);
 		bitcoin_tx_witness_t * witnesses = calloc(tx->txin_count, sizeof(*tx->witnesses));
 		assert(witnesses);
@@ -786,11 +803,23 @@ ssize_t satoshi_tx_parse(satoshi_tx_t * tx, ssize_t length, const void * payload
 	// parse lock_time
 	if((p + sizeof(uint32_t)) > p_end)
 		message_parser_error_handler("parse locktime failed: %s", "invalid payload length");
-		
 	tx->lock_time = *(uint32_t *)p;
 	p += sizeof(uint32_t);
 	
-	return (p - (unsigned char *)payload);
+	// hash [nLockTime]
+	sha256_update(sha, (unsigned char *)&tx->lock_time, sizeof(uint32_t));
+	
+	// calc txid: (double SHA256)
+	sha256_final(sha, (unsigned char *)tx->txid);
+	sha256_init(sha);
+	sha256_update(sha, (unsigned char *)tx->txid, 32);
+	sha256_final(sha, (unsigned char *)tx->txid);
+	
+	ssize_t cb_payload = p - (unsigned char *)payload;
+	if(tx->has_flag) { // calc wtxid
+		hash256(payload, cb_payload, (unsigned char *)tx->wtxid);
+	}
+	return cb_payload;
 label_error:
 	satoshi_tx_cleanup(tx);
 	return -1;
@@ -988,8 +1017,19 @@ ssize_t satoshi_block_parse(satoshi_block_t * block, ssize_t length, const void 
 	memcpy(&block->hdr, p, sizeof(struct satoshi_block_header));
 	p += sizeof(struct satoshi_block_header);
 	
-	// calc block_hash
+	/**
+	 * Calculate block_hash and check if it matches the current difficulty.
+	 * The hash must be less than or equal to the target which set in the block.hdr (hdr.bits).
+	 * 
+	 * 'hdr.bits' should be checked when building the block_chain,
+	 *  and 'hdr.bits' must match the global difficulty which be recalculated every 2016 blocks.
+	 */
 	hash256(payload, sizeof(struct satoshi_block_header), (uint8_t *)&block->hash);
+	int compare_diff = uint256_compare_with_compact(&block->hash, (compact_uint256_t *)&block->hdr.bits);
+	if(compare_diff > 0) {
+		message_parser_error_handler("Difficulty invalid. (greater than 0x%.8d", block->hdr.bits);
+	}
+	assert(compare_diff <= 0);
 	
 	if(length == sizeof(struct satoshi_block_header)) // parse block header only
 	{
