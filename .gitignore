@@ -12,7 +12,9 @@
 !LICENSE
 !src
 !include
-!tests/*
+!tests
+
+!tests/*.c
 !tests/Makefile
 
 # ignore files

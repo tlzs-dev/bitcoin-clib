@@ -64,7 +64,7 @@ test_crypto: $(BASE_OBJECTS) $(UTILS_OBJECTS) $(SRC_DIR)/crypto.c
 
 satoshi-types: test_satoshi-types
 test_satoshi-types: $(BASE_OBJECTS) $(UTILS_OBJECTS) \
-	$(SRC_DIR)/satoshi-types.c $(SRC_DIR)/compact_int.c
+	$(SRC_DIR)/satoshi-types.c $(SRC_DIR)/compact_int.c $(SRC_DIR)/merkle_tree.c
 	echo "build $@ ..."
 	$(CC) -o $@ $(CFLAGS) $(LIBS) $^ -D_TEST_SATOSHI_TYPES -D_STAND_ALONE
 

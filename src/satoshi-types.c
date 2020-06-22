@@ -1027,7 +1027,7 @@ ssize_t satoshi_block_parse(satoshi_block_t * block, ssize_t length, const void 
 	hash256(payload, sizeof(struct satoshi_block_header), (uint8_t *)&block->hash);
 	int compare_diff = uint256_compare_with_compact(&block->hash, (compact_uint256_t *)&block->hdr.bits);
 	if(compare_diff > 0) {
-		message_parser_error_handler("Difficulty invalid. (greater than 0x%.8d", block->hdr.bits);
+		message_parser_error_handler("Difficulty invalid (greater than 0x%.8d).", block->hdr.bits);
 	}
 	assert(compare_diff <= 0);
 	
@@ -1053,6 +1053,13 @@ ssize_t satoshi_block_parse(satoshi_block_t * block, ssize_t length, const void 
 	assert(txns);
 	block->txns = txns;
 	
+	/**
+	 * Use merkle_tree to verify all transactions in the block.
+	 * The calculated merkle_root by all txids MUST be equal to 'hdr.merkle_root'
+	 */
+	uint256_merkle_tree_t * mtree = uint256_merkle_tree_new(block->txn_count, block);
+	assert(mtree);
+	
 	for(ssize_t i = 0; i < block->txn_count; ++i)
 	{
 		if(p >= p_end) {
@@ -1063,7 +1070,21 @@ ssize_t satoshi_block_parse(satoshi_block_t * block, ssize_t length, const void 
 			message_parser_error_handler("parse tx[%d] failed: invalid payload data", (int)i);
 		}
 		p += tx_size;
+		
+		mtree->add(mtree, 1, block->txns[i].txid);
 	}
+	mtree->recalc(mtree, 0, -1);
+	uint256_t merkle_root = mtree->merkle_root;
+	uint256_merkle_tree_free(mtree);
+	mtree = NULL;
+	
+	// verify merkle root
+	if(0 != memcmp(&block->hdr.merkle_root, &merkle_root, 32))	// not equal
+	{
+		message_parser_error_handler("Verification of merkle-root failed. There's one or more invalid transactions in the block.");
+	}
+	
+	
 	
 	assert(p <= p_end);
 	ssize_t block_size = (p - (unsigned char *)payload);

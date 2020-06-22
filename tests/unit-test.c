@@ -277,29 +277,28 @@ void test_blockchain_load_data(const char * data_dir, const char * file_prefix, 
 			printf("== block %d: \n", blocks_height);
 			printf("\t-> num transctions: %d\n", (int)block->txn_count);
 			
-			// verify merkle tree
-			uint256_merkle_tree_t * mtree = uint256_merkle_tree_new(block->txn_count, NULL);
+			//~ // verify merkle tree
+			//~ uint256_merkle_tree_t * mtree = uint256_merkle_tree_new(block->txn_count, NULL);
+			
 			for(ssize_t i = 0; i < block->txn_count; ++i)
 			{
-				uint256_t tx_hash[1];
+				//~ uint256_t tx_hash[1];
 				satoshi_tx_t * tx = &block->txns[i];
 				assert(tx);
 				
-				satoshi_tx_get_hash(tx, tx_hash);
-				assert(0 == memcmp(tx_hash, tx->txid, 32));
-				mtree->add(mtree, 1, tx_hash);
+				//~ satoshi_tx_get_hash(tx, tx_hash);
+				//~ assert(0 == memcmp(tx_hash, tx->txid, 32));
+				//~ mtree->add(mtree, 1, tx_hash);
 				
 				// todo: utxoes = get_utxos(tx);
 				// toto tx->verify
 			}
-			mtree->recalc(mtree, 0, -1);
+			//~ mtree->recalc(mtree, 0, -1);
+			//~ dump_line("             block::merkle_root: ", block->hdr.merkle_root, 32);
+			//~ dump_line("merkle_tree_recalc::merkle_root: ", &mtree->merkle_root, 32);
+			//~ assert(0 == memcmp(block->hdr.merkle_root, &mtree->merkle_root, 32));
+			//~ uint256_merkle_tree_free(mtree);
 			
-			dump_line("             block::merkle_root: ", block->hdr.merkle_root, 32);
-			dump_line("merkle_tree_recalc::merkle_root: ", &mtree->merkle_root, 32);
-			
-			assert(0 == memcmp(block->hdr.merkle_root, &mtree->merkle_root, 32));
-			
-			uint256_merkle_tree_free(mtree);
 			satoshi_block_cleanup(block);
 			++blocks_height;
 			p += cb;
