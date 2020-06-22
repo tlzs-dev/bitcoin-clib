@@ -11,6 +11,13 @@
 extern "C" {
 #endif
 
+/**
+ * Database backend: 
+ * 	Use Berkeley DB 5.3 as default database backend.
+ *      Need to enable transcation subsystem to offer full ACID support.
+ */
+typedef void blockchain_db_txn_t;	// opaque data_type that holds a db_txn object. default: DB_TXN
+
 /*******************************************************
  * UTXOs
  ******************************************************/
@@ -64,7 +71,7 @@ typedef struct bitcoin_utxo_db
 	
 	// DB Transaction Subsystem Wrapper
 	void (* set_txn)(struct bitcoin_utxo_db * db, 
-		void * txn /* a DB_TXN object, should be created by db_env->txn_begin() */
+		blockchain_db_txn_t * txn /* a DB_TXN object, should be created by db_env->txn_begin() */
 	);
 
 	ssize_t (* get_utxoes)(struct bitcoin_utxo_db * db, const uint256_t * block_hash, db_record_utxo_t ** p_utxoes);	// find utxoes in orphan blocks
@@ -120,7 +127,10 @@ typedef struct bitcoin_blocks_db
 		const uint256_t * block_hash, 
 		db_record_block_t ** p_record);
 	
-	void (* set_txn)(struct bitcoin_blocks_db * db, void * txn);
+	// DB Transaction Subsystem Wrapper
+	void (* set_txn)(struct bitcoin_blocks_db * db, 
+		blockchain_db_txn_t * txn	/* a DB_TXN object, should be created by db_env->txn_begin() */
+	);
 }bitcoin_blocks_db_t;
 bitcoin_blocks_db_t * bitcoin_blocks_db_init(bitcoin_blocks_db_t * db, void * user_data);
 void bitcoin_blocks_db_cleanup(bitcoin_blocks_db_t * db);
@@ -136,7 +146,6 @@ typedef struct bitcoin_blockchain
 	int (* add)(struct bitcoin_blockchain blockchain, const satoshi_block_t * block);
 	int (* remove)(struct bitcoin_blockchain blockchain, const uint256_t * hash);
 
-	void * env;			// DB_ENV 
 	bitcoin_utxo_db_t 	utxo_db[1]; 
 	bitcoin_blocks_db_t blocks_db[1];
 	
@@ -144,6 +153,16 @@ typedef struct bitcoin_blockchain
 	bitcoin_consensus_t * consensus;
 	void * mempool;
 	size_t mempool_size;
+	
+	// DB_helpler functions
+	void * (* get_db_env)(struct bitcoin_blockchain * chain);
+	blockchain_db_txn_t * (* open_db_txn)(
+		struct bitcoin_blockchain * chain, 
+		blockchain_db_txn_t * parent_txn, 	// nullable
+		int flags							// set to '-1' to use default settings
+	);
+	int (* commit_db_txn)(struct bitcoin_blockchain * chain, blockchain_db_txn_t * db_txn);
+	int (* abort_db_txn)(struct bitcoin_blockchain * chain, blockchain_db_txn_t * db_txn);
 }bitcoin_blockchain_t;
 
 bitcoin_blockchain_t * bitcoin_blockchain_init(bitcoin_blockchain_t * chain, 

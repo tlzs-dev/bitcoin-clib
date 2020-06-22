@@ -447,21 +447,11 @@ bitcoin_utxo_db_t * bitcoin_utxo_db_init(bitcoin_utxo_db_t * db, void * user_dat
 	db->set_txn = utxo_db_set_txn;
 	
 	bitcoin_blockchain_t * chain = user_data;
-	DB_ENV * env = NULL;
+	DB_ENV * env = chain->get_db_env(chain);
+	
 	const char * db_name = NULL;	///< @todo load from settings
-	
-	if(chain)
-	{
-		env = chain->env;
-	}
-	
 	utxo_db_private_t * priv = utxo_db_private_new(db, env, db_name);
 	assert((db->priv == priv)); 
-	
-	if(env)
-	{
-		assert(priv->env == (DB_ENV *)chain->env);
-	}
 	
 	return db;
 }
@@ -676,6 +666,8 @@ void blocks_db_set_txn(struct bitcoin_blocks_db * db, void * txn)
 	return;
 }
 
+
+
 bitcoin_blocks_db_t * bitcoin_blocks_db_init(bitcoin_blocks_db_t * db, void * user_data)
 {
 	if(NULL == db) db = calloc(1, sizeof(*db));
@@ -689,17 +681,11 @@ bitcoin_blocks_db_t * bitcoin_blocks_db_init(bitcoin_blocks_db_t * db, void * us
 	bitcoin_blockchain_t * chain = user_data;
 	DB_ENV * env = NULL;
 	const char * db_name = NULL;	///< @todo load from settings
-	if(chain)
-	{
-		env = chain->env;
+	if(chain) {
+		env = chain->get_db_env(chain);
 	}
 	blocks_db_private_t * priv = blocks_db_private_new(db, env, db_name);
 	assert(priv && (db->priv == priv));
-	
-	if(env)
-	{
-		assert(priv->env == (DB_ENV *)chain->env);
-	}
 	
 	return db;
 }
@@ -720,7 +706,10 @@ typedef struct blockchain_private
 	bitcoin_blockchain_t * chain;
 	char db_home[PATH_MAX];
 	char blocks_dir[PATH_MAX];
+	
+	DB_ENV * env;
 }blockchain_private_t;
+
 blockchain_private_t * blockchain_private_new(bitcoin_blockchain_t * chain,
 	const char * db_home, 
 	const char *blocks_dir)
@@ -759,6 +748,74 @@ static int blockchain_remove(struct bitcoin_blockchain blockchain, const uint256
 	return 0;
 }
 
+static void * get_db_env(bitcoin_blockchain_t * chain)
+{
+	assert(chain && chain->priv);
+	blockchain_private_t * priv = chain->priv;
+	return priv->env;
+}
+
+static blockchain_db_txn_t * open_db_txn(bitcoin_blockchain_t * chain, blockchain_db_txn_t * parent_txn, int flags)
+{
+	assert(chain && chain->priv);
+	blockchain_private_t * priv = chain->priv;
+	
+	DB_ENV * env = priv->env;
+	assert(env);
+	
+	if(-1 == flags) {	// use default settings
+		flags = DB_READ_COMMITTED | DB_TXN_SYNC;
+	}
+	
+	DB_TXN * db_txn = NULL;
+	int rc = env->txn_begin(env, parent_txn, &db_txn, flags);
+	if(rc) {
+		env->err(env, rc, "%s() failed", __FUNCTION__);
+		return NULL;
+	}
+	return db_txn;
+}
+
+static int commit_db_txn(bitcoin_blockchain_t * chain, blockchain_db_txn_t * txn)
+{
+	int rc = -1;
+	assert(chain && chain->priv);
+	blockchain_private_t * priv = chain->priv;
+	
+	DB_ENV * env = priv->env;
+	assert(env);
+	
+	DB_TXN * db_txn = txn;
+	if(db_txn)
+	{
+		rc = db_txn->commit(db_txn, 0);
+		if(rc) {
+			env->err(env, rc, "%s() failed", __FUNCTION__);
+		}
+	}
+	return rc;
+}
+
+static int abort_db_txn(bitcoin_blockchain_t * chain, blockchain_db_txn_t * txn)
+{
+	int rc = -1;
+	assert(chain && chain->priv);
+	blockchain_private_t * priv = chain->priv;
+	
+	DB_ENV * env = priv->env;
+	assert(env);
+	
+	DB_TXN * db_txn = txn;
+	if(db_txn)
+	{
+		rc = db_txn->abort(db_txn);
+		if(rc) {
+			env->err(env, rc, "%s() failed", __FUNCTION__);
+		}
+	}
+	return rc;
+}
+
 bitcoin_blockchain_t * bitcoin_blockchain_init(
 	bitcoin_blockchain_t * chain, 
 	uint32_t magic,
@@ -773,6 +830,11 @@ bitcoin_blockchain_t * bitcoin_blockchain_init(
 	chain->add = blockchain_add;
 	chain->remove = blockchain_remove;
 	
+	chain->get_db_env = get_db_env;
+	chain->open_db_txn = open_db_txn;
+	chain->commit_db_txn = commit_db_txn;
+	chain->abort_db_txn = abort_db_txn;
+	
 	chain->magic = magic;
 	chain->user_data = user_data;
 
@@ -784,7 +846,7 @@ bitcoin_blockchain_t * bitcoin_blockchain_init(
 
 	DB_ENV * env = init_db_env(db_home);
 	assert(env);
-	chain->env = env;
+	priv->env = env;
 
 	bitcoin_utxo_db_t * utxo_db = bitcoin_utxo_db_init(chain->utxo_db, chain);
 	bitcoin_blocks_db_t * blocks_db = bitcoin_blocks_db_init(chain->blocks_db, chain);

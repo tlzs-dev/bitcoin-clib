@@ -44,7 +44,9 @@ $(UTILS_OBJECTS): $(UTILS_OBJ_DIR)/%.o : $(UTILS_SRC_DIR)/%.c
 
 blockchain: test_blockchain
 
-test_blockchain: $(BASE_OBJECTS) $(UTILS_OBJECTS) $(OBJ_DIR)/satoshi-types.o $(SRC_DIR)/blockchain.c
+test_blockchain: $(BASE_OBJECTS) $(UTILS_OBJECTS) \
+	$(OBJ_DIR)/satoshi-types.o $(OBJ_DIR)/compact_int.o $(OBJ_DIR)/merkle_tree.o \
+	$(SRC_DIR)/blockchain.c 
 	echo "build $@ ..."
 	$(CC) -o $@ $(CFLAGS) $(LIBS) $^ -D_TEST_BITCOIN_BLOCKCHAIN -D_STAND_ALONE
 
