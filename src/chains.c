@@ -109,8 +109,15 @@ typedef struct block_info
 
 typedef struct active_chain
 {
-	struct block_info * parent;	// the node belongs to the verified blockchain, can be null If it is not currently known
-	struct block_info * head;
+	/**
+	 * Set head to array type and place it in the first field, 
+	 * when backtracking from end to the head, 
+	 * this pointer can also represent the active_chain struct,
+	 * makes it easy to get chain->parent and other fields.
+	 */
+	struct block_info head[1];
+	
+	struct block_info * parent;	// the node belongs to the verified blockchain, can be null if it is not currently known
 	// The fields below are for internal use only,
 	// used to quickly find the longest-chain within current branch
 	struct block_info * longest_end;
