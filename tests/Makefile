@@ -1,11 +1,22 @@
 TARGET=unit-test
 
+DEBUG ?= 1
+VERBOSE ?= 7
+OPTIMIZE ?= -O2
+
 CC=gcc -std=gnu99 -Wall
 LINKER=gcc -std=gnu99 -Wall
 
-CFLAGS = -g -I../include -D_DEBUG
+CFLAGS = -I../include
 LIBS = -lm -lpthread -ljson-c -ldb 
 LIBS += -lgmp
+
+ifeq ($(DEBUG),1)
+CFLAGS += -g -D_DEBUG
+OPTIMIZE=-O0
+endif
+
+LINKER += $(OPTIMIZE)
 
 SRC_DIR := ../src
 OBJ_DIR := ../obj
@@ -85,6 +96,16 @@ test_compact_int: $(SRC_DIR)/compact_int.c
 	$(CC) -o $@ $(CFLAGS) $(LIBS) $^ \
 	-lgmp \
 	-D_TEST_COMPACT_INT -D_STAND_ALONE -D_VERBOSE=7
+	
+
+chains: test_chains
+test_chains: $(BASE_OBJECTS) $(UTILS_OBJECTS) \
+	$(OBJ_DIR)/satoshi-types.o $(SRC_DIR)/compact_int.c $(OBJ_DIR)/merkle_tree.o \
+	$(SRC_DIR)/chains.c
+	echo "build $@ ..."
+	$(LINKER) -o $@ $(CFLAGS) $(LIBS) $^ \
+	-lgmp \
+	-D_TEST_CHAINS -D_STAND_ALONE -D_VERBOSE=7
 
 .PHONY: do_init clean
 do_init:

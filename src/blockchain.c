@@ -734,6 +734,12 @@ blockchain_private_t * blockchain_private_new(bitcoin_blockchain_t * chain,
 void blockchain_private_free(blockchain_private_t * priv)
 {
 	if(NULL == priv) return;
+	
+	if(priv->env)
+	{
+		priv->env->close(priv->env, DB_FORCESYNC);
+		priv->env = NULL;
+	}
 	free(priv);
 	return;
 }
@@ -863,6 +869,13 @@ void bitcoin_blockchain_cleanup(bitcoin_blockchain_t * chain)
 	{
 		bitcoin_utxo_db_cleanup(chain->utxo_db);
 	}
+	if(chain->blocks_db)
+	{
+		bitcoin_blocks_db_cleanup(chain->blocks_db);
+	}
+	
+	blockchain_private_free(chain->priv);
+	chain->priv = NULL;
 	return;
 }
 
