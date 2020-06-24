@@ -152,6 +152,33 @@ int block_info_add_child(block_info_t * parent, block_info_t * child)
 	return 0;
 }
 
+
+/**
+ * struct active_chain 
+ * struct active_chain_list
+ * 
+ * @details
+ * - Rule I . Any orphans should first look for their parents in the chains-list.
+ * 
+ * - Rule II. If parents can be found in one of the chains, the join the chain and do the following steps:
+ *     1. get the current cumulative difficulty of the parent;
+ *     2. calcute and find the tail-node with the the largest cumulative-difficulty of his own branch; 
+ *     3. report the tail-node to the chain;
+ *     4. if the the tail-node's cumulative-difficulty is also the largest in the chain, 
+ *     the chain will revise the family tree, make all nodes on this branch containing the tail-node 
+ *     become the first-child or their parents.
+ * 
+ * - Rule III. Any orphans who do not know their parents should create a new chain, then find out 
+ *   whether there are children in the chians-list. Since any orphans can only have one unique parent,
+ *   the child (or children) must be the head of his (or their) chain. Claim this(these) chain(s) and
+ *   make them be their children. 
+ *   
+ * 
+ * - Rule IV. If a chain known his parent in the BLOCKCHAIN and his longest-offspring is supper than the current,
+ *   replace the current one, and bring all the first-child on his chain back to the royal family.
+ * 
+ */
+ 
 typedef struct active_chain
 {
 	/**
@@ -167,6 +194,9 @@ typedef struct active_chain
 	// used to quickly find the longest-chain within current branch
 	struct block_info * longest_end;
 }active_chain_t;
+
+active_chain
+
 
 typedef struct active_chain_list
 {
