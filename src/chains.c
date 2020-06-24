@@ -244,11 +244,12 @@ int active_chain_list_resize(active_chain_list_t * list, ssize_t max_size)
 	if(max_size <= 0) max_size = (max_size + ACTIVE_CHAIN_LIST_ALLOC_SIZE - 1) / ACTIVE_CHAIN_LIST_ALLOC_SIZE * ACTIVE_CHAIN_LIST_ALLOC_SIZE;
 	if(max_size <= list->max_size) return 0;
 	
-	active_chain_t * chains = realloc(list->chains, max_size * sizeof(*chains));
+	active_chain_t ** chains = realloc(list->chains, max_size * sizeof(*chains));
 	assert(chains);
 	
 	memset(chains + list->max_size, 0, (max_size - list->max_size) * sizeof(*chains));
 	list->max_size = max_size;
+	list->chains = chains;
 	
 	return 0;
 }
@@ -330,7 +331,7 @@ active_chain_t * active_chain_list_add_orphan(active_chain_list_t * list, block_
 		
 	}else {
 		// rule 3
-		active_chain_t * chain = active_chain_new(orphan);
+		chain = active_chain_new(orphan);
 		
 		///< @todo
 		// ...
