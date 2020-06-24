@@ -145,7 +145,7 @@ static int queue_enter(struct block_info_queue * queue, const block_info_t * inf
 	return 0;
 }
 
-const block_info_t * queue_leave(struct block_info_queue * queue)
+static const block_info_t * queue_leave(struct block_info_queue * queue)
 {
 	if(queue->length <= 0) return NULL;
 	

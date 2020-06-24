@@ -34,29 +34,11 @@
 #include "satoshi-types.h"
 #include <search.h>
 
-#define MAX_FUTURE_BLOCK_TIME	(2 * 60 * 60)
-static const uint256_t g_genesis_block_hash = {
-	.val = {
-		0x6f, 0xe2, 0x8c, 0x0a, 0xb6, 0xf1, 0xb3, 0x72,
-		0xc1, 0xa6, 0xa2, 0x46, 0xae, 0x63, 0xf7, 0x4f, 
-		0x93, 0x1e, 0x83, 0x65, 0xe1, 0x5a, 0x08, 0x9c, 
-		0x68, 0xd6, 0x19, 0x00, 0x00, 0x00, 0x00, 0x00
-	}
-};
-
-#define BLOCK_HASHES_PRE_ALLOC_SIZE (6 * 24 * 365 * 100)	// (6 blocks per hour) * 24hours * 365days * 100years
-
-/*
- * use an array to keep all verified blocks
- *  g_blocks_hashes[height] = the hash of block@heigth;
- * 
- * 	if any hash_ptr(pointer) has been obtained by searching, the 'height' can be calculate by the following method:
- *   height = hash_ptr - g_blocks_hashes;
- */
-static uint256_t g_blocks_hashes[BLOCK_HASHES_PRE_ALLOC_SIZE];	
-static void * g_blocks_hashes_root;	// tsearch root
+#include "chains.h"
 
 /**
+ * @file chains.c
+ * 
  * If two nodes broadcast different versions of the next block simultaneously, 
  * there will be disputes about who is orthodox.
  * 
@@ -85,43 +67,179 @@ static void * g_blocks_hashes_root;	// tsearch root
  *   
  *   ...
  *  
- * so, o we need to find a relatively good algorithm to solve this problem
+ * so, we need to find an algorithm to solve this problem
  */
-typedef struct block_info
-{
-	uint256_t hash;
-	
-	/**
-	 * hdr: 
-	 *   nullable, 
-	 *   can be attached to a (struct satoshi_block_header *) or a (struct satoshi_block *)
-	 */
-	const struct satoshi_block_header * hdr;	
-	
-	int height;		// the index in the longest-chain, -1 means not attached to any chains
-	double cumulative_difficulty;
-	compact_uint256_t cumulative_difficulty_cint;	// use compact int to calc cumulative difficulty.
-	
-	struct block_info * parent;	// there can be only one parent for each block
-	struct block_info * first_child;	// the first child will belong to the longest-chain
-	
-	/*
-	 * All siblings would be abondanded and regarded as orphans, 
-	 * but if they can reproduce enough offspring (longer the first-child) , 
-	 * they can regain their family status and become the first-child.
-	 */
-	struct block_info * next_sibling;
-}block_info_t;
 
-block_info_t * block_info_new(const uint256_t * hash, const struct satoshi_block_header * hdr)
+
+#define MAX_FUTURE_BLOCK_TIME	(2 * 60 * 60)
+static const uint256_t g_genesis_block_hash = {
+	.val = {
+		0x6f, 0xe2, 0x8c, 0x0a, 0xb6, 0xf1, 0xb3, 0x72,
+		0xc1, 0xa6, 0xa2, 0x46, 0xae, 0x63, 0xf7, 0x4f, 
+		0x93, 0x1e, 0x83, 0x65, 0xe1, 0x5a, 0x08, 0x9c, 
+		0x68, 0xd6, 0x19, 0x00, 0x00, 0x00, 0x00, 0x00
+	}
+};
+
+#define BLOCKCHAIN_DEFAULT_ALLOC_SIZE (6 * 24 * 365 * 100)	// (6 blocks per hour) * 24hours * 365days * 100years
+
+/***********************************************************************
+ * blockchain
+ **********************************************************************/
+typedef int (* blockchain_heir_compare_func)(const void *, const void *);
+static blockchain_heir_compare_func blockchain_heir_compare = (blockchain_heir_compare_func)uint256_compare; 
+
+int blockchain_resize(blockchain_t * chain, ssize_t size)
+{
+	if(size <= 0) size = (size + BLOCKCHAIN_DEFAULT_ALLOC_SIZE - 1) / BLOCKCHAIN_DEFAULT_ALLOC_SIZE * BLOCKCHAIN_DEFAULT_ALLOC_SIZE;
+	if(size <= chain->max_size) return 0;
+	
+	blockchain_heir_t * heirs = realloc(chain->heirs, size * sizeof(*heirs));
+	assert(heirs);
+	
+	memset(heirs, 0, (size - chain->max_size) * sizeof(*heirs));
+	chain->heirs = heirs;
+	chain->max_size = size;
+	return 0;
+}
+
+
+
+struct active_chain * blockchain_remove_inheritance_after(blockchain_t * chain, int height)
+{
+	assert(height > 0);
+	
+	
+	if(height >= chain->height) { // no children that need to be remove
+		return NULL;
+	}
+	
+	blockchain_heir_t * parent = &chain->heirs[height];
+	blockchain_heir_t * child = parent + 1;	// first child
+	blockchain_heir_t * last_offspring = &chain->heirs[chain->height];
+	
+	// orphan the current child
+	tdelete(child, &chain->search_root, blockchain_heir_compare);
+	struct block_info * orphan = block_info_new(child->hash, NULL);
+	assert(orphan);
+	
+	// set parent-hash (prev_hash) of the child
+	memcpy(&orphan->hdr->prev_hash, parent->hash, sizeof(uint256_t));
+	orphan->hdr->bits = child->bits;
+	
+	orphan->cumulative_difficulty_cint = child->cumulative_difficulty;
+	
+	active_chain_t * orphans_chain = active_chain_new(orphan);	// create a new orphan chain
+	assert(orphans_chain);
+	
+	// bring all the orphan's heirs away
+	while(last_offspring != child)
+	{
+		++child;	// child of the child
+		
+		tdelete(child, &chain->search_root, blockchain_heir_compare);
+		struct block_info * next = block_info_new(child->hash, NULL);
+		block_info_add_child(orphan, next);
+		
+		orphan = next;
+	}
+	
+	// reset current blockchain's height
+	chain->height = height;
+	
+	return orphans_chain;
+}
+
+struct active_chain * blockchain_append_active_chain(blockchain_t * chain, struct active_chain * new_chain)
+{
+	assert(chain && new_chain);
+	
+	blockchain_heir_t * parent = tfind(&new_chain->head->hash, 
+		chain->search_root, 
+		blockchain_heir_compare);
+	if(NULL == parent) return new_chain;	// unable to append, return the chain itself
+	
+	blockchain_heir_t * heirs = chain->heirs;
+	ssize_t height = parent - heirs;	// calc block height
+	
+	struct active_chain * orphans_chain = blockchain_remove_inheritance_after(chain, height);
+	
+	block_info_t * first_child = new_chain->head->first_child;
+	
+	while(first_child)
+	{
+		blockchain_heir_t * heir = parent + 1;	// first child of the parent
+		
+		assert(first_child->hdr);
+		compact_uint256_t difficulty = compact_uint256_complement(*(compact_uint256_t *)&first_child->hdr->bits);
+		heir->cumulative_difficulty = compact_uint256_add(parent->cumulative_difficulty, difficulty);
+		
+		first_child = first_child->first_child;
+	}
+
+	return orphans_chain;
+}
+
+blockchain_t * blockchain_init(blockchain_t * chain, 
+	const uint256_t * genesis_block_hash, 
+	const struct satoshi_block_header * genesis_block_hdr,
+	void * user_data)
+{
+	assert(genesis_block_hash);
+	
+	if(NULL == chain) chain = calloc(1, sizeof(*chain));
+	assert(chain);
+	chain->user_data = user_data;
+	
+	int rc = blockchain_resize(chain, 0);
+	assert(0 == rc);
+	
+	if(genesis_block_hdr) {
+		chain->heirs[0].timestamp = genesis_block_hdr->timestamp;
+		chain->heirs[0].cumulative_difficulty = *(compact_uint256_t *)&genesis_block_hdr->bits;
+	}
+	
+	tsearch(&chain->heirs[0], // add genesis block to the search-tree
+		&chain->search_root, 
+		blockchain_heir_compare
+	);
+	return chain;
+}
+
+
+void blockchain_cleanup(blockchain_t * chain)
+{
+	for(ssize_t i = 0; i < (chain->height + 1); ++i) {
+		tdelete(&chain->heirs[i], &chain->search_root, blockchain_heir_compare);
+	}
+	chain->height = 0;
+}
+
+
+
+
+
+
+/***********************************************************************
+ * struct block_info
+ **********************************************************************/
+block_info_t * block_info_new(const uint256_t * hash, struct satoshi_block_header * hdr)
 {
 	block_info_t * info = calloc(1, sizeof(*info));
 	assert(info);
 	
 	if(hash) memcpy(&info->hash, hash, sizeof(*hash));
+	
+	if(NULL == hdr) {
+		hdr = calloc(1, sizeof(*hdr));
+		info->hdr_flags = 0;
+	}else {
+		info->hdr_flags = 1;
+	}
+	
+	assert(hdr);
 	info->hdr = hdr;
 	info->height = -1;
-	
 	return info;
 }
 
@@ -136,6 +254,12 @@ void block_info_free(block_info_t * info)
 	if(info->first_child) {
 		block_info_free(info->first_child);
 		info->first_child = NULL;
+	}
+	
+	if(info->hdr_flags == 0)
+	{
+		free(info->hdr);
+		info->hdr = NULL;
 	}
 }
 
@@ -181,33 +305,19 @@ int block_info_add_child(block_info_t * parent, block_info_t * child)
  *   replace the current one, and bring all the first-child on his chain back to the royal family.
  * 
  */
- 
-typedef struct active_chain
-{
-	/**
-	 * Set head to array type and place it in the first field, 
-	 * when backtracking from end to the head, 
-	 * this pointer can also represent the active_chain struct,
-	 * makes it easy to get chain->parent and other fields.
-	 */
-	struct block_info head[1];
-	
-	struct block_info * parent;	// the node belongs to the verified blockchain, can be null if it is not currently known
-	// The fields below are for internal use only,
-	// used to quickly find the longest-chain within current branch
-	struct block_info * longest_end;
-}active_chain_t;
 
 active_chain_t * active_chain_new(block_info_t * orphan)
 {
-	assert(orphan);
+	assert(orphan && orphan->hdr);
 	
 	active_chain_t * chain = calloc(1, sizeof(*chain));
 	assert(chain);
 	
 	block_info_t * head = chain->head;
+
+	memcpy(&head->hash, &orphan->hdr->prev_hash, sizeof(uint256_t));
 	head->first_child = orphan;
-	
+
 	// find the longest-end
 	block_info_t * longest_end = orphan;
 	while(longest_end->first_child) longest_end	= longest_end->first_child;
@@ -227,18 +337,8 @@ void active_chain_free(active_chain_t * chain)
 	free(chain);
 }
 
-typedef struct active_chain_list
-{
-	ssize_t max_size;
-	ssize_t count;
-	active_chain_t ** chains;
-	
-	void * search_root;	// tsearch root, used to find if a block is already in the list.
-	void * user_data;
-}active_chain_list_t;
-
 #define ACTIVE_CHAIN_LIST_ALLOC_SIZE (1024)
-int active_chain_list_resize(active_chain_list_t * list, ssize_t max_size)
+static int active_chain_list_resize(active_chain_list_t * list, ssize_t max_size)
 {
 	assert(list);
 	if(max_size <= 0) max_size = (max_size + ACTIVE_CHAIN_LIST_ALLOC_SIZE - 1) / ACTIVE_CHAIN_LIST_ALLOC_SIZE * ACTIVE_CHAIN_LIST_ALLOC_SIZE;
