@@ -158,7 +158,10 @@ int block_info_add_child(block_info_t * parent, block_info_t * child)
  * struct active_chain_list
  * 
  * @details
- * - Rule I . Any orphans should first look for their parents in the chains-list.
+ * - Rule 0. Any orphan MUST be checked by themselves and by chains, to find out 
+ *   whether the orphan is a clone. (duplicated, current processing should be ignored). 
+ * 
+ * - Rule I. Any orphans should first look for their parents in the chains-list.
  * 
  * - Rule II. If parents can be found in one of the chains, the join the chain and do the following steps:
  *     1. get the current cumulative difficulty of the parent;
@@ -169,7 +172,7 @@ int block_info_add_child(block_info_t * parent, block_info_t * child)
  *     become the first-child or their parents.
  * 
  * - Rule III. Any orphans who do not know their parents should create a new chain, then find out 
- *   whether there are children in the chians-list. Since any orphans can only have one unique parent,
+ *   whether there are children in the chains-list. Since any orphans can only have one unique parent,
  *   the child (or children) must be the head of his (or their) chain. Claim this(these) chain(s) and
  *   make them be their children. 
  *   
@@ -195,17 +198,155 @@ typedef struct active_chain
 	struct block_info * longest_end;
 }active_chain_t;
 
-active_chain
+active_chain_t * active_chain_new(block_info_t * orphan)
+{
+	assert(orphan);
+	
+	active_chain_t * chain = calloc(1, sizeof(*chain));
+	assert(chain);
+	
+	block_info_t * head = chain->head;
+	head->first_child = orphan;
+	
+	// find the longest-end
+	block_info_t * longest_end = orphan;
+	while(longest_end->first_child) longest_end	= longest_end->first_child;
+	chain->longest_end = longest_end;
+	
+	return chain;
+}
 
+void active_chain_free(active_chain_t * chain)
+{
+	if(NULL == chain) return;
+	
+	// the head should never have siblings, 
+	// only head->first_child need free
+	///< @todo notify chains-list to remove nodes from the tsearch-tree. 
+	block_info_free(chain->head->first_child);
+	free(chain);
+}
 
 typedef struct active_chain_list
 {
 	ssize_t max_size;
 	ssize_t count;
-	active_chain_t * chains;
+	active_chain_t ** chains;
 	
 	void * search_root;	// tsearch root, used to find if a block is already in the list.
+	void * user_data;
 }active_chain_list_t;
+
+#define ACTIVE_CHAIN_LIST_ALLOC_SIZE (1024)
+int active_chain_list_resize(active_chain_list_t * list, ssize_t max_size)
+{
+	assert(list);
+	if(max_size <= 0) max_size = (max_size + ACTIVE_CHAIN_LIST_ALLOC_SIZE - 1) / ACTIVE_CHAIN_LIST_ALLOC_SIZE * ACTIVE_CHAIN_LIST_ALLOC_SIZE;
+	if(max_size <= list->max_size) return 0;
+	
+	active_chain_t * chains = realloc(list->chains, max_size * sizeof(*chains));
+	assert(chains);
+	
+	memset(chains + list->max_size, 0, (max_size - list->max_size) * sizeof(*chains));
+	list->max_size = max_size;
+	
+	return 0;
+}
+
+active_chain_list_t * active_chain_list_init(active_chain_list_t * list, ssize_t max_size, void * user_data)
+{
+	if(NULL == list) list = calloc(1, sizeof(*list));
+	assert(list);
+	list->user_data = user_data;
+	
+	int rc = active_chain_list_resize(list, max_size);
+	assert(0 == rc);
+	
+	return list;
+}
+
+void active_chain_list_reset(active_chain_list_t * list)
+{
+	if(list->chains)
+	{
+		for(int i = 0; i < list->count; ++i)
+		{
+			active_chain_free(list->chains[i]);
+			list->chains[i] = NULL;
+		}
+	}
+	list->count = 0;
+	return;
+}
+
+
+void active_chain_list_cleanup(active_chain_list_t * list)
+{
+	active_chain_list_reset(list);
+	
+	free(list->chains);
+	list->chains = NULL;
+	list->max_size = 0;
+	return;
+}
+
+
+static inline active_chain_t * get_current_chain(block_info_t * parent)
+{
+	while(parent->parent) parent = parent->parent;
+	
+	return (active_chain_t *)parent;
+}
+
+active_chain_t * active_chain_list_add_orphan(active_chain_list_t * list, block_info_t * orphan)
+{
+	// rule 0. confirm the orphan is not a duplicate.
+	block_info_t ** p_node = tsearch(orphan, 
+		&list->search_root, 
+		(int (*)(const void *, const void *))uint256_compare // the first field of block_info struct is an uint256 hash.
+	);
+	assert(p_node);
+	if(*p_node != orphan) { // duplicated
+		return NULL;
+	}
+	
+	active_chain_t * chain = NULL;
+	
+	// rule 1. find parent
+	assert(orphan->hdr);
+	p_node = tfind(&orphan->hdr->prev_hash,		// parent hash
+		&list->search_root,
+		(int (*)(const void *, const void *))uint256_compare
+	);
+	
+	if(p_node && *p_node) // parent was found
+	{
+		block_info_t * parent = *p_node;
+		chain = get_current_chain(parent);
+		
+		// rule 2. 
+		///< @todo
+		//... 
+		
+	}else {
+		// rule 3
+		active_chain_t * chain = active_chain_new(orphan);
+		
+		///< @todo
+		// ...
+	}
+
+	assert(chain);
+	
+	// rule 4
+	if(chain->parent) // has parent in the BLOCKCHAIN
+	{
+		///< @todo
+		//...
+	}
+	
+	return chain;  
+}
 
 
 /**
