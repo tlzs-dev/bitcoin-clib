@@ -156,12 +156,14 @@ typedef struct active_chain_list
  * 
  * difficulty_cint = compact_int_max - (compact_int)target
  * 
- * To improve precision, be try to keep as many valid bits as possible in mantissa,
+ * To improve precision, we try to keep as many valid bits as possible in mantissa,
  * we define difficulty_cint.mantissa as an unsigned integer,
  * so the highest bit is allowed to be '1'.
  * 
- * DO NOT compare (unsigned type)'difficulty' and (signed type)'target' directly,
- * this should not happen within the system, so there are no relevant implementations.
+ * DO NOT use 'compact_uint256_compare()' function to 
+ * compare (unsigned type)'difficulty' and (signed type)'target' directly,
+ * this should not happen within the system, 
+ * there are no relevant implementations, the result is undefined.
  * 
  * The 'addition' and 'complement(~, 1's complement)' operation of compact_uint256 are defined as below:
  */
