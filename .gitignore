@@ -13,6 +13,7 @@
 !src
 !include
 !tests
+!test2
 
 !tests/*.c
 !tests/Makefile

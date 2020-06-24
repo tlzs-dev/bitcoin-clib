@@ -158,8 +158,17 @@ int compact_uint256_compare(const compact_uint256_t * restrict a, const compact_
 	int exp_a = a->exp;
 	int exp_b = b->exp;
 	
-	if(value_a & 0x800000) { ++exp_a; value_a >>= 8; }
-	if(value_b & 0x800000) { ++exp_b; value_b >>= 8; }
+	// check whether or not a '0' was appended to the compact_uint
+	if(a->mantissa[2] == 0 && a->mantissa[1] & 0x80)
+	{
+		value_a <<= 8;
+		--exp_a;
+	}
+	if(b->mantissa[2] == 0 && b->mantissa[1] & 0x80)
+	{
+		value_b <<= 8;
+		--exp_b;
+	}
 	
 	if(exp_a == exp_b) return value_a - value_b;
 	return exp_a - exp_b;

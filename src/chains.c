@@ -90,7 +90,13 @@ static void * g_blocks_hashes_root;	// tsearch root
 typedef struct block_info
 {
 	uint256_t hash;
-	struct satoshi_block_header hdr;
+	
+	/**
+	 * hdr: 
+	 *   nullable, 
+	 *   can be attached to a (struct satoshi_block_header *) or a (struct satoshi_block *)
+	 */
+	const struct satoshi_block_header * hdr;	
 	
 	int height;		// the index in the longest-chain, -1 means not attached to any chains
 	double cumulative_difficulty;
@@ -106,6 +112,45 @@ typedef struct block_info
 	 */
 	struct block_info * next_sibling;
 }block_info_t;
+
+block_info_t * block_info_new(const uint256_t * hash, const struct satoshi_block_header * hdr)
+{
+	block_info_t * info = calloc(1, sizeof(*info));
+	assert(info);
+	
+	if(hash) memcpy(&info->hash, hash, sizeof(*hash));
+	info->hdr = hdr;
+	info->height = -1;
+	
+	return info;
+}
+
+void block_info_free(block_info_t * info)
+{
+	if(info->next_sibling)
+	{
+		block_info_free(info->next_sibling);
+		info->next_sibling = NULL;
+	}
+	
+	if(info->first_child) {
+		block_info_free(info->first_child);
+		info->first_child = NULL;
+	}
+}
+
+int block_info_add_child(block_info_t * parent, block_info_t * child)
+{
+	assert(parent);
+	if(NULL == parent->first_child) parent->first_child = child;
+	else {
+		block_info_t * sibling = parent->first_child;
+		while(sibling->next_sibling) sibling = sibling->next_sibling;
+		sibling->next_sibling = child;
+	}
+	child->parent = parent;
+	return 0;
+}
 
 typedef struct active_chain
 {
@@ -218,6 +263,12 @@ compact_uint256_t compact_uint256_complement(const compact_uint256_t target)
 #if defined(_TEST_CHAINS) && defined(_STAND_ALONE)
 void test_compact_int_arithmetic_operations(void)
 {
+	compact_uint256_t a = {.bits = 0x1d00ffff};
+	compact_uint256_t b = {.bits = 0x1cffff00};
+	
+	int rc = compact_uint256_compare(&a, &b);
+	assert(0 == rc);
+	
 	compact_uint256_t target = { .bits = 0x1b0404cb };
 	
 	compact_uint256_t difficulty = compact_uint256_complement(target);
