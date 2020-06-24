@@ -168,7 +168,7 @@ struct active_chain * blockchain_append_active_chain(blockchain_t * chain, struc
 	
 	while(first_child)
 	{
-		blockchain_heir_t * heir = parent + 1;	// first child of the parent
+		blockchain_heir_t * heir = ++parent;	// first child of the parent
 		
 		assert(first_child->hdr);
 		compact_uint256_t difficulty = compact_uint256_complement(*(compact_uint256_t *)&first_child->hdr->bits);
