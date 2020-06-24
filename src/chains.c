@@ -133,12 +133,109 @@ typedef struct active_chain_list
 }active_chain_list_t;
 
 
+/**
+ * Difficulty is a measure of how difficult it is to find a hash below a given target.
+ * Each block stores a packed representation (called 'Bits') for its actual target(uint256). 
+ * The Bitcoin network uses the following formula to define difficulty:
+ * 
+ * difficulty_1_target: (compact_int)0x1d00FFFF
+ *                      (uint256)0x00000000 FFFF0000 00000000 00000000 00000000 00000000 00000000 00000000
+ * current_target:      (compact_int)block_hdr.bits
+ *                      (uint256) (convert block_hdr.bits to uint256)
+ * 
+ * difficulty = difficulty_1_target / current_target
+ * 
+ * 
+ * In order to avoid a large number of floating-point division operations, 
+ * we try to use another way (using compact_int) to represent the difficulty, 
+ * and made the following defination:
+ * 
+ * compact_int:        compact_uint256
+ * cint_max:    { .bits = 0x20FFFFFF,  .exp = 32, .mantissa = {0xff, 0xff, 0xff} }
+ * current_target:      block_hdr.bits
+ * 
+ * difficulty_cint = compact_int_max - (compact_int)target
+ * 
+ * define the 'addition' and 'complement(~, 1's complement)' operation of compact_uint256 as below:
+ */
+compact_uint256_t compact_uint256_add(const compact_uint256_t a, const compact_uint256_t b)
+{
+	compact_uint256_t c;	// c = a + b
+	
+	int val_a = a.bits & 0x0FFFFFF;
+	int val_b = b.bits & 0x0FFFFFF;
+	
+	// make a and b same exponent
+	int exp_diff = (int)a.exp - (int)b.exp; 
+	int exp = a.exp;
+	if(exp_diff > 0)
+	{
+		val_b >>= exp_diff * 8;	// bytes to bits
+	}else if(exp_diff < 0)
+	{
+		exp = b.exp;
+		val_a >>= (-exp_diff) * 8;
+	}
+	
+	/*
+	 * Since A and B can only have 24 valid bits at most, and C has 32 bits, 
+	 * it is safe to assign A+B directly to C.
+	 */
+	c.bits = val_a + val_b;
+	
+	// make sure c's mantissa is equal or less than 24 bits
+	if(c.bits & 0xFF000000) {
+		c.bits >>= 8;
+		exp++;
+	}
+	c.exp = exp;
+	return c;
+} 
+
+compact_uint256_t compact_uint256_complement(const compact_uint256_t target)
+{
+	// cint_max:    { .bits = 0x20FFFFFF,  .exp = 32, .mantissa = {0xff, 0xff, 0xff} }
+	compact_uint256_t c;	// c = ~a;
+	uint32_t mantissa = target.bits & 0x0FFFFFF;
+	c.bits = ~mantissa;
+	c.exp = (unsigned char)32 - target.exp; //  target.exp should less than 32 == sizeof(uint256).
+	
+	return c;
+}
+
 
 
 
 #if defined(_TEST_CHAINS) && defined(_STAND_ALONE)
+void test_compact_int_arithmetic_operations(void)
+{
+	compact_uint256_t target = { .bits = 0x1b0404cb };
+	
+	compact_uint256_t difficulty = compact_uint256_complement(target);
+	
+	compact_uint256_t difficulty_accum = compact_uint256_add(difficulty, difficulty);
+	
+	printf("difficulty: 0x%.8x\n"
+		"\texp = 0x%.2x, mantissa = 0x%.8x\n",
+		difficulty.bits,
+		difficulty.exp,
+		difficulty.bits & 0x0FFFFFF
+		);
+		
+	printf("difficulty: 0x%.8x\n"
+		"\texp = 0x%.2x, mantissa = 0x%.8x\n",
+		difficulty_accum.bits,
+		difficulty_accum.exp,
+		difficulty_accum.bits & 0x0FFFFFF
+		);
+	return ;
+}
+
 int main(int argc, char **argv)
 {
+	test_compact_int_arithmetic_operations();
+	exit(0);
+	
 	const char * block_file = "blocks/blk00000.dat";
 	uint32_t magic = 0;
 	uint32_t length = 0;
