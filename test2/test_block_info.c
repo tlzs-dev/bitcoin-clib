@@ -40,6 +40,7 @@
  *  - block_info_add_child()
  *  - block_info_free()
  *  - block_info_update_cumulative_difficulty()
+ *  - block_info_declare_inheritance()
  * 
  * 
  * 
@@ -134,10 +135,7 @@ int test_block_info(void)
 	// level-2
 	block_info_add_child(blocks[6], blocks[8]);
 	
-	
-	
-	
-	
+
 	printf("==== update cumulative_difficulty ...\n");
 	
 	block_info_t * heir = NULL;
@@ -150,8 +148,20 @@ int test_block_info(void)
 	// dump info
 	block_info_dump_BFS(blocks[0]);
 	
+
 	if(heir) {
 		printf("\e[33m" "THE heir is %p, id = %d" "\e[39m" "\n", heir, heir->id);
+	
+		block_info_declare_inheritance(heir);
+	
+		printf("The Longest-Chain: \n");
+		block_info_t * head = blocks[0];
+		
+		while(head) {
+			printf(" --> [id=%d]", head->id);
+			head = head->first_child;
+		}
+		printf("\n");
 	}
 	
 	

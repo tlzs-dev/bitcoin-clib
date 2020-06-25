@@ -91,7 +91,9 @@ static blockchain_heir_compare_func blockchain_heir_compare = (blockchain_heir_c
 
 int blockchain_resize(blockchain_t * chain, ssize_t size)
 {
-	if(size <= 0) size = (size + BLOCKCHAIN_DEFAULT_ALLOC_SIZE - 1) / BLOCKCHAIN_DEFAULT_ALLOC_SIZE * BLOCKCHAIN_DEFAULT_ALLOC_SIZE;
+	if(size <= 0) size = BLOCKCHAIN_DEFAULT_ALLOC_SIZE;
+	else size = (size + BLOCKCHAIN_DEFAULT_ALLOC_SIZE - 1) / BLOCKCHAIN_DEFAULT_ALLOC_SIZE * BLOCKCHAIN_DEFAULT_ALLOC_SIZE;
+	
 	if(size <= chain->max_size) return 0;
 	
 	blockchain_heir_t * heirs = realloc(chain->heirs, size * sizeof(*heirs));
@@ -412,6 +414,29 @@ int block_info_update_cumulative_difficulty(
 		sibling = sibling->next_sibling;
 	}
 	return 0;
+}
+
+int block_info_declare_inheritance(block_info_t * heir)
+{
+	if(NULL == heir || NULL == heir->parent) return 0;
+	block_info_t * parent = heir->parent;
+		
+	block_info_t * first_child = parent->first_child;
+	if(first_child != heir)
+	{
+		block_info_t * prev = first_child;
+		while(prev && prev->next_sibling != heir) prev = prev->next_sibling;
+		assert(prev);
+		
+		
+		// jump to first place
+		prev->next_sibling = heir->next_sibling;
+		heir->next_sibling = first_child;
+		parent->first_child = heir;
+	}
+	
+	
+	return block_info_declare_inheritance(parent);	// Tail recursion.
 }
 
 
