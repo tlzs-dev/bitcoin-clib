@@ -139,12 +139,21 @@ int test_block_info(void)
 	
 	
 	printf("==== update cumulative_difficulty ...\n");
+	
+	block_info_t * heir = NULL;
+	
 	block_info_update_cumulative_difficulty(blocks[0], 
-		(compact_uint256_t){.bits = 0 }	// blocks[0] is the genesis block and has no parent 
+		(compact_uint256_t){.bits = 0 },	// blocks[0] is the genesis block and has no parent 
+		&heir
 	);
 	
 	// dump info
 	block_info_dump_BFS(blocks[0]);
+	
+	if(heir) {
+		printf("\e[33m" "THE heir is %p, id = %d" "\e[39m" "\n", heir, heir->id);
+	}
+	
 	
 	// Destroy Tree:
 	block_info_free(blocks[0]);

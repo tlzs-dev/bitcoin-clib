@@ -378,24 +378,37 @@ void clib_queue_cleanup(struct clib_queue * queue)
 
 int block_info_update_cumulative_difficulty(
 	block_info_t * node, // current node
-	compact_uint256_t cumulative_difficulty						 // parent's cumulative_difficulty
+	compact_uint256_t cumulative_difficulty,	// parent's cumulative_difficulty
+	block_info_t ** p_longest_offspring			// the child who currently at the end of the longest-chain  
 )
 {
 	if(NULL == node) return -1;
 	
 	// update current node's cumulative_difficulty
 	compact_uint256_t difficulty = compact_uint256_complement(*(compact_uint256_t *)&node->hdr->bits);
-	
 	node->cumulative_difficulty = compact_uint256_add(difficulty, cumulative_difficulty);
 	
+	if(p_longest_offspring)	// if need to declare the winner at the same time 
+	{
+		block_info_t * heir = *p_longest_offspring;
+		if(NULL == heir 
+			|| compact_uint256_compare(
+					&node->cumulative_difficulty, 
+					&heir->cumulative_difficulty) > 0
+			)
+		{
+			*p_longest_offspring = node;
+		}
+	} 
+	
 	// update first-child
-	block_info_update_cumulative_difficulty(node->first_child, node->cumulative_difficulty);
+	block_info_update_cumulative_difficulty(node->first_child, node->cumulative_difficulty, p_longest_offspring);
 	
 	// update all siblings's cumulative_difficulty
 	block_info_t * sibling = node->next_sibling;
 	while(sibling)
 	{
-		block_info_update_cumulative_difficulty(sibling, cumulative_difficulty);
+		block_info_update_cumulative_difficulty(sibling, cumulative_difficulty, p_longest_offspring);
 		sibling = sibling->next_sibling;
 	}
 	return 0;
