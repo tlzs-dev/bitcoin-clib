@@ -336,8 +336,8 @@ ssize_t satoshi_tx_serialize(const satoshi_tx_t * tx, unsigned char ** p_data);
 struct satoshi_block_header
 {
 	int32_t version;
-	uint8_t prev_hash[32];
-	uint8_t merkle_root[32];
+	uint256_t prev_hash[1];
+	uint256_t merkle_root[1];
 	uint32_t timestamp;
 	uint32_t bits;
 	uint32_t nounce;

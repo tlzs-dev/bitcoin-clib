@@ -30,9 +30,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+#include <search.h>
 
 #include "satoshi-types.h"
-#include <search.h>
+#include "utils.h"
 
 #include "chains.h"
 
@@ -71,15 +72,80 @@
  */
 
 
+/**
+ * struct active_chain 
+ * struct active_chain_list
+ * 
+ * @details
+ * - Rule 0. Any orphan MUST be checked by themselves and by chains, to find out 
+ *   whether the orphan is a clone. (duplicated, current processing should be ignored). 
+ * 
+ * - Rule I. Any orphans should first look for their parents in the chains-list.
+ * 
+ * - Rule II. If parents can be found in one of the chains, then join the chain and do the following steps:
+ *     1. get the current cumulative difficulty of the parent;
+ *     2. calcute and find the tail-node with the the largest cumulative-difficulty of his own branch; 
+ *     3. report the tail-node to the chain;
+ *     4. if the the tail-node's cumulative-difficulty is also the largest in the chain, 
+ *     the chain will revise the family tree, make all nodes on this branch containing the tail-node 
+ *     become the first-child or their parents.
+ * 
+ * - Rule III. Any orphans who do not know their parents should create a new chain, then find out 
+ *   whether there are children in the chains-list. Since any orphans can only have one unique parent,
+ *   the child (or children) must be the head of his (or their) chain. Claim this(these) chain(s) and
+ *   make them be their children. 
+ *   
+ * 
+ * - Rule IV. If a chain known his parent in the BLOCKCHAIN and his longest-offspring is supper than the current,
+ *   replace the current one, and bring all the first-child on his chain back to the royal family.
+ * 
+ */
+int block_info_update_cumulative_difficulty(
+	block_info_t * node, // current node
+	compact_uint256_t cumulative_difficulty,	// parent's cumulative_difficulty
+	block_info_t ** p_longest_offspring			// the child who currently at the end of the longest-chain  
+);
+int block_info_declare_inheritance(block_info_t * heir);
+static int active_chain_list_resize(active_chain_list_t * list, ssize_t max_size);
+
+
 #define MAX_FUTURE_BLOCK_TIME	(2 * 60 * 60)
-static const uint256_t g_genesis_block_hash = {
-	.val = {
-		0x6f, 0xe2, 0x8c, 0x0a, 0xb6, 0xf1, 0xb3, 0x72,
-		0xc1, 0xa6, 0xa2, 0x46, 0xae, 0x63, 0xf7, 0x4f, 
-		0x93, 0x1e, 0x83, 0x65, 0xe1, 0x5a, 0x08, 0x9c, 
-		0x68, 0xd6, 0x19, 0x00, 0x00, 0x00, 0x00, 0x00
-	}
-};
+static const uint256_t g_genesis_block_hash[1] = {{
+		.val = {
+			0x6f, 0xe2, 0x8c, 0x0a, 0xb6, 0xf1, 0xb3, 0x72,
+			0xc1, 0xa6, 0xa2, 0x46, 0xae, 0x63, 0xf7, 0x4f, 
+			0x93, 0x1e, 0x83, 0x65, 0xe1, 0x5a, 0x08, 0x9c, 
+			0x68, 0xd6, 0x19, 0x00, 0x00, 0x00, 0x00, 0x00
+		}
+}};
+
+/**
+ * genesis block
+01000000
+0000000000000000000000000000000000000000000000000000000000000000
+3ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4a
+29ab5f49
+ffff001d
+1dac2b7c
+0101000000010000000000000000000000000000000000000000000000000000000000000000ffffffff4d04ffff001d0104455468652054696d65732030332f4a616e2f32303039204368616e63656c6c6f72206f6e206272696e6b206f66207365636f6e64206261696c6f757420666f722062616e6b73ffffffff0100f2052a01000000434104678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef38c4f35504e51ec112de5c384df7ba0b8d578a4c702b6bf11d5fac00000000
+ 
+ */
+
+static const struct satoshi_block_header g_genesis_block_hdr[1] = {{
+	.version = 1,
+	.prev_hash = {{ .val = { 0 } }},
+	.merkle_root = {{
+		.val = {
+			0x3b, 0xa3, 0xed, 0xfd, 0x7a, 0x7b, 0x12, 0xb2, 
+			0x7a, 0xc7, 0x2c, 0x3e, 0x67, 0x76, 0x8f, 0x61, 
+			0x7f, 0xc8, 0x1b, 0xc3, 0x88, 0x8a, 0x51, 0x32, 
+			0x3a, 0x9f, 0xb8, 0xaa, 0x4b, 0x1e, 0x5e, 0x4a
+		}
+	}},
+	.timestamp = 0x495fab29,
+	.bits = 0x1d00ffff,
+	.nounce = 0x7c2bac1d,
+}};
 
 #define BLOCKCHAIN_DEFAULT_ALLOC_SIZE (6 * 24 * 365 * 100)	// (6 blocks per hour) * 24hours * 365days * 100years
 
@@ -89,7 +155,7 @@ static const uint256_t g_genesis_block_hash = {
 typedef int (* blockchain_heir_compare_func)(const void *, const void *);
 static blockchain_heir_compare_func blockchain_heir_compare = (blockchain_heir_compare_func)uint256_compare; 
 
-int blockchain_resize(blockchain_t * chain, ssize_t size)
+static int blockchain_resize(blockchain_t * chain, ssize_t size)
 {
 	if(size <= 0) size = BLOCKCHAIN_DEFAULT_ALLOC_SIZE;
 	else size = (size + BLOCKCHAIN_DEFAULT_ALLOC_SIZE - 1) / BLOCKCHAIN_DEFAULT_ALLOC_SIZE * BLOCKCHAIN_DEFAULT_ALLOC_SIZE;
@@ -104,6 +170,11 @@ int blockchain_resize(blockchain_t * chain, ssize_t size)
 	chain->max_size = size;
 	return 0;
 }
+
+static int blockchain_add(blockchain_t * chain, const uint256_t * hash, const struct satoshi_block_header * hdr);
+static const blockchain_heir_t * blockchain_find(blockchain_t * chain, const uint256_t * hash);
+static const blockchain_heir_t * blockchain_get(blockchain_t * chain, ssize_t height);
+static ssize_t blockchain_get_height(blockchain_t * chain, const uint256_t * hash);
 
 
 /**
@@ -149,11 +220,13 @@ static inline blockchain_heir_t * add_heir(blockchain_t * chain,
 	assert(0 == compact_uint256_compare(
 		&heir->cumulative_difficulty, 
 		&child->cumulative_difficulty));
+		
+	tsearch(heir, &chain->search_root, blockchain_heir_compare);
 	return heir;
 }
 
 
-block_info_t * blockchain_abandon_inheritances(blockchain_t * chain, blockchain_heir_t * parent)
+static block_info_t * blockchain_abandon_inheritances(blockchain_t * chain, blockchain_heir_t * parent)
 {
 	ssize_t height = parent - chain->heirs;
 	assert(height > 0 && height <= chain->height);
@@ -185,7 +258,7 @@ block_info_t * blockchain_abandon_inheritances(blockchain_t * chain, blockchain_
 	return orphans;
 }
 
-struct block_info * blockchain_add_inheritances(blockchain_t * chain, 
+static struct block_info * blockchain_add_inheritances(blockchain_t * chain, 
 	blockchain_heir_t * parent,
 	block_info_t * child)
 {
@@ -211,11 +284,17 @@ blockchain_t * blockchain_init(blockchain_t * chain,
 	const struct satoshi_block_header * genesis_block_hdr,
 	void * user_data)
 {
-	assert(genesis_block_hash);
+	if(NULL == genesis_block_hash) genesis_block_hash = g_genesis_block_hash;
+	if(NULL == genesis_block_hdr) genesis_block_hdr = g_genesis_block_hdr;
 	
 	if(NULL == chain) chain = calloc(1, sizeof(*chain));
 	assert(chain);
 	chain->user_data = user_data;
+	chain->add = blockchain_add;
+	
+	chain->find = blockchain_find;
+	chain->get = blockchain_get;
+	chain->get_height = blockchain_get_height;
 	
 	int rc = blockchain_resize(chain, 0);
 	assert(0 == rc);
@@ -229,28 +308,178 @@ blockchain_t * blockchain_init(blockchain_t * chain,
 		&chain->search_root, 
 		blockchain_heir_compare
 	);
+	
+	active_chain_list_init(chain->candidates_list, 0, chain);
 	return chain;
 }
 
 void blockchain_reset(blockchain_t * chain)
 {
 	if(NULL == chain || NULL == chain->heirs) return;
+	active_chain_list_cleanup(chain->candidates_list);
+	
 	for(ssize_t i = 0; i < (chain->height + 1); ++i) {
 		tdelete(&chain->heirs[i], &chain->search_root, blockchain_heir_compare);
 	}
-	chain->height = 0;
+	chain->height = -1;
+	return;
 }
 
-void blockchain_cleanup(blockchain_t * chain) 
+void blockchain_cleanup(blockchain_t * chain)
 {
 	if(NULL == chain) return;
-	blockchain_reset(chain);
 	
+	active_chain_list_cleanup(chain->candidates_list);
 	free(chain->heirs);
 	chain->heirs = NULL;
 	chain->max_size = 0;
+	chain->height = -1;
 	return;
 }
+static const blockchain_heir_t * blockchain_find(blockchain_t * chain, const uint256_t * hash)
+{
+	void ** p_node = tfind(hash, &chain->search_root, blockchain_heir_compare);
+	if(p_node) return *p_node;
+	
+	return NULL;
+}
+
+static block_info_t * active_chain_list_find(active_chain_list_t * list, const uint256_t * hash)
+{
+	void ** p_node = tfind(hash, &list->search_root, blockchain_heir_compare);
+	if(p_node) return *p_node;
+	
+	return NULL;
+}
+
+static inline active_chain_t * get_current_chain(block_info_t * parent)
+{
+	if(NULL == parent) return NULL;
+	
+	while(parent->parent) parent = parent->parent;
+	return (active_chain_t *)parent;
+}
+
+static int blockchain_add(blockchain_t * block_chain, 
+	const uint256_t * block_hash, 
+	const struct satoshi_block_header * hdr)
+{
+	assert(block_hash && hdr);
+	
+	unsigned char hash[32];
+	hash256(hdr, sizeof(*hdr), hash);
+	assert(0 == memcmp(hash, block_hash, sizeof(uint256_t)));
+	
+	active_chain_list_t * list = block_chain->candidates_list;
+	const blockchain_heir_t * heir = NULL;
+	block_info_t * orphan = NULL;
+	
+	// Rule 0. check if it is already on the chain
+	heir = block_chain->find(block_chain, block_hash);
+	if(heir) return -1;
+	
+	orphan = active_chain_list_find(list, block_hash);
+	if(orphan) return -1;
+	
+	
+	orphan = block_info_new(block_hash, NULL);
+	assert(orphan);
+	memcpy(orphan->hdr, hdr, sizeof(*hdr));
+	
+	active_chain_t * chain = NULL;
+	block_info_t * longest_end = NULL;
+	
+	// Rule I. find parent in the active_chain_list
+	block_info_t * parent = active_chain_list_find(list, orphan->hdr->prev_hash);
+	if(parent) { // Rule II.
+		
+		active_chain_t * chain = get_current_chain(parent);
+		assert(chain);
+		
+		block_info_add_child(parent, orphan);
+		block_info_update_cumulative_difficulty(orphan, parent->cumulative_difficulty, &longest_end);
+		
+		if(longest_end != chain->longest_end)
+		{
+			block_info_declare_inheritance(longest_end);
+			chain->longest_end = longest_end;
+		}
+	}else { // Rule III.
+		chain = active_chain_new(orphan);
+		assert(chain);
+		
+		//  Claim all children chains
+		for(ssize_t i = 0; i < list->count; ++i)
+		{
+			active_chain_t * child_chain = list->chains[i];
+			if(0 == memcmp(
+				&child_chain->head->hash, // the parent which the current chain is looking for.
+				block_hash,	
+				sizeof(uint256_t))) 
+			{	
+				// a child chain was found, claim this chain and remove it from the chains-list
+				block_info_t * child = child_chain->head->first_child;
+				while(child)
+				{
+					block_info_add_child(orphan, child);
+					child = child->next_sibling;
+				}
+				
+				// free the child-chain and replace with the last item in the list
+				active_chain_free(child_chain);
+				
+				list->chains[i] = list->chains[--list->count];
+				list->chains[list->count] = NULL;
+			}
+		}
+		
+		// find the longest-end
+		block_info_update_cumulative_difficulty(orphan, parent->cumulative_difficulty, &chain->longest_end);
+		
+		// add chain to the chains-list
+		active_chain_list_resize(list, list->count + 1);
+		list->chains[list->count++] = chain;
+	}
+	
+	assert(chain);
+	longest_end = chain->longest_end;
+	
+	// Rule IV. find parent in the BLOCKCHAIN
+	heir = block_chain->find(block_chain, block_hash);
+	if(NULL == heir) return 0;
+	
+	blockchain_heir_t * current = &block_chain->heirs[block_chain->height];
+	if(compact_uint256_compare(
+		&chain->longest_end->cumulative_difficulty, 
+		&current->cumulative_difficulty) > 0 ) // win the round. 
+	{
+		// replace the current one
+		block_info_t * orphans = blockchain_abandon_inheritances(block_chain, (blockchain_heir_t *)heir);
+		blockchain_add_inheritances(block_chain, (blockchain_heir_t *)heir, chain->head->first_child);
+		
+		// append orphans to the active chain
+		block_info_add_child(chain->head, orphans);
+		
+		/**
+		 * @todo remove all the first-child from the active chain
+		 */
+		// ...
+		
+	}
+
+	return 0;
+}
+
+static const blockchain_heir_t * blockchain_get(blockchain_t * chain, ssize_t height)
+{
+	return NULL;
+}
+
+static ssize_t blockchain_get_height(blockchain_t * chain, const uint256_t * hash)
+{
+	return -1;
+}
+
 
 
 /***********************************************************************
@@ -456,35 +685,6 @@ int block_info_declare_inheritance(block_info_t * heir)
 }
 
 
-/**
- * struct active_chain 
- * struct active_chain_list
- * 
- * @details
- * - Rule 0. Any orphan MUST be checked by themselves and by chains, to find out 
- *   whether the orphan is a clone. (duplicated, current processing should be ignored). 
- * 
- * - Rule I. Any orphans should first look for their parents in the chains-list.
- * 
- * - Rule II. If parents can be found in one of the chains, then join the chain and do the following steps:
- *     1. get the current cumulative difficulty of the parent;
- *     2. calcute and find the tail-node with the the largest cumulative-difficulty of his own branch; 
- *     3. report the tail-node to the chain;
- *     4. if the the tail-node's cumulative-difficulty is also the largest in the chain, 
- *     the chain will revise the family tree, make all nodes on this branch containing the tail-node 
- *     become the first-child or their parents.
- * 
- * - Rule III. Any orphans who do not know their parents should create a new chain, then find out 
- *   whether there are children in the chains-list. Since any orphans can only have one unique parent,
- *   the child (or children) must be the head of his (or their) chain. Claim this(these) chain(s) and
- *   make them be their children. 
- *   
- * 
- * - Rule IV. If a chain known his parent in the BLOCKCHAIN and his longest-offspring is supper than the current,
- *   replace the current one, and bring all the first-child on his chain back to the royal family.
- * 
- */
-
 active_chain_t * active_chain_new(block_info_t * orphan)
 {
 	assert(orphan && orphan->hdr);
@@ -570,14 +770,6 @@ void active_chain_list_cleanup(active_chain_list_t * list)
 	return;
 }
 
-
-static inline active_chain_t * get_current_chain(block_info_t * parent)
-{
-	if(NULL == parent) return NULL;
-	
-	while(parent->parent) parent = parent->parent;
-	return (active_chain_t *)parent;
-}
 
 active_chain_t * active_chain_list_add_orphan(active_chain_list_t * list, block_info_t * orphan)
 {

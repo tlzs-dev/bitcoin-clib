@@ -9,27 +9,35 @@ extern "C" {
 #include "satoshi-types.h"
 
 struct block_info;
-struct active_chain;
 
-typedef struct blockchain_heir
-{
-	uint256_t hash[1];
-	uint64_t timestamp;	// add support for BIP0113 (Median time-past as endpoint for lock-time calculations)
-	
-	uint32_t bits;		// current target
-	compact_uint256_t cumulative_difficulty;
-}blockchain_heir_t;
-
-typedef struct blockchain
-{
-	blockchain_heir_t * heirs;
-	ssize_t max_size;
-	ssize_t height;
-	
-	void * search_root;
-	void * user_data;
-}blockchain_t;
-
+/**
+ * struct active_chain 
+ * struct active_chain_list
+ * 
+ * @details
+ * - Rule 0. Any orphan MUST be checked by themselves and by chains, to find out 
+ *   whether the orphan is a clone. (duplicated, current processing should be ignored). 
+ * 
+ * - Rule I. Any orphans should first look for their parents in the chains-list.
+ * 
+ * - Rule II. If parents can be found in one of the chains, then join the chain and do the following steps:
+ *     1. get the current cumulative difficulty of the parent;
+ *     2. calcute and find the tail-node with the the largest cumulative-difficulty of his own branch; 
+ *     3. report the tail-node to the chain;
+ *     4. if the the tail-node's cumulative-difficulty is also the largest in the chain, 
+ *     the chain will revise the family tree, make all nodes on this branch containing the tail-node 
+ *     become the first-child or their parents.
+ * 
+ * - Rule III. Any orphans who do not know their parents should create a new chain, then find out 
+ *   whether there are children in the chains-list. Since any orphans can only have one unique parent,
+ *   the child (or children) must be the head of his (or their) chain. Claim this(these) chain(s) and
+ *   make them be their children. 
+ *   
+ * 
+ * - Rule IV. If a chain known his parent in the BLOCKCHAIN and his longest-offspring is supper than the current,
+ *   replace the current one, and bring all the first-child on his chain back to the royal family.
+ * 
+ */
 typedef struct block_info
 {
 	uint256_t hash;
@@ -60,12 +68,7 @@ typedef struct block_info
 	int id;
 #endif
 }block_info_t;
-block_info_t * block_info_new(const uint256_t * hash, struct satoshi_block_header * hdr);
-int block_info_add_child(block_info_t * parent, block_info_t * child);
-void block_info_free(block_info_t * info);
 
-
- 
 typedef struct active_chain
 {
 	/**
@@ -94,6 +97,67 @@ typedef struct active_chain_list
 	void * user_data;
 }active_chain_list_t;
 active_chain_list_t * active_chain_list_init(active_chain_list_t * list, ssize_t max_size, void * user_data);
+void active_chain_list_cleanup(active_chain_list_t * list);
+
+/**
+ * struct blockchain_heir
+ * @details
+ * 
+ * Individuals on the verified chain, since it need to be stored in memory.
+ * the size of the struct needs to be limited as small as possible.
+ * 
+ * Unlike 'satoshi_block_header', this structure cannot prove the genuineness of itself by itself.
+ * so do not add it directly to the BLOCKCHAIN, only appending block_header is allowed.
+ */
+typedef struct blockchain_heir
+{
+	uint256_t hash[1];
+	uint64_t timestamp;	// add support for BIP0113 (Median time-past as endpoint for lock-time calculations)
+	
+	uint32_t bits;		// current target
+	compact_uint256_t cumulative_difficulty;
+}blockchain_heir_t;
+
+
+/**
+ * struct blockchain
+ * @details:
+ * 	heirs: currently the longest-chain with the largest cumulative difficulty.
+ *  candidates_list:  chains that containing valid blocks but not the longest one.
+ */ 
+typedef struct blockchain
+{
+	blockchain_heir_t * heirs;
+	ssize_t max_size;
+	ssize_t height;
+	
+	void * search_root;
+	void * user_data;
+	struct active_chain_list candidates_list[1];
+	
+	// public functions
+	const blockchain_heir_t * (*find)(struct blockchain * chain, const uint256_t * hash);
+	ssize_t (* get_height)(struct blockchain * chain, const uint256_t * hash);
+	const blockchain_heir_t * (* get)(struct blockchain * chain, ssize_t height);
+	
+	/**
+	 * add(): only increments are allowed, any reorganization must be done by internal.
+	 */
+	int (* add)(struct blockchain * chain, const uint256_t * hash, const struct satoshi_block_header * hdr);
+}blockchain_t;
+
+blockchain_t * blockchain_init(blockchain_t * chain, 
+	const uint256_t * genesis_block_hash, 
+	const struct satoshi_block_header * genesis_block_hdr, 
+	void * user_data);
+void blockchain_cleanup(blockchain_t * chain);
+
+
+block_info_t * block_info_new(const uint256_t * hash, struct satoshi_block_header * hdr);
+int block_info_add_child(block_info_t * parent, block_info_t * child);
+void block_info_free(block_info_t * info);
+
+
 
 
 /**
