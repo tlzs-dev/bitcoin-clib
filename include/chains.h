@@ -44,7 +44,7 @@ typedef struct block_info
 	int height;		// the index in the blockchain, -1 means not attached to any chains
 //	double cumulative_difficulty;
 
-	compact_uint256_t cumulative_difficulty;	// use compact int to calc cumulative difficulty.
+	compact_uint256_t cumulative_difficulty;	// use compact_uint256 to represent cumulative difficulty.
 	
 	struct block_info * parent;	// there can be only one parent for each block
 	struct block_info * first_child;	// the first child will belong to the longest-chain
@@ -96,6 +96,19 @@ typedef struct active_chain_list
 active_chain_list_t * active_chain_list_init(active_chain_list_t * list, ssize_t max_size, void * user_data);
 
 
+/**
+ * define the 'addition' and 'complement(~, 1's complement)' operation of compact_uint256 as below:
+ * 
+ * compact_uint256_t a , b;
+ *  - compact_uint256_add(a, b):  c = (a + b)
+ *      make the exponent of a and b same ==> exp;
+ *      c.mantissa = (a.mantissa + b.mantissa); 
+ *      c.exp = exp;
+ * 
+ * - compact_uint256_complement(a): c = ~a
+ * 	    c.mantissa = ~a.mantissa;
+ *      c.exp = 32 - a.exp;
+ */ 
 compact_uint256_t compact_uint256_add(const compact_uint256_t a, const compact_uint256_t b);
 compact_uint256_t compact_uint256_complement(const compact_uint256_t target);
 

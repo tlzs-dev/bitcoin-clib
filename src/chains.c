@@ -106,89 +106,104 @@ int blockchain_resize(blockchain_t * chain, ssize_t size)
 }
 
 
-
-struct active_chain * blockchain_remove_inheritance_after(blockchain_t * chain, int height)
+/**
+ * abandon_child():
+ *  export heir's data to a block_info object and return the pointer.
+ */
+static inline block_info_t * abandon_child(
+	blockchain_t * chain,
+	const blockchain_heir_t * parent, 
+	const blockchain_heir_t * heir)
 {
-	assert(height > 0);
+	assert(parent && heir);
 	
-	if(height >= chain->height) { // no children that need to be remove
+	block_info_t * orphan = block_info_new(heir->hash, NULL);
+	assert(orphan);
+
+	memcpy(&orphan->hdr->prev_hash, parent->hash, sizeof(uint256_t));
+	orphan->hdr->bits = heir->bits;
+	orphan->hdr->timestamp = (uint32_t)heir->timestamp;
+	orphan->cumulative_difficulty = heir->cumulative_difficulty;
+	
+	tdelete(heir, &chain->search_root, blockchain_heir_compare);
+	return orphan;
+}
+
+static inline blockchain_heir_t * add_heir(blockchain_t * chain,
+	blockchain_heir_t * parent, 
+	const block_info_t * child)
+{
+	assert(parent && child && child);
+	assert(0 == memcmp(parent->hash, &child->hdr->prev_hash, sizeof(uint256_t)));
+	
+	blockchain_resize(chain, (1 + chain->height) + 1);
+	blockchain_heir_t * heir = parent + 1;
+	
+	memcpy(heir->hash, &child->hash, sizeof(uint256_t));
+	heir->bits = child->hdr->bits;
+	heir->timestamp = child->hdr->timestamp;
+	compact_uint256_t difficulty = compact_uint256_complement(*(compact_uint256_t *)&heir->bits);
+	heir->cumulative_difficulty = compact_uint256_add(difficulty, parent->cumulative_difficulty);
+	
+	// verify difficulty
+	assert(0 == compact_uint256_compare(
+		&heir->cumulative_difficulty, 
+		&child->cumulative_difficulty));
+	return heir;
+}
+
+
+block_info_t * blockchain_abandon_inheritances(blockchain_t * chain, blockchain_heir_t * parent)
+{
+	ssize_t height = parent - chain->heirs;
+	assert(height > 0 && height <= chain->height);
+	
+	if(height == chain->height) { // no children that need to be remove
 		return NULL;
 	}
 	
-	blockchain_heir_t * parent = &chain->heirs[height];
-	blockchain_heir_t * child = parent + 1;	// first child
 	blockchain_heir_t * last_offspring = &chain->heirs[chain->height];
+	struct block_info * orphans = abandon_child(chain, parent, parent + 1);
 	
-	// orphan the current child
-	tdelete(child, &chain->search_root, blockchain_heir_compare);
-	struct block_info * orphan = block_info_new(child->hash, NULL);
-	assert(orphan);
-	
-	// set parent-hash (prev_hash) of the child
-	memcpy(&orphan->hdr->prev_hash, parent->hash, sizeof(uint256_t));
-	orphan->hdr->bits = child->bits;
-	
-	orphan->cumulative_difficulty = child->cumulative_difficulty;
-	
-	active_chain_t * orphans_chain = active_chain_new(orphan);	// create a new orphan chain
-	assert(orphans_chain);
-	
-	// bring all the orphan's heirs away
-	while(last_offspring != child)
+	if(orphans)
 	{
-		++child;	// child of the child
-		
-		tdelete(child, &chain->search_root, blockchain_heir_compare);
-		struct block_info * next = block_info_new(child->hash, NULL);
-		block_info_add_child(orphan, next);
-		
-		orphan = next;
+		// bring all the orphan's heirs away
+		struct block_info * orphan = orphans;
+		++parent;	// next child
+		while(parent < last_offspring)
+		{
+			struct block_info * child = abandon_child(chain, parent, parent + 1);
+			block_info_add_child(orphan, child);
+			
+			orphan = child;
+			++parent;
+		}
 	}
 	
 	// reset current blockchain's height
 	chain->height = height;
-	
-	return orphans_chain;
+	return orphans;
 }
 
-struct active_chain * blockchain_append_active_chain(blockchain_t * chain, struct active_chain * new_chain)
+struct block_info * blockchain_add_inheritances(blockchain_t * chain, 
+	blockchain_heir_t * parent,
+	block_info_t * child)
 {
-	assert(chain && new_chain);
+	assert(chain && parent && child);
+	ssize_t height = parent - chain->heirs;
 	
-	blockchain_heir_t * parent = tfind(&new_chain->head->hash, 
-		&chain->search_root, 
-		blockchain_heir_compare);
-	if(NULL == parent) return new_chain;	// unable to append, return the chain itself
-	
-	blockchain_heir_t * heirs = chain->heirs;
-	ssize_t height = parent - heirs;	// calc block height
-	
-	struct active_chain * orphans_chain = blockchain_remove_inheritance_after(chain, height);
-	assert(orphans_chain != new_chain);
-	
-	block_info_t * first_child = new_chain->head->first_child;
-	
-	while(first_child)
+	block_info_t * orphans = blockchain_abandon_inheritances(chain, parent);
+	while(child)
 	{
-		blockchain_heir_t * heir = &heirs[++height];	// first child of the parent
+		parent = add_heir(chain, parent, child);
+		assert(parent);
 		
-		assert(first_child->hdr);
-		compact_uint256_t difficulty = compact_uint256_complement(*(compact_uint256_t *)&first_child->hdr->bits);
-		heir->cumulative_difficulty = compact_uint256_add(parent->cumulative_difficulty, difficulty);
-		
-		memcpy(&heir->hash, &first_child->hash, sizeof(uint256_t));
-		heir->timestamp = first_child->hdr->timestamp;
-		
-		// verify cumulative_difficulty
-		assert(0 == compact_uint256_compare(
-				&heir->cumulative_difficulty,
-				&first_child->cumulative_difficulty)
-		);
-		
-		first_child = first_child->first_child;
+		++height;
+		child = child->first_child;
 	}
+	
 	chain->height = height;
-	return orphans_chain;
+	return orphans;
 }
 
 blockchain_t * blockchain_init(blockchain_t * chain, 
@@ -368,7 +383,8 @@ void clib_queue_cleanup(struct clib_queue * queue)
 	if(queue->nodes && queue->free_node)
 	{
 		for(ssize_t i = 0; i < queue->length; ++i) {
-			queue->free_node(queue->nodes[i]);
+			ssize_t index = (queue->start_pos + i) % queue->max_size;
+			queue->free_node(queue->nodes[index]);
 		}
 	}
 	free(queue->nodes);
