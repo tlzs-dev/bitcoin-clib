@@ -39,21 +39,26 @@ typedef struct block_info
 	 *   can be attached to a (struct satoshi_block_header *) or a (struct satoshi_block *)
 	 */
 	struct satoshi_block_header * hdr;
-	int hdr_flags;	// 0: created by calloc, need free;  1: attached block_header_ptr; 2: attached satoshi_block ptr. 
+	void (* hdr_free)(void *);	// set to NULL if no need to free
 	
 	int height;		// the index in the blockchain, -1 means not attached to any chains
-	double cumulative_difficulty;
-	compact_uint256_t cumulative_difficulty_cint;	// use compact int to calc cumulative difficulty.
+//	double cumulative_difficulty;
+
+	compact_uint256_t cumulative_difficulty;	// use compact int to calc cumulative difficulty.
 	
 	struct block_info * parent;	// there can be only one parent for each block
 	struct block_info * first_child;	// the first child will belong to the longest-chain
 	
 	/*
 	 * All siblings would be abondanded and regarded as orphans, 
-	 * but if they can reproduce enough offspring (longer the first-child) , 
+	 * but if they can reproduce enough offsprings (longer than the current heir in the chain ) , 
 	 * they can regain their family status and become the first-child.
 	 */
 	struct block_info * next_sibling;
+	
+#ifdef _DEBUG
+	int id;
+#endif
 }block_info_t;
 block_info_t * block_info_new(const uint256_t * hash, struct satoshi_block_header * hdr);
 int block_info_add_child(block_info_t * parent, block_info_t * child);

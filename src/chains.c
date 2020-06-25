@@ -109,7 +109,6 @@ struct active_chain * blockchain_remove_inheritance_after(blockchain_t * chain, 
 {
 	assert(height > 0);
 	
-	
 	if(height >= chain->height) { // no children that need to be remove
 		return NULL;
 	}
@@ -127,7 +126,7 @@ struct active_chain * blockchain_remove_inheritance_after(blockchain_t * chain, 
 	memcpy(&orphan->hdr->prev_hash, parent->hash, sizeof(uint256_t));
 	orphan->hdr->bits = child->bits;
 	
-	orphan->cumulative_difficulty_cint = child->cumulative_difficulty;
+	orphan->cumulative_difficulty = child->cumulative_difficulty;
 	
 	active_chain_t * orphans_chain = active_chain_new(orphan);	// create a new orphan chain
 	assert(orphans_chain);
@@ -155,7 +154,7 @@ struct active_chain * blockchain_append_active_chain(blockchain_t * chain, struc
 	assert(chain && new_chain);
 	
 	blockchain_heir_t * parent = tfind(&new_chain->head->hash, 
-		chain->search_root, 
+		&chain->search_root, 
 		blockchain_heir_compare);
 	if(NULL == parent) return new_chain;	// unable to append, return the chain itself
 	
@@ -163,20 +162,30 @@ struct active_chain * blockchain_append_active_chain(blockchain_t * chain, struc
 	ssize_t height = parent - heirs;	// calc block height
 	
 	struct active_chain * orphans_chain = blockchain_remove_inheritance_after(chain, height);
+	assert(orphans_chain != new_chain);
 	
 	block_info_t * first_child = new_chain->head->first_child;
 	
 	while(first_child)
 	{
-		blockchain_heir_t * heir = ++parent;	// first child of the parent
+		blockchain_heir_t * heir = &heirs[++height];	// first child of the parent
 		
 		assert(first_child->hdr);
 		compact_uint256_t difficulty = compact_uint256_complement(*(compact_uint256_t *)&first_child->hdr->bits);
 		heir->cumulative_difficulty = compact_uint256_add(parent->cumulative_difficulty, difficulty);
 		
+		memcpy(&heir->hash, &first_child->hash, sizeof(uint256_t));
+		heir->timestamp = first_child->hdr->timestamp;
+		
+		// verify cumulative_difficulty
+		assert(0 == compact_uint256_compare(
+				&heir->cumulative_difficulty,
+				&first_child->cumulative_difficulty)
+		);
+		
 		first_child = first_child->first_child;
 	}
-
+	chain->height = height;
 	return orphans_chain;
 }
 
@@ -206,18 +215,25 @@ blockchain_t * blockchain_init(blockchain_t * chain,
 	return chain;
 }
 
-
-void blockchain_cleanup(blockchain_t * chain)
+void blockchain_reset(blockchain_t * chain)
 {
+	if(NULL == chain || NULL == chain->heirs) return;
 	for(ssize_t i = 0; i < (chain->height + 1); ++i) {
 		tdelete(&chain->heirs[i], &chain->search_root, blockchain_heir_compare);
 	}
 	chain->height = 0;
 }
 
-
-
-
+void blockchain_cleanup(blockchain_t * chain) 
+{
+	if(NULL == chain) return;
+	blockchain_reset(chain);
+	
+	free(chain->heirs);
+	chain->heirs = NULL;
+	chain->max_size = 0;
+	return;
+}
 
 
 /***********************************************************************
@@ -232,12 +248,10 @@ block_info_t * block_info_new(const uint256_t * hash, struct satoshi_block_heade
 	
 	if(NULL == hdr) {
 		hdr = calloc(1, sizeof(*hdr));
-		info->hdr_flags = 0;
-	}else {
-		info->hdr_flags = 1;
+		info->hdr_free = free;
 	}
-	
 	assert(hdr);
+	
 	info->hdr = hdr;
 	info->height = -1;
 	return info;
@@ -245,8 +259,9 @@ block_info_t * block_info_new(const uint256_t * hash, struct satoshi_block_heade
 
 void block_info_free(block_info_t * info)
 {
-	if(info->next_sibling)
-	{
+	if(NULL == info) return;
+	
+	if(info->next_sibling) {
 		block_info_free(info->next_sibling);
 		info->next_sibling = NULL;
 	}
@@ -256,11 +271,11 @@ void block_info_free(block_info_t * info)
 		info->first_child = NULL;
 	}
 	
-	if(info->hdr_flags == 0)
-	{
-		free(info->hdr);
-		info->hdr = NULL;
+	if(info->hdr_free) {
+		info->hdr_free(info->hdr);
 	}
+	
+	free(info);
 }
 
 int block_info_add_child(block_info_t * parent, block_info_t * child)
@@ -276,6 +291,116 @@ int block_info_add_child(block_info_t * parent, block_info_t * child)
 	return 0;
 }
 
+#define CLIB_QUEUE_ALLOC_SIZE (4096)
+struct clib_queue
+{
+	void ** nodes;
+	ssize_t max_size;
+	ssize_t start_pos;
+	ssize_t length;
+	
+	int (* resize)(struct clib_queue * queue, ssize_t new_size);
+	int (* enter)(struct clib_queue * queue, void * node);
+	void * (* leave)(struct clib_queue * queue);
+	
+	// cleanup callbacks
+	void * (* free_node)(void * node);
+};
+
+static int queue_resize(struct clib_queue * queue, ssize_t new_size)
+{
+	if(new_size <= 0) new_size = CLIB_QUEUE_ALLOC_SIZE;
+	else new_size = (new_size + CLIB_QUEUE_ALLOC_SIZE - 1) / CLIB_QUEUE_ALLOC_SIZE * CLIB_QUEUE_ALLOC_SIZE;
+	
+	if(new_size <= queue->max_size) return 0;
+	
+	void ** nodes = realloc(queue->nodes, new_size * sizeof(*nodes));
+	assert(nodes);
+	
+	memset(nodes + queue->max_size, 0, (new_size - queue->max_size) * sizeof(*nodes));
+	queue->nodes = nodes;
+	queue->max_size = new_size;
+	return 0;
+}
+static int queue_enter(struct clib_queue * queue, void * node)
+{
+	int rc = queue->resize(queue, queue->length + 1);
+	if(rc) return rc;
+	
+	int cur_pos = queue->start_pos + queue->length;
+	cur_pos %= queue->max_size;
+	
+	queue->nodes[cur_pos] = node;
+	++queue->length;
+	return 0;
+}
+
+static void * queue_leave(struct clib_queue * queue)
+{
+	if(queue->length <= 0) return NULL;
+	void * node = queue->nodes[queue->start_pos++];
+	
+	queue->start_pos %= queue->max_size;
+	--queue->length;
+	
+	return node;
+}
+
+struct clib_queue * clib_queue_init(struct clib_queue * queue, ssize_t size)
+{
+	if(NULL == queue) queue = calloc(1, sizeof(*queue));
+	assert(queue);
+	
+	queue->resize = queue_resize;
+	queue->enter = queue_enter;
+	queue->leave = queue_leave;
+	
+	int rc = queue->resize(queue, size);
+	assert(0 == rc);
+	
+	return queue;
+}
+
+void clib_queue_cleanup(struct clib_queue * queue)
+{
+	if(queue->nodes && queue->free_node)
+	{
+		for(ssize_t i = 0; i < queue->length; ++i) {
+			queue->free_node(queue->nodes[i]);
+		}
+	}
+	free(queue->nodes);
+	queue->nodes = NULL;
+	queue->free_node = NULL;
+	return;
+}
+
+
+int block_info_update_cumulative_difficulty(
+	block_info_t * node, // current node
+	compact_uint256_t cumulative_difficulty						 // parent's cumulative_difficulty
+)
+{
+	if(NULL == node) return -1;
+	
+	// update current node's cumulative_difficulty
+	compact_uint256_t difficulty = compact_uint256_complement(*(compact_uint256_t *)&node->hdr->bits);
+	
+	node->cumulative_difficulty = compact_uint256_add(difficulty, cumulative_difficulty);
+	
+	// update first-child
+	block_info_update_cumulative_difficulty(node->first_child, node->cumulative_difficulty);
+	
+	// update all siblings's cumulative_difficulty
+	block_info_t * sibling = node->next_sibling;
+	while(sibling)
+	{
+		block_info_update_cumulative_difficulty(sibling, cumulative_difficulty);
+		sibling = sibling->next_sibling;
+	}
+	return 0;
+}
+
 
 /**
  * struct active_chain 
@@ -287,7 +412,7 @@ int block_info_add_child(block_info_t * parent, block_info_t * child)
  * 
  * - Rule I. Any orphans should first look for their parents in the chains-list.
  * 
- * - Rule II. If parents can be found in one of the chains, the join the chain and do the following steps:
+ * - Rule II. If parents can be found in one of the chains, then join the chain and do the following steps:
  *     1. get the current cumulative difficulty of the parent;
  *     2. calcute and find the tail-node with the the largest cumulative-difficulty of his own branch; 
  *     3. report the tail-node to the chain;
@@ -315,7 +440,7 @@ active_chain_t * active_chain_new(block_info_t * orphan)
 	
 	block_info_t * head = chain->head;
 
-	memcpy(&head->hash, &orphan->hdr->prev_hash, sizeof(uint256_t));
+	memcpy(&head->hash, &orphan->hdr->prev_hash, sizeof(uint256_t));	// save parent hash
 	head->first_child = orphan;
 
 	// find the longest-end
@@ -394,8 +519,9 @@ void active_chain_list_cleanup(active_chain_list_t * list)
 
 static inline active_chain_t * get_current_chain(block_info_t * parent)
 {
-	while(parent->parent) parent = parent->parent;
+	if(NULL == parent) return NULL;
 	
+	while(parent->parent) parent = parent->parent;
 	return (active_chain_t *)parent;
 }
 
@@ -465,7 +591,7 @@ active_chain_t * active_chain_list_add_orphan(active_chain_list_t * list, block_
  * 
  * In order to avoid a large number of floating-point division operations, 
  * we try to use another way (using compact_int) to represent the difficulty, 
- * and made the following defination:
+ * and made the following definition:
  * 
  * compact_int:        compact_uint256
  * cint_max:    { .bits = 0x20FFFFFF,  .exp = 32, .mantissa = {0xff, 0xff, 0xff} }
@@ -494,11 +620,9 @@ compact_uint256_t compact_uint256_add(const compact_uint256_t a, const compact_u
 	// make a and b same exponent
 	int exp_diff = (int)a.exp - (int)b.exp; 
 	int exp = a.exp;
-	if(exp_diff > 0)
-	{
+	if(exp_diff > 0) {
 		val_b >>= exp_diff * 8;	// bytes to bits
-	}else if(exp_diff < 0)
-	{
+	}else if(exp_diff < 0) {
 		exp = b.exp;
 		val_a >>= (-exp_diff) * 8;
 	}
@@ -510,10 +634,8 @@ compact_uint256_t compact_uint256_add(const compact_uint256_t a, const compact_u
 	c.bits = val_a + val_b;
 	
 	// make sure c's mantissa is equal or less than 24 bits
-	if(c.bits & 0xFF000000) {
-		c.bits >>= 8;
-		exp++;
-	}
+	if(c.bits & 0xFF000000) { c.bits >>= 8; exp++; }
+	
 	c.exp = exp;
 	return c;
 } 
@@ -528,9 +650,6 @@ compact_uint256_t compact_uint256_complement(const compact_uint256_t target)
 	
 	return c;
 }
-
-
-
 
 #if defined(_TEST_CHAINS) && defined(_STAND_ALONE)
 void test_compact_int_arithmetic_operations(void)

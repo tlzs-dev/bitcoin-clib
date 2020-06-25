@@ -32,12 +32,16 @@
 #include <assert.h>
 
 #include "satoshi-types.h"
+#include "../src/chains.c"
 
 /**
  * Functions test: 
  *  - block_info_new()
  *  - block_info_add_child()
  *  - block_info_free()
+ *  - block_info_update_cumulative_difficulty()
+ * 
+ * 
  * 
  * compile:
  *   $ cd test2
@@ -48,121 +52,17 @@
  * 
  */
 
-typedef struct block_info
-{
-	uint256_t hash;
-	
-	/**
-	 * hdr: 
-	 *   nullable, 
-	 *   can be attached to a (struct satoshi_block_header *) or a (struct satoshi_block *)
-	 */
-	const struct satoshi_block_header * hdr;	
-	
-	int height;		// the index in the longest-chain, -1 means not attached to any chains
-	double cumulative_difficulty;
-	compact_uint256_t cumulative_difficulty_cint;	// use compact int to calc cumulative difficulty.
-	
-	struct block_info * parent;	// there can be only one parent for each block
-	struct block_info * first_child;	// the first child will belong to the longest-chain
-	
-	/*
-	 * All siblings would be abondanded and regarded as orphans, 
-	 * but if they can reproduce enough offspring (longer the first-child) , 
-	 * they can regain their family status and become the first-child.
-	 */
-	struct block_info * next_sibling;
 
 #ifdef _DEBUG
-	int id;
-#endif
-}block_info_t;
-
-block_info_t * block_info_new(const uint256_t * hash, const struct satoshi_block_header * hdr)
-{
-	block_info_t * info = calloc(1, sizeof(*info));
-	assert(info);
-	
-	if(hash) memcpy(&info->hash, hash, sizeof(*hash));
-	info->hdr = hdr;
-	info->height = -1;
-	
-	return info;
-}
-
-void block_info_free(block_info_t * info)
-{
-	if(info->next_sibling)
-	{
-		block_info_free(info->next_sibling);
-		info->next_sibling = NULL;
-	}
-	
-	if(info->first_child) {
-		block_info_free(info->first_child);
-		info->first_child = NULL;
-	}
-	
-#ifdef _DEBUG
-	printf("free info: id = %d\n", info->id);
-#endif
-
-	free(info);
-}
-
-
-int block_info_add_child(block_info_t * parent, block_info_t * child)
-{
-	assert(parent);
-	if(NULL == parent->first_child) parent->first_child = child;
-	else {
-		block_info_t * sibling = parent->first_child;
-		while(sibling->next_sibling) sibling = sibling->next_sibling;
-		sibling->next_sibling = child;
-	}
-	child->parent = parent;
-	return 0;
-}
-
-#ifdef _DEBUG
-#define MAX_QUEUE_SIZE  4096
-struct block_info_queue
-{
-	const block_info_t * data[MAX_QUEUE_SIZE];
-	int start_pos;
-	int length;
-};
-
-static int queue_enter(struct block_info_queue * queue, const block_info_t * info)
-{
-	int cur_pos = queue->start_pos + queue->length;
-	cur_pos %= MAX_QUEUE_SIZE;
-	
-	//printf("queue.data[%d] = %d\n", cur_pos, info->id);
-	queue->data[cur_pos] = info;
-	++queue->length;
-	assert(queue->length < MAX_QUEUE_SIZE);
-	return 0;
-}
-
-static const block_info_t * queue_leave(struct block_info_queue * queue)
-{
-	if(queue->length <= 0) return NULL;
-	
-	int start_pos = queue->start_pos++;
-	queue->start_pos %= MAX_QUEUE_SIZE;
-	
-	--queue->length;
-	return queue->data[start_pos];
-}
 
 // Breadth-first search
-void block_info_dump_BFS(const block_info_t * root)
+void block_info_dump_BFS(block_info_t * root)
 {
-	struct block_info_queue queue[1];
+	struct clib_queue queue[1];
 	memset(queue, 0, sizeof(queue));
+	clib_queue_init(queue, 0);
 	
-	queue_enter(queue, root);
+	queue->enter(queue, root);
 	
 	int level = 0;
 	int last_id_of_current_level = root->id;
@@ -170,8 +70,8 @@ void block_info_dump_BFS(const block_info_t * root)
 	printf("======== level %d ========\n", level++);
 	while(queue->length > 0)
 	{
-		const block_info_t * node = queue_leave(queue);
-		printf("\t info.id = %d\n", node->id);
+		block_info_t * node = queue->leave(queue);
+		printf("\t info.id = %d, cumulative_difficulty = 0x%.8x\n", node->id, node->cumulative_difficulty.bits);
 		if(node->id == last_id_of_current_level)
 		{
 			
@@ -179,14 +79,16 @@ void block_info_dump_BFS(const block_info_t * root)
 			last_id_of_current_level = -1;
 		}
 
-		const block_info_t * sibling = node->first_child;
+		block_info_t * sibling = node->first_child;
 		while(sibling)
 		{
-			queue_enter(queue, sibling);
+			queue->enter(queue, sibling);
 			if(last_id_of_current_level < 0 && sibling->next_sibling == NULL) last_id_of_current_level = sibling->id;
 			sibling = sibling->next_sibling;
 		}
 	}
+	
+	clib_queue_cleanup(queue);
 }
 #undef MAX_QUEUE_SIZE
 #endif
@@ -199,7 +101,7 @@ int test_block_info(void)
 	{
 		blocks[i] = block_info_new(NULL, NULL);
 		assert(blocks[i]);
-		
+		blocks[i]->hdr->bits = 0x20FFFFFE;		// set difficulty to (int)1
 	#ifdef _DEBUG
 		blocks[i]->id = i;
 	#endif
@@ -233,6 +135,15 @@ int test_block_info(void)
 	block_info_add_child(blocks[6], blocks[8]);
 	
 	
+	
+	
+	
+	printf("==== update cumulative_difficulty ...\n");
+	block_info_update_cumulative_difficulty(blocks[0], 
+		(compact_uint256_t){.bits = 0 }	// blocks[0] is the genesis block and has no parent 
+	);
+	
+	// dump info
 	block_info_dump_BFS(blocks[0]);
 	
 	// Destroy Tree:
