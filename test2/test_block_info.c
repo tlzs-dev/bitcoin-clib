@@ -117,6 +117,7 @@ static void init_blocks()
 		assert(blocks[i]);
 		blocks[i]->hdr->bits = 0x20FFFFFE;		// set difficulty to (int)1
 		
+		blocks[i]->hash.val[0] = i + 1;
 	#ifdef _DEBUG
 		blocks[i]->id = i;
 	#endif
@@ -194,13 +195,20 @@ void dump_search_tree(const void * nodep,
 	const VISIT which,
 	const int depth)
 {
+	static const char white_chars[] = 
+		"                                " "                                "
+		"                                " "                                "
+		"                                " "                                "
+		"                                " "                                ";
+	
 	block_info_t * info;
 	switch(which)
 	{
 	case preorder: case endorder: break;
 	case postorder: case leaf:
 		info = *(block_info_t **)nodep;
-		printf("depth: %d, id = %d\n", depth, info->id);
+	//	printf("depth: %d, id = %d\n", depth, info->id);
+		printf("%.*s (%d)\n", depth * 4, white_chars, info->id);
 		break; 
 	}
 } 
