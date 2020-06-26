@@ -535,6 +535,10 @@ void block_info_free(block_info_t * info)
 		info->hdr_free(info->hdr);
 	}
 	
+#ifdef _DEBUG
+	printf("==> free %p, id=%d\n", info, info->id);
+#endif
+	
 	free(info);
 }
 
@@ -728,14 +732,35 @@ active_chain_t * active_chain_new(block_info_t * orphan, void ** p_search_root)
 	return chain;
 }
 
+static void active_chain_remove_child(block_info_t * parent, void ** p_search_root)
+{
+	if(NULL == parent) return;
+	
+	block_info_t * child = parent->first_child;
+	while(child)
+	{
+		active_chain_remove_child(child, p_search_root);
+		tdelete(child, p_search_root, blockchain_heir_compare);
+		
+		child = child->next_sibling;
+	}
+	return;
+}
+
 void active_chain_free(active_chain_t * chain)
 {
 	if(NULL == chain) return;
 	
-	// the head should never have siblings, 
-	// only head->first_child need free
-	///< @todo notify chains-list to remove nodes from the tsearch-tree. 
-	block_info_free(chain->head->first_child);
+	// remove all children from the tsearch-tree first. 
+	active_chain_remove_child(chain->head, chain->p_search_root);
+	
+	// free all nodes except the 'head'
+	block_info_t * child = chain->head->first_child;
+	while(child)
+	{
+		block_info_free(child);
+		child = child->next_sibling;
+	}
 	free(chain);
 }
 

@@ -31,6 +31,13 @@
 #include <string.h>
 #include <assert.h>
 
+
+// dummy function, not used for this test
+void hash256(const void * data, size_t length, unsigned char hash[])
+{
+	return;
+}
+
 #include "satoshi-types.h"
 #include "../src/chains.c"
 
@@ -41,7 +48,7 @@
  *  - block_info_free()
  *  - block_info_update_cumulative_difficulty()
  *  - block_info_declare_inheritance()
- * 
+ *  - active_chain_free()
  * 
  * 
  * compile:
@@ -94,18 +101,26 @@ void block_info_dump_BFS(block_info_t * root)
 #undef MAX_QUEUE_SIZE
 #endif
 
-int test_block_info(void)
-{
 #define NUM_BLOCK_INFO	(10)
-	block_info_t * blocks[NUM_BLOCK_INFO] = { NULL };
+static block_info_t * blocks[NUM_BLOCK_INFO];
+static void * s_search_root;
+
+static int search_by_id(const block_info_t * a, const block_info_t * b)
+{
+	return a->id - b->id;
+}
+static void init_blocks()
+{
 	for(int i = 0; i < NUM_BLOCK_INFO; ++i)
 	{
 		blocks[i] = block_info_new(NULL, NULL);
 		assert(blocks[i]);
 		blocks[i]->hdr->bits = 0x20FFFFFE;		// set difficulty to (int)1
+		
 	#ifdef _DEBUG
 		blocks[i]->id = i;
 	#endif
+		tsearch(blocks[i], &s_search_root, (int (*)(const void *, const void *))search_by_id); 
 	}
 	
 	/**
@@ -134,8 +149,11 @@ int test_block_info(void)
 	
 	// level-2
 	block_info_add_child(blocks[6], blocks[8]);
-	
+}
 
+int test_block_info(void)
+{
+	init_blocks();
 	printf("==== update cumulative_difficulty ...\n");
 	
 	block_info_t * heir = NULL;
@@ -166,14 +184,46 @@ int test_block_info(void)
 	
 	
 	// Destroy Tree:
-	block_info_free(blocks[0]);
+//	block_info_free(blocks[0]);
 
 	return 0;
 #undef NUM_BLOCK_INFO
 }
 
+void dump_search_tree(const void * nodep, 
+	const VISIT which,
+	const int depth)
+{
+	block_info_t * info;
+	switch(which)
+	{
+	case preorder: case endorder: break;
+	case postorder: case leaf:
+		info = *(block_info_t **)nodep;
+		printf("depth: %d, id = %d\n", depth, info->id);
+		break; 
+	}
+} 
+
+void test_active_chain(void)
+{
+	active_chain_t * chain = calloc(1, sizeof(*chain));
+	assert(chain);
+	
+	chain->p_search_root = &s_search_root;
+	block_info_add_child(chain->head, blocks[0]);
+	
+	// dump search-tree
+	twalk(s_search_root, dump_search_tree);
+	
+	active_chain_free(chain);
+	assert(s_search_root == NULL);
+}
+
 int main(int argc, char ** argv)
 {
+	init_blocks();
 	test_block_info();
+	test_active_chain();
 }
 

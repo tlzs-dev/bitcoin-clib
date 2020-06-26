@@ -75,7 +75,7 @@ typedef struct active_chain
 	 * Set head to array type and place it in the first field, 
 	 * when backtracking from end to the head, 
 	 * this pointer can also represent the active_chain struct,
-	 * makes it easy to get chain->parent and other fields.
+	 * makes it easy to get chain->longest_end and other fields.
 	 * 
 	 * In order to simplify the implementation, we defined the following sub-rules:
 	 * 
@@ -86,18 +86,16 @@ typedef struct active_chain
 		
 		- When a new-orphan(A) is looking for himself according to the Rule-0,
 		  and gets a node whose parent is NULL, then the node is not A himself, 
-		  but A is the parent that the chain is looking for.
+		  but A is the parent whom the chain is looking for, and A should claim the chain.
 	 */
 	struct block_info head[1];
 	
-	struct blockchain_heir * parent;	// the node belongs to the verified blockchain, can be null if it is not currently known
 	// The fields below are for internal use only,
-	// used to quickly find the longest-chain within current branch
-	struct block_info * longest_end;
+	struct block_info * longest_end; // used to quickly find the longest-chain within current branch
 	
 	/**
 	 * A pointer to the search-root of chains-list, 
-	 * used to remove the node from the search-root when deleting a child-node.
+	 * used to update the search-tree when adding or deleting a child-node.
 	 */
 	void ** p_search_root;
 }active_chain_t;
