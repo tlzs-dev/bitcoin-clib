@@ -76,6 +76,17 @@ typedef struct active_chain
 	 * when backtracking from end to the head, 
 	 * this pointer can also represent the active_chain struct,
 	 * makes it easy to get chain->parent and other fields.
+	 * 
+	 * In order to simplify the implementation, we defined the following sub-rules:
+	 * 
+		- Define 'head' as the currently unknown parent that orphan-nodes of the chain are looking for;
+		- The 'head->hash' will also need to be added to the chains-list's search-root.
+		- Except for the 'head', any nodes on the chain must have a non-null parent pointer,
+		  This also means that if the parent of a node is NULL, the node must be the 'head'
+		
+		- When a new-orphan is looking for itself according to the Rule-0,
+		  and gets a node whose parent is NULL, then the node is not A himself, 
+		  but A is the parent that the chain is looking for.
 	 */
 	struct block_info head[1];
 	
@@ -83,6 +94,12 @@ typedef struct active_chain
 	// The fields below are for internal use only,
 	// used to quickly find the longest-chain within current branch
 	struct block_info * longest_end;
+	
+	/**
+	 * A pointer to the search-root of chains-list, 
+	 * used to remove the node from the search-root when deleting a child-node.
+	 */
+	void ** p_search_root;
 }active_chain_t;
 active_chain_t * active_chain_new(block_info_t * orphan);
 void active_chain_free(active_chain_t * chain);

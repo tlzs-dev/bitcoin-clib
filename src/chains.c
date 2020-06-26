@@ -720,7 +720,8 @@ void active_chain_free(active_chain_t * chain)
 static int active_chain_list_resize(active_chain_list_t * list, ssize_t max_size)
 {
 	assert(list);
-	if(max_size <= 0) max_size = (max_size + ACTIVE_CHAIN_LIST_ALLOC_SIZE - 1) / ACTIVE_CHAIN_LIST_ALLOC_SIZE * ACTIVE_CHAIN_LIST_ALLOC_SIZE;
+	if(max_size <= 0) max_size = ACTIVE_CHAIN_LIST_ALLOC_SIZE;
+	else max_size = (max_size + ACTIVE_CHAIN_LIST_ALLOC_SIZE - 1) / ACTIVE_CHAIN_LIST_ALLOC_SIZE * ACTIVE_CHAIN_LIST_ALLOC_SIZE;
 	if(max_size <= list->max_size) return 0;
 	
 	active_chain_t ** chains = realloc(list->chains, max_size * sizeof(*chains));
