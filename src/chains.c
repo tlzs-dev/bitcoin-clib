@@ -373,75 +373,89 @@ static int blockchain_add(blockchain_t * block_chain,
 	active_chain_list_t * list = block_chain->candidates_list;
 	const blockchain_heir_t * heir = NULL;
 	block_info_t * orphan = NULL;
-	
-	// Rule 0. check if it is already on the chain
-	heir = block_chain->find(block_chain, block_hash);
-	if(heir) return -1;
-	
-	orphan = active_chain_list_find(list, block_hash);
-	if(orphan) return -1;
-	
-	
-	orphan = block_info_new(block_hash, NULL);
-	assert(orphan);
-	memcpy(orphan->hdr, hdr, sizeof(*hdr));
-	
 	active_chain_t * chain = NULL;
 	block_info_t * longest_end = NULL;
 	
-	// Rule I. find parent in the active_chain_list
-	block_info_t * parent = active_chain_list_find(list, orphan->hdr->prev_hash);
-	if(parent) { // Rule II.
+	// Rule 0. check if it is already on the chain
+	heir = block_chain->find(block_chain, block_hash);
+	if(heir) return -1;	// already on the BLOCKCHAIN
+	
+	orphan = active_chain_list_find(list, block_hash);
+	if(orphan){
+		// check chain's sub-rule
+		if(orphan->parent != NULL) return -1;
+	
+		/**
+		 * orphan is the 'head' of an active_chain, 
+		 * and the pointer of the 'head' can also represent the chain itself.
+		 * claim all the orphans on the chain.
+		 */
+		block_info_t * head = orphan;
+		chain = (active_chain_t *)head;
 		
-		active_chain_t * chain = get_current_chain(parent);
-		assert(chain);
+		// First, remove the head->hash from the search-root.
+		tdelete(head, &list->search_root, blockchain_heir_compare);
 		
-		block_info_add_child(parent, orphan);
-		block_info_update_cumulative_difficulty(orphan, parent->cumulative_difficulty, &longest_end);
+		// create a new node
+		orphan = block_info_new(block_hash, NULL);
+		assert(orphan);
+		memcpy(orphan->hdr, hdr, sizeof(*hdr));
 		
-		if(longest_end != chain->longest_end)
-		{
-			block_info_declare_inheritance(longest_end);
-			chain->longest_end = longest_end;
+		// set parent hash to the 'head', and claim the chain
+		memcpy(head, hdr->prev_hash, sizeof(uint256_t));
+		block_info_t * child = head->first_child;
+		while(child) {
+			block_info_add_child(orphan, child);
+			child = child->next_sibling;
 		}
-	}else { // Rule III.
-		chain = active_chain_new(orphan);
-		assert(chain);
+		head->first_child = orphan;
 		
-		//  Claim all children chains
-		for(ssize_t i = 0; i < list->count; ++i)
-		{
-			active_chain_t * child_chain = list->chains[i];
-			if(0 == memcmp(
-				&child_chain->head->hash, // the parent which the current chain is looking for.
-				block_hash,	
-				sizeof(uint256_t))) 
-			{	
-				// a child chain was found, claim this chain and remove it from the chains-list
-				block_info_t * child = child_chain->head->first_child;
-				while(child)
-				{
-					block_info_add_child(orphan, child);
-					child = child->next_sibling;
-				}
-				
-				// free the child-chain and replace with the last item in the list
-				active_chain_free(child_chain);
-				
-				list->chains[i] = list->chains[--list->count];
-				list->chains[list->count] = NULL;
+		// add the new orphan and 'head->hash' to the search-root
+		tsearch(orphan, &list->search_root, blockchain_heir_compare);
+		tsearch(head, &list->search_root, blockchain_heir_compare);
+	}
+	
+	if(NULL == chain)
+	{
+		// create a new node
+		assert(NULL == orphan);
+		orphan = block_info_new(block_hash, NULL);
+		assert(orphan);
+		memcpy(orphan->hdr, hdr, sizeof(*hdr));
+		
+		// Rule I. find parent in the active_chain_list
+		block_info_t * parent = active_chain_list_find(list, orphan->hdr->prev_hash);
+		if(parent) { // Rule II.
+			active_chain_t * chain = get_current_chain(parent);
+			assert(chain);
+			
+			block_info_add_child(parent, orphan);
+			block_info_update_cumulative_difficulty(orphan, parent->cumulative_difficulty, &longest_end);
+			
+			// add the new orphan to the search-root
+			tsearch(orphan, &list->search_root, blockchain_heir_compare);
+			
+			// update chain's longest_end
+			if(longest_end != chain->longest_end)
+			{
+				block_info_declare_inheritance(longest_end);
+				chain->longest_end = longest_end;
 			}
+		}else { // Rule III.
+			chain = active_chain_new(orphan, &list->search_root);
+			assert(chain);
+			
+			// find the longest-end
+			block_info_update_cumulative_difficulty(orphan, parent->cumulative_difficulty, &chain->longest_end);
+			
+			// add chain to the chains-list
+			active_chain_list_resize(list, list->count + 1);
+			list->chains[list->count++] = chain;
 		}
-		
-		// find the longest-end
-		block_info_update_cumulative_difficulty(orphan, parent->cumulative_difficulty, &chain->longest_end);
-		
-		// add chain to the chains-list
-		active_chain_list_resize(list, list->count + 1);
-		list->chains[list->count++] = chain;
 	}
 	
 	assert(chain);
+	
 	longest_end = chain->longest_end;
 	
 	// Rule IV. find parent in the BLOCKCHAIN
@@ -685,13 +699,15 @@ int block_info_declare_inheritance(block_info_t * heir)
 }
 
 
-active_chain_t * active_chain_new(block_info_t * orphan)
+active_chain_t * active_chain_new(block_info_t * orphan, void ** p_search_root)
 {
 	assert(orphan && orphan->hdr);
+	assert(p_search_root);
 	
 	active_chain_t * chain = calloc(1, sizeof(*chain));
 	assert(chain);
-	
+	chain->p_search_root = p_search_root;
+
 	block_info_t * head = chain->head;
 
 	memcpy(&head->hash, &orphan->hdr->prev_hash, sizeof(uint256_t));	// save parent hash
@@ -701,6 +717,13 @@ active_chain_t * active_chain_new(block_info_t * orphan)
 	block_info_t * longest_end = orphan;
 	while(longest_end->first_child) longest_end	= longest_end->first_child;
 	chain->longest_end = longest_end;
+	
+	// add the new orphan and 'head->hash' to the search-root
+	if(p_search_root)
+	{
+		tsearch(orphan, p_search_root, blockchain_heir_compare);
+		tsearch(head, p_search_root, blockchain_heir_compare);
+	}
 	
 	return chain;
 }
@@ -769,57 +792,6 @@ void active_chain_list_cleanup(active_chain_list_t * list)
 	list->chains = NULL;
 	list->max_size = 0;
 	return;
-}
-
-
-active_chain_t * active_chain_list_add_orphan(active_chain_list_t * list, block_info_t * orphan)
-{
-	// rule 0. confirm the orphan is not a duplicate.
-	block_info_t ** p_node = tsearch(orphan, 
-		&list->search_root, 
-		(int (*)(const void *, const void *))uint256_compare // the first field of block_info struct is an uint256 hash.
-	);
-	assert(p_node);
-	if(*p_node != orphan) { // duplicated
-		return NULL;
-	}
-	
-	active_chain_t * chain = NULL;
-	
-	// rule 1. find parent
-	assert(orphan->hdr);
-	p_node = tfind(&orphan->hdr->prev_hash,		// parent hash
-		&list->search_root,
-		(int (*)(const void *, const void *))uint256_compare
-	);
-	
-	if(p_node && *p_node) // parent was found
-	{
-		block_info_t * parent = *p_node;
-		chain = get_current_chain(parent);
-		
-		// rule 2. 
-		///< @todo
-		//... 
-		
-	}else {
-		// rule 3
-		chain = active_chain_new(orphan);
-		
-		///< @todo
-		// ...
-	}
-
-	assert(chain);
-	
-	// rule 4
-	if(chain->parent) // has parent in the BLOCKCHAIN
-	{
-		///< @todo
-		//...
-	}
-	
-	return chain;  
 }
 
 

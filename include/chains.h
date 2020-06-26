@@ -28,13 +28,13 @@ struct block_info;
  *     the chain will revise the family tree, make all nodes on this branch containing the tail-node 
  *     become the first-child or their parents.
  * 
- * - Rule III. Any orphans who do not know their parents should create a new chain, then find out 
- *   whether there are children in the chains-list. Since any orphans can only have one unique parent,
+ * - Rule III. Any orphans who do not know their parents should create a new chain.
+ * 	 @deprecated [ then find out whether there are children in the chains-list. Since any orphans can only have one unique parent,
  *   the child (or children) must be the head of his (or their) chain. Claim this(these) chain(s) and
- *   make them be their children. 
+ *   make them be their children. ]
  *   
  * 
- * - Rule IV. If a chain known his parent in the BLOCKCHAIN and his longest-offspring is supper than the current,
+ * - Rule IV.  If a chain known his parent in the BLOCKCHAIN and his longest-offspring is supper than the current,
  *   replace the current one, and bring all the first-child on his chain back to the royal family.
  * 
  */
@@ -84,7 +84,7 @@ typedef struct active_chain
 		- Except for the 'head', any nodes on the chain must have a non-null parent pointer,
 		  This also means that if the parent of a node is NULL, the node must be the 'head'
 		
-		- When a new-orphan is looking for itself according to the Rule-0,
+		- When a new-orphan(A) is looking for himself according to the Rule-0,
 		  and gets a node whose parent is NULL, then the node is not A himself, 
 		  but A is the parent that the chain is looking for.
 	 */
@@ -101,7 +101,7 @@ typedef struct active_chain
 	 */
 	void ** p_search_root;
 }active_chain_t;
-active_chain_t * active_chain_new(block_info_t * orphan);
+active_chain_t * active_chain_new(block_info_t * orphan, void ** p_search_root);
 void active_chain_free(active_chain_t * chain);
 
 typedef struct active_chain_list
