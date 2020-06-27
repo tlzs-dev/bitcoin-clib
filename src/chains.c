@@ -512,6 +512,10 @@ static int blockchain_add(blockchain_t * block_chain,
 			orphans->next_sibling = successor->next_sibling;
 		}
 		chain->head->first_child = orphans;
+		
+		if(NULL == chain->head->first_child) { // all children have left home
+			list->remove(list, chain);	
+		}
 	}
 
 	return 0;
@@ -535,10 +539,10 @@ static int abandon_siblings(block_info_t * successor, active_chain_list_t * list
 			
 			chain->p_search_root = &list->search_root;
 			list->add(list, chain);
-		}else
-		{
+		}else {
 			block_info_add_child(chain->head, sibling);
 		}
+		sibling = sibling->next_sibling;
 	}
 	
 	// no more brothers
