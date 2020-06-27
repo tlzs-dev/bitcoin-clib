@@ -15,13 +15,15 @@
 !tests
 !test2
 
+tests/*
+test2/*
 !tests/*.c
 !tests/Makefile
 
 # ignore files
 *.so
 *.bak
-backup/
+backup*
 
 */obj/*
 */bin/*

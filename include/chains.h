@@ -98,6 +98,10 @@ typedef struct active_chain
 	 * used to update the search-tree when adding or deleting a child-node.
 	 */
 	void ** p_search_root;
+	
+	// add child to 'head'
+	int (* add_child)(struct active_chain * chain, struct block_info * child);
+	
 }active_chain_t;
 active_chain_t * active_chain_new(block_info_t * orphan, void ** p_search_root);
 void active_chain_free(active_chain_t * chain);
@@ -110,6 +114,15 @@ typedef struct active_chain_list
 	
 	void * search_root;	// tsearch root, used to find if a block is already in the list.
 	void * user_data;
+	
+	block_info_t * (* find_node)(struct active_chain_list * list, const uint256_t * hash, active_chain_t ** p_chain);
+	
+	// only remove the node from the 'search-tree' 
+	int (* remove_node)(struct active_chain_list * list, block_info_t * node); 
+	
+	int (* add)(struct active_chain_list * list, struct active_chain * chain);
+	int (* remove)(struct active_chain_list * list, struct active_chain * chain);
+	
 }active_chain_list_t;
 active_chain_list_t * active_chain_list_init(active_chain_list_t * list, ssize_t max_size, void * user_data);
 void active_chain_list_cleanup(active_chain_list_t * list);

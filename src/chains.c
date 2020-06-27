@@ -469,7 +469,48 @@ static int blockchain_add(blockchain_t * block_chain,
 	{
 		// replace the current one
 		block_info_t * orphans = blockchain_abandon_inheritances(block_chain, (blockchain_heir_t *)heir);
-		blockchain_add_inheritances(block_chain, (blockchain_heir_t *)heir, chain->head->first_child);
+		block_info_t * successor = chain->head->first_child;
+		
+		blockchain_add_inheritances(block_chain, (blockchain_heir_t *)heir, successor);
+		
+		/**
+		 * forget the successor and all his first-child, 
+		 * they no longer belong to our group (temporarily).
+		 * 
+		 * offsprings of the suceesor who does not have the 'first-child' position will be abandoned as orphans,
+		 * those orphans shoud establish a new chain of their own.
+		 */
+		
+		block_info_t * child = successor->first_child;
+		while(child)
+		{
+			block_info_t * sibling = child->next_sibling;
+			active_chain_t * chain = NULL;
+			while(sibling)
+			{
+				if(NULL == chain) chain = active_chain_new(sibling, &list->search_root);
+			//	else chain->add(chain, sibling);
+			}
+			
+			
+			
+			while(sibling)
+			{
+				
+			}
+		} 
+		
+	//	active_chain_remove_child(chain->head, chain->search_root);
+		
+	
+		
+		
+		
+		
+		
+		
+		
+		
 		
 		// append orphans to the active chain
 		block_info_add_child(chain->head, orphans);
@@ -640,7 +681,6 @@ void clib_queue_cleanup(struct clib_queue * queue)
 	return;
 }
 
-
 int block_info_update_cumulative_difficulty(
 	block_info_t * node, // current node
 	compact_uint256_t cumulative_difficulty,	// parent's cumulative_difficulty
@@ -764,6 +804,101 @@ void active_chain_free(active_chain_t * chain)
 	free(chain);
 }
 
+/*****************************************************************
+ * struct active_chain_list
+ * 
+ ****************************************************************/
+static int active_chain_list_resize(active_chain_list_t * list, ssize_t max_size);
+
+// use a queue to remove recursion. (breadth first)
+enum traverse_action_type
+{
+	traverse_action_type_add,
+	traverse_action_type_remove,
+	traverse_action_types_count
+};
+
+typedef void * (*traverse_action_callback)(const void *, void **, int (*)(const void *, const void *));
+static int search_tree_traverse_BFS(void ** p_search_root, 
+	enum traverse_action_type type,
+	block_info_t * block
+)
+{
+	static traverse_action_callback actions[traverse_action_types_count] = {
+		[traverse_action_type_add] = tsearch,
+		[traverse_action_type_add] = tdelete,
+	};
+	
+	assert(type >= 0 && type < traverse_action_types_count);
+	traverse_action_callback action = actions[type];
+	
+	struct clib_queue queue[1];
+	memset(queue, 0, sizeof(queue));
+	clib_queue_init(queue, 100);
+	
+	int rc = queue->enter(queue, block);
+	assert(0 == rc);
+	
+	block_info_t * node = NULL;
+	while((node = queue->leave(queue)))
+	{
+		// add or remove node from the search-tree
+		action(node, p_search_root, blockchain_heir_compare);
+		
+		// append all siblings
+		block_info_t * sibling = node->next_sibling;
+		while(sibling) {
+			rc = queue->enter(queue, sibling);
+			assert(0 == rc);
+			sibling = sibling->next_sibling;
+		}
+		
+		// append child
+		rc = queue->enter(queue, node->first_child);
+		assert(0 == rc);
+	}
+	
+	assert(queue->length == 0);
+	clib_queue_cleanup(queue);
+	return 0;
+}
+
+static int list_add(active_chain_list_t * list, active_chain_t * chain)
+{
+	assert( (NULL == chain->p_search_root) || (chain->p_search_root == &list->search_root) );
+	
+	int rc = active_chain_list_resize(list, list->count + 1);
+	assert(0 == rc);
+
+	list->chains[list->count++] = chain;
+	
+	if(NULL == chain->p_search_root)
+	{
+		chain->p_search_root = &list->search_root;
+		search_tree_traverse_BFS(&list->search_root, traverse_action_type_add, chain->head);
+	}
+	return 0;
+}
+
+static int list_remove(active_chain_list_t * list, active_chain_t * chain)
+{
+	assert(chain);
+	ssize_t i = 0;
+	for(i = 0; i < list->count; ++i)
+	{
+		if(list->chains[i] == chain) {
+			list->chains[i] = list->chains[--list->count];
+			list->chains[list->count] = NULL;
+			break;
+		}
+	}
+	if(i == list->count) return -1;
+	
+	search_tree_traverse_BFS(&list->search_root, traverse_action_type_remove, chain->head);
+	return 0;
+}
+ 
+ 
 #define ACTIVE_CHAIN_LIST_ALLOC_SIZE (1024)
 static int active_chain_list_resize(active_chain_list_t * list, ssize_t max_size)
 {
@@ -787,6 +922,9 @@ active_chain_list_t * active_chain_list_init(active_chain_list_t * list, ssize_t
 	if(NULL == list) list = calloc(1, sizeof(*list));
 	assert(list);
 	list->user_data = user_data;
+	
+	list->add = list_add;
+	list->remove = list_remove;
 	
 	int rc = active_chain_list_resize(list, max_size);
 	assert(0 == rc);
