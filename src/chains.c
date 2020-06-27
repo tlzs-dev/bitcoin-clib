@@ -118,7 +118,7 @@ enum traverse_action_type
 static int search_tree_traverse_BFS(void ** p_search_root, enum traverse_action_type type, block_info_t * node);
 
 #define MAX_FUTURE_BLOCK_TIME	(2 * 60 * 60)
-static const uint256_t g_genesis_block_hash[1] = {{
+const uint256_t g_genesis_block_hash[1] = {{
 		.val = {
 			0x6f, 0xe2, 0x8c, 0x0a, 0xb6, 0xf1, 0xb3, 0x72,
 			0xc1, 0xa6, 0xa2, 0x46, 0xae, 0x63, 0xf7, 0x4f, 
@@ -138,8 +138,7 @@ ffff001d
 0101000000010000000000000000000000000000000000000000000000000000000000000000ffffffff4d04ffff001d0104455468652054696d65732030332f4a616e2f32303039204368616e63656c6c6f72206f6e206272696e6b206f66207365636f6e64206261696c6f757420666f722062616e6b73ffffffff0100f2052a01000000434104678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef38c4f35504e51ec112de5c384df7ba0b8d578a4c702b6bf11d5fac00000000
  
  */
-
-static const struct satoshi_block_header g_genesis_block_hdr[1] = {{
+const struct satoshi_block_header g_genesis_block_hdr[1] = {{
 	.version = 1,
 	.prev_hash = {{ .val = { 0 } }},
 	.merkle_root = {{
@@ -152,7 +151,7 @@ static const struct satoshi_block_header g_genesis_block_hdr[1] = {{
 	}},
 	.timestamp = 0x495fab29,
 	.bits = 0x1d00ffff,
-	.nounce = 0x7c2bac1d,
+	.nonce = 0x7c2bac1d,
 }};
 
 #define BLOCKCHAIN_DEFAULT_ALLOC_SIZE (6 * 24 * 365 * 100)	// (6 blocks per hour) * 24hours * 365days * 100years
@@ -237,7 +236,7 @@ static inline blockchain_heir_t * add_heir(blockchain_t * chain,
 static block_info_t * blockchain_abandon_inheritances(blockchain_t * chain, blockchain_heir_t * parent)
 {
 	ssize_t height = parent - chain->heirs;
-	assert(height > 0 && height <= chain->height);
+	assert(height >= 0 && height <= chain->height);
 	
 	if(height == chain->height) { // no children that need to be remove
 		return NULL;
@@ -307,9 +306,13 @@ blockchain_t * blockchain_init(blockchain_t * chain,
 	int rc = blockchain_resize(chain, 0);
 	assert(0 == rc);
 	
+	memcpy(chain->heirs[0].hash, genesis_block_hash, sizeof(uint256_t));
+	
 	if(genesis_block_hdr) {
 		chain->heirs[0].timestamp = genesis_block_hdr->timestamp;
-		chain->heirs[0].cumulative_difficulty = *(compact_uint256_t *)&genesis_block_hdr->bits;
+		chain->heirs[0].bits = genesis_block_hdr->bits;
+		chain->heirs[0].cumulative_difficulty = 
+			compact_uint256_complement(*(compact_uint256_t *)&genesis_block_hdr->bits);
 	}
 	
 	tsearch(&chain->heirs[0], // add genesis block to the search-tree
@@ -370,6 +373,17 @@ static inline active_chain_t * get_current_chain(block_info_t * parent)
 
 
 static int abandon_siblings(block_info_t * successor, active_chain_list_t * list);
+
+static void update_first_child_cumulative_difficulty(block_info_t * child, compact_uint256_t cumulative_difficulty)
+{
+	while(child)
+	{
+		compact_uint256_t difficulty = compact_uint256_complement(*(compact_uint256_t *)&child->hdr->bits);
+		child->cumulative_difficulty = compact_uint256_add(difficulty, cumulative_difficulty);
+		child = child->first_child;
+	}
+	return;
+}
 
 static int blockchain_add(blockchain_t * block_chain, 
 	const uint256_t * block_hash, 
@@ -437,7 +451,7 @@ static int blockchain_add(blockchain_t * block_chain,
 		// Rule I. find parent in the active_chain_list
 		block_info_t * parent = active_chain_list_find(list, orphan->hdr->prev_hash);
 		if(parent) { // Rule II.
-			active_chain_t * chain = get_current_chain(parent);
+			chain = get_current_chain(parent);
 			assert(chain);
 			
 			block_info_add_child(parent, orphan);
@@ -457,7 +471,9 @@ static int blockchain_add(blockchain_t * block_chain,
 			assert(chain);
 			
 			// find the longest-end
-			block_info_update_cumulative_difficulty(orphan, parent->cumulative_difficulty, &chain->longest_end);
+			block_info_update_cumulative_difficulty(orphan, 
+				compact_uint256_zero,
+				&chain->longest_end);
 			
 			// add chain to the chains-list
 			active_chain_list_resize(list, list->count + 1);
@@ -473,7 +489,10 @@ static int blockchain_add(blockchain_t * block_chain,
 	heir = block_chain->find(block_chain, &chain->head->hash);
 	if(NULL == heir) return 0;
 	
+	// update longest_end's cumulative_difficulty 
+	update_first_child_cumulative_difficulty(chain->head->first_child, heir->cumulative_difficulty);
 	blockchain_heir_t * current = &block_chain->heirs[block_chain->height];
+	
 	if(compact_uint256_compare(
 		&chain->longest_end->cumulative_difficulty, 
 		&current->cumulative_difficulty) > 0 ) // win the round. 
@@ -500,18 +519,26 @@ static int blockchain_add(blockchain_t * block_chain,
 			child = child->next_sibling;
 		} 
 		
-		// tell the first-chlid discard his siblings. 
-		abandon_siblings(successor->first_child, list);
 		
-		// leave the current chain (swap positions with the orphan)
+		
+		// leave the current chain (swap positions with the orphan or the next_sibling)
 		if(orphans) {
 			// join the orphan's family to the search-tree
 			search_tree_traverse_BFS(&list->search_root, traverse_action_type_add, orphans);
 			
 			// claim siblings
 			orphans->next_sibling = successor->next_sibling;
+			chain->head->first_child = orphans;
+		}else {
+			chain->head->first_child = successor->next_sibling;
 		}
-		chain->head->first_child = orphans;
+		
+		// tell the first-child discard his siblings. 
+		abandon_siblings(successor->first_child, list);
+		
+		// destroy old identities
+		tdelete(successor, &list->search_root, blockchain_heir_compare);
+		block_info_free(successor);
 		
 		if(NULL == chain->head->first_child) { // all children have left home
 			list->remove(list, chain);	

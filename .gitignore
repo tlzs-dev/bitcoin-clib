@@ -14,11 +14,19 @@
 !include
 !tests
 !test2
+!test3
 
 tests/*
 test2/*
+test3/*
+
 !tests/*.c
 !tests/Makefile
+
+!test2/*.c
+
+!test3/Makefile
+!test3/*.c
 
 # ignore files
 *.so

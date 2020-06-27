@@ -151,8 +151,8 @@ typedef union compact_uint256 compact_uint256_t;
 compact_uint256_t uint256_to_compact(const uint256_t * target);
 uint256_t compact_to_uint256(const compact_uint256_t * cint);
 
-#define compact_uint256_zero 	((compact_uint256_t){.exp = 0, })
-#define compact_uint256_NaN 	((compact_uint256_t){.exp = 0xff, })	// Not a Number
+#define compact_uint256_zero 	((compact_uint256_t){.bits = 0, })
+#define compact_uint256_NaN 	((compact_uint256_t){.bits = 0xffffffff, })	// Not a Number
 
 #define uint256_NaN	((uint256_t){.val = {						\
 		0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 		\
@@ -340,7 +340,7 @@ struct satoshi_block_header
 	uint256_t merkle_root[1];
 	uint32_t timestamp;
 	uint32_t bits;
-	uint32_t nounce;
+	uint32_t nonce;
 	uint8_t txn_count[0];	// place-holder
 }__attribute__((packed));
 
