@@ -470,7 +470,7 @@ static int blockchain_add(blockchain_t * block_chain,
 	longest_end = chain->longest_end;
 	
 	// Rule IV. find parent in the BLOCKCHAIN
-	heir = block_chain->find(block_chain, block_hash);
+	heir = block_chain->find(block_chain, &chain->head->hash);
 	if(NULL == heir) return 0;
 	
 	blockchain_heir_t * current = &block_chain->heirs[block_chain->height];
@@ -531,8 +531,8 @@ static int abandon_siblings(block_info_t * successor, active_chain_list_t * list
 	/**
 	 * his next_sibling will lead all other brothers to a new chain.
 	 * do not set new chain's search-root pointer when creating,
-	 * all nodes was already in the search-tree,
-	 * just add the new chain's 'head' only\
+	 * all nodes are already in the search-tree,
+	 * just add the new chain's 'head' only.
 	 */
 	if(sibling)
 	{
