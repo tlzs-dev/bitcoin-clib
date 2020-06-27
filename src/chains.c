@@ -527,22 +527,21 @@ static int abandon_siblings(block_info_t * successor, active_chain_list_t * list
 	
 	// discard his siblings
 	block_info_t * sibling = successor->next_sibling;
-	active_chain_t * chain = NULL;
-	while(sibling)
+	
+	/**
+	 * his next_sibling will lead all other brothers to a new chain.
+	 * do not set new chain's search-root pointer when creating,
+	 * all nodes was already in the search-tree,
+	 * just add the new chain's 'head' only\
+	 */
+	if(sibling)
 	{
-		if(NULL == chain) {
-			// do not set search-root pointer, all nodes was already in the search-tree
-			// just add the new chain's 'head' 
-			chain = active_chain_new(sibling, NULL);
-			assert(chain);
-			tsearch(chain->head, &list->search_root, blockchain_heir_compare); 
-			
-			chain->p_search_root = &list->search_root;
-			list->add(list, chain);
-		}else {
-			block_info_add_child(chain->head, sibling);
-		}
-		sibling = sibling->next_sibling;
+		active_chain_t * chain = active_chain_new(sibling, NULL);
+		assert(chain);
+		tsearch(chain->head, &list->search_root, blockchain_heir_compare); 
+		
+		chain->p_search_root = &list->search_root;
+		list->add(list, chain);
 	}
 	
 	// no more brothers
@@ -784,6 +783,7 @@ active_chain_t * active_chain_new(block_info_t * orphan, void ** p_search_root)
 
 	memcpy(&head->hash, &orphan->hdr->prev_hash, sizeof(uint256_t));	// save parent hash
 	head->first_child = orphan;
+	orphan->parent = head;
 
 	// find the longest-end
 	block_info_t * longest_end = orphan;
