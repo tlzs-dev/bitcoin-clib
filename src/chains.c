@@ -109,6 +109,14 @@ int block_info_declare_inheritance(block_info_t * heir);
 static int active_chain_list_resize(active_chain_list_t * list, ssize_t max_size);
 
 
+enum traverse_action_type
+{
+	traverse_action_type_add,
+	traverse_action_type_remove,
+	traverse_action_types_count
+};
+static int search_tree_traverse_BFS(void ** p_search_root, enum traverse_action_type type, block_info_t * node);
+
 #define MAX_FUTURE_BLOCK_TIME	(2 * 60 * 60)
 static const uint256_t g_genesis_block_hash[1] = {{
 		.val = {
@@ -360,6 +368,9 @@ static inline active_chain_t * get_current_chain(block_info_t * parent)
 	return (active_chain_t *)parent;
 }
 
+
+static int abandon_siblings(block_info_t * successor, active_chain_list_t * list);
+
 static int blockchain_add(blockchain_t * block_chain, 
 	const uint256_t * block_hash, 
 	const struct satoshi_block_header * hdr)
@@ -481,49 +492,62 @@ static int blockchain_add(blockchain_t * block_chain,
 		 * those orphans shoud establish a new chain of their own.
 		 */
 		
+		// remove all first_child nodes from the search-tree
 		block_info_t * child = successor->first_child;
-		while(child)
+		while(child)	
 		{
-			block_info_t * sibling = child->next_sibling;
-			active_chain_t * chain = NULL;
-			while(sibling)
-			{
-				if(NULL == chain) chain = active_chain_new(sibling, &list->search_root);
-			//	else chain->add(chain, sibling);
-			}
-			
-			
-			
-			while(sibling)
-			{
-				
-			}
+			tdelete(child, &list->search_root, blockchain_heir_compare);
+			child = child->next_sibling;
 		} 
 		
-	//	active_chain_remove_child(chain->head, chain->search_root);
+		// tell the first-chlid discard his siblings. 
+		abandon_siblings(successor->first_child, list);
 		
-	
-		
-		
-		
-		
-		
-		
-		
-		
-		
-		// append orphans to the active chain
-		block_info_add_child(chain->head, orphans);
-		
-		/**
-		 * @todo remove all the first-child from the active chain
-		 */
-		// ...
-		
+		// leave the current chain (swap positions with the orphan)
+		if(orphans) {
+			// join the orphan's family to the search-tree
+			search_tree_traverse_BFS(&list->search_root, traverse_action_type_add, orphans);
+			
+			// claim siblings
+			orphans->next_sibling = successor->next_sibling;
+		}
+		chain->head->first_child = orphans;
 	}
 
 	return 0;
 }
+
+static int abandon_siblings(block_info_t * successor, active_chain_list_t * list)
+{
+	if(NULL == successor) return 0;
+	
+	// discard his siblings
+	block_info_t * sibling = successor->next_sibling;
+	active_chain_t * chain = NULL;
+	while(sibling)
+	{
+		if(NULL == chain) {
+			// do not set search-root pointer, all nodes was already in the search-tree
+			// just add the new chain's 'head' 
+			chain = active_chain_new(sibling, NULL);
+			assert(chain);
+			tsearch(chain->head, &list->search_root, blockchain_heir_compare); 
+			
+			chain->p_search_root = &list->search_root;
+			list->add(list, chain);
+		}else
+		{
+			block_info_add_child(chain->head, sibling);
+		}
+	}
+	
+	// no more brothers
+	successor->next_sibling = NULL;
+	
+	// tell his first-child to do the same thing
+	return abandon_siblings(successor->first_child, list);	// tail-recursion, no need to optimize
+}
+
 
 static const blockchain_heir_t * blockchain_get(blockchain_t * chain, ssize_t height)
 {
@@ -811,22 +835,13 @@ void active_chain_free(active_chain_t * chain)
 static int active_chain_list_resize(active_chain_list_t * list, ssize_t max_size);
 
 // use a queue to remove recursion. (breadth first)
-enum traverse_action_type
-{
-	traverse_action_type_add,
-	traverse_action_type_remove,
-	traverse_action_types_count
-};
-
 typedef void * (*traverse_action_callback)(const void *, void **, int (*)(const void *, const void *));
-static int search_tree_traverse_BFS(void ** p_search_root, 
-	enum traverse_action_type type,
-	block_info_t * block
-)
+
+static int search_tree_traverse_BFS(void ** p_search_root, enum traverse_action_type type, block_info_t * node)
 {
 	static traverse_action_callback actions[traverse_action_types_count] = {
 		[traverse_action_type_add] = tsearch,
-		[traverse_action_type_add] = tdelete,
+		[traverse_action_type_remove] = tdelete,
 	};
 	
 	assert(type >= 0 && type < traverse_action_types_count);
@@ -836,16 +851,15 @@ static int search_tree_traverse_BFS(void ** p_search_root,
 	memset(queue, 0, sizeof(queue));
 	clib_queue_init(queue, 100);
 	
-	int rc = queue->enter(queue, block);
+	int rc = queue->enter(queue, node);
 	assert(0 == rc);
 	
-	block_info_t * node = NULL;
 	while((node = queue->leave(queue)))
 	{
 		// add or remove node from the search-tree
 		action(node, p_search_root, blockchain_heir_compare);
 		
-		// append all siblings
+		// enqueue all siblings
 		block_info_t * sibling = node->next_sibling;
 		while(sibling) {
 			rc = queue->enter(queue, sibling);
@@ -853,7 +867,7 @@ static int search_tree_traverse_BFS(void ** p_search_root,
 			sibling = sibling->next_sibling;
 		}
 		
-		// append child
+		// enqueue child
 		rc = queue->enter(queue, node->first_child);
 		assert(0 == rc);
 	}
