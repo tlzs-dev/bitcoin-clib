@@ -286,6 +286,7 @@ static int init_dataset(void)
 	{
 		struct satoshi_block_header * hdr = &s_block_hdrs[i];
 		memcpy(hdr->prev_hash, &s_block_hashes[i - 1], 32);
+		hdr->timestamp = i;
 		hdr->bits = 0x1d00ffff;
 		hdr->nonce = seed++;
 		hash256(hdr, sizeof(*hdr), (unsigned char *)&s_block_hashes[i]);
@@ -293,23 +294,8 @@ static int init_dataset(void)
 	return 0;
 }
 
-int shell_init(shell_context_t * shell, void * jconfig)
+void refresh_main_chain(shell_context_t * shell, blockchain_t * main_chain)
 {
-	init_dataset();
-	
-	blockchain_t * main_chain = shell->user_data;
-	assert(main_chain);
-	
-	for(int i = 1; i <= MAX_HEIGHT; ++i)
-	{
-		main_chain->add(main_chain, &s_block_hashes[i], &s_block_hdrs[i]);
-	}
-	
-	char text[100];
-	snprintf(text, sizeof(text), "blockchain height: %d", (int)main_chain->height);
-	gtk_header_bar_set_subtitle(GTK_HEADER_BAR(shell->header_bar), text); 
-	
-	
 	GtkListStore * store = gtk_list_store_new(main_chain_columns_count, 
 		G_TYPE_INT, 
 		G_TYPE_UINT, 
@@ -318,10 +304,14 @@ int shell_init(shell_context_t * shell, void * jconfig)
 		G_TYPE_UINT);
 	GtkTreeView * treeview = GTK_TREE_VIEW(shell->main_chain);
 	assert(treeview);
+	
+	// clear tree view
+	gtk_tree_view_set_model(treeview, NULL);
+	
 	GtkTreeIter iter;
 	
 	const blockchain_heir_t * heirs = main_chain->heirs;
-	for(int i = 0; i <= MAX_HEIGHT; ++i)
+	for(int i = 0; i <= main_chain->height; ++i)
 	{
 		gtk_list_store_append(store, &iter);
 		gtk_list_store_set(store, &iter, 
@@ -333,6 +323,32 @@ int shell_init(shell_context_t * shell, void * jconfig)
 			-1);
 	}
 	gtk_tree_view_set_model(treeview, GTK_TREE_MODEL(store));
+}
+
+int shell_init(shell_context_t * shell, void * jconfig)
+{
+	init_dataset();
+	
+	blockchain_t * main_chain = shell->user_data;
+	assert(main_chain);
+	
+	for(int i = 1; i <= MAX_HEIGHT; ++i) {
+		main_chain->add(main_chain, &s_block_hashes[i], &s_block_hdrs[i]);
+	}
+	
+	for(int i = 1; i <= main_chain->height; ++i) {
+		printf("-- heirs[%d]: timestamp=%d, diffculty_accum=0x%.8x\n", i, 
+			(int)main_chain->heirs[i].timestamp,
+			main_chain->heirs[i].cumulative_difficulty.bits
+			);
+	}
+	
+	char text[100];
+	snprintf(text, sizeof(text), "blockchain height: %d", (int)main_chain->height);
+	gtk_header_bar_set_subtitle(GTK_HEADER_BAR(shell->header_bar), text); 
+	
+	refresh_main_chain(shell, main_chain);
+	
 	
 	return 0;
 }
@@ -340,12 +356,149 @@ int shell_init(shell_context_t * shell, void * jconfig)
 
 static int s_finished = 0;
 
+typedef int (* test_module_func)(shell_context_t * shell, void * user_data);
+
+#define MAX_TESTS (10)
+static int test_index = 0;
+
+
+static void randomize_indices(int indices[], ssize_t size)
+{
+	srand(time(NULL));
+	assert(indices && size > 0);
+	
+	int * table = calloc(size, sizeof(*table));
+	for(int i = 0; i < size; ++i) {
+		table[i] = i;
+	}
+	
+	int i = 0;
+	while(size > 0)
+	{
+		int index = rand() % size;
+		indices[i++] = table[index];
+		table[index] = table[--size];
+	}
+	free(table);
+}
+
+
+block_info_t * blockchain_abandon_inheritances(blockchain_t * chain, blockchain_heir_t * parent);
+
+#include <search.h>
+
+typedef int (*compare_func)(const void *, const void *);
+static const char white_chars[] = 
+		"                                " "                                "
+		"                                " "                                "
+		"                                " "                                "
+		"                                " "                                ";
+		
+static void dump_heir_info(const void * nodep, 
+	const VISIT which,
+	const int depth)
+{
+	blockchain_heir_t * info;
+	switch(which)
+	{
+	case preorder: case endorder: break;
+	case postorder: case leaf:
+		info = *(blockchain_heir_t **)nodep;
+	//	printf("depth: %d, id = %d\n", depth, info->id);
+		printf("%.*s (%d)\n", depth * 4, white_chars, (int)info->timestamp);
+		break; 
+	}
+}
+
+
+static void dump_block_info(const void * nodep, 
+	const VISIT which,
+	const int depth)
+{
+	static const char white_chars[] = 
+		"                                " "                                "
+		"                                " "                                "
+		"                                " "                                "
+		"                                " "                                ";
+	
+	block_info_t * info;
+	switch(which)
+	{
+	case preorder: case endorder: break;
+	case postorder: case leaf:
+		info = *(block_info_t **)nodep;
+	//	printf("depth: %d, id = %d\n", depth, info->id);
+		printf("%.*s (%d)\n", depth * 4, white_chars, info->hdr?info->hdr->nonce:-1);
+		break; 
+	}
+} 
+
+
+
+static int test_random_adding(shell_context_t * shell, void * user_data)
+{
+	assert(shell && user_data);
+	blockchain_t * chain = user_data;
+	
+	blockchain_abandon_inheritances(chain, &chain->heirs[0]);
+	assert(0 == chain->height);
+	
+	active_chain_list_t * list = chain->candidates_list;
+	active_chain_list_cleanup(list);
+	
+	debug_printf("current height: %d\n", (int)chain->height);
+	
+	if(chain->search_root) twalk(chain->search_root, dump_heir_info);
+	if(list->search_root) twalk(list->search_root, dump_block_info);
+	
+	assert(NULL == list->search_root);
+	
+	
+	int indices[MAX_HEIGHT] = {0};
+	randomize_indices(indices, MAX_HEIGHT);
+	
+	for(int i = 0; i < MAX_HEIGHT; ++i)
+	{
+		int index = indices[i] + 1;
+		printf("\t add blocks[%d] ...\n", index);
+		
+		chain->add(chain, &s_block_hashes[index], &s_block_hdrs[index]);
+	}
+	
+	printf("==> block height: %d, list.count=%d\n", 
+		(int)chain->height,
+		(int)chain->candidates_list->count
+		);
+	return 0;
+}
+
+static int test_add_duplicates(shell_context_t * shell, void * user_data)
+{
+	return 0;
+}
+
+static int test_reorg(shell_context_t * shell, void * user_data)
+{
+	
+}
+
+static test_module_func tests[MAX_TESTS] = {
+	[0] = test_random_adding,
+	[1] = test_add_duplicates,
+	[2] = test_reorg,
+	
+};
+
+
 static gboolean on_timer(shell_context_t * shell)
 {
 	if(shell->quit) {
 		s_finished = 1;
 	}
 	if(s_finished == 1) {
+		
+		refresh_main_chain(shell, g_main_chain);
+		
 		char text[100] = "";
 		snprintf(text, sizeof(text), "blockchain height:  %d", (int)g_main_chain->height);
 		gtk_header_bar_set_subtitle(GTK_HEADER_BAR(shell->header_bar), text);
@@ -368,7 +521,10 @@ static void * do_test(void * user_data)
 	
 	///< @todo
 	/// ...
-	sleep(3);
+	test_module_func func = tests[test_index++];
+	test_index %= MAX_TESTS;
+	
+	if(func) func(shell, g_main_chain);
 	
 	s_finished = 1;
 	pthread_exit((void *)(long)0);
@@ -379,6 +535,8 @@ static void run_test(shell_context_t * shell)
 	GtkWidget * header_bar = shell->header_bar;
 	GtkWidget * statusbar = shell->statusbar;
 	assert(header_bar && statusbar);
+	
+	if(s_finished) return; // is busy
 	
 	s_finished = 0;
 	guint timer_id = g_timeout_add(100, (GSourceFunc)on_timer, shell);

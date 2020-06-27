@@ -203,6 +203,7 @@ static inline block_info_t * abandon_child(
 	orphan->hdr->timestamp = (uint32_t)heir->timestamp;
 	orphan->cumulative_difficulty = heir->cumulative_difficulty;
 	
+	debug_printf("\t del heir: timestamp=%d", (int)heir->timestamp);
 	tdelete(heir, &chain->search_root, blockchain_heir_compare);
 	return orphan;
 }
@@ -229,11 +230,15 @@ static inline blockchain_heir_t * add_heir(blockchain_t * chain,
 		&child->cumulative_difficulty));
 		
 	tsearch(heir, &chain->search_root, blockchain_heir_compare);
+	
+	debug_printf("\t add heir: timestamp=%d", (int)heir->timestamp);
 	return heir;
 }
 
-
-static block_info_t * blockchain_abandon_inheritances(blockchain_t * chain, blockchain_heir_t * parent)
+#ifndef _DEBUG
+static  
+#endif
+block_info_t * blockchain_abandon_inheritances(blockchain_t * chain, blockchain_heir_t * parent)
 {
 	ssize_t height = parent - chain->heirs;
 	assert(height >= 0 && height <= chain->height);
@@ -391,6 +396,8 @@ static int blockchain_add(blockchain_t * block_chain,
 {
 	assert(block_hash && hdr);
 	
+	printf("\n========== hdr.nonce: %d ==========\n", (int)hdr->nonce);
+	
 	unsigned char hash[32];
 	hash256(hdr, sizeof(*hdr), hash);
 	assert(0 == memcmp(hash, block_hash, sizeof(uint256_t)));
@@ -438,6 +445,15 @@ static int blockchain_add(blockchain_t * block_chain,
 		// add the new orphan and 'head->hash' to the search-root
 		tsearch(orphan, &list->search_root, blockchain_heir_compare);
 		tsearch(head, &list->search_root, blockchain_heir_compare);
+		
+		// update chain's longest_end
+		block_info_update_cumulative_difficulty(orphan, compact_uint256_zero, &longest_end);
+		if(longest_end != chain->longest_end)
+		{
+			block_info_declare_inheritance(longest_end);
+			chain->longest_end = longest_end;
+		}
+
 	}
 	
 	if(NULL == chain)
@@ -470,14 +486,15 @@ static int blockchain_add(blockchain_t * block_chain,
 			chain = active_chain_new(orphan, &list->search_root);
 			assert(chain);
 			
+			list->add(list, chain);
+			
+			debug_printf("== new chain: %p", chain);
+			
 			// find the longest-end
 			block_info_update_cumulative_difficulty(orphan, 
 				compact_uint256_zero,
 				&chain->longest_end);
-			
-			// add chain to the chains-list
-			active_chain_list_resize(list, list->count + 1);
-			list->chains[list->count++] = chain;
+
 		}
 	}
 	
@@ -541,6 +558,8 @@ static int blockchain_add(blockchain_t * block_chain,
 		block_info_free(successor);
 		
 		if(NULL == chain->head->first_child) { // all children have left home
+			
+			debug_printf("== remove chain: %p", chain);
 			list->remove(list, chain);	
 		}
 	}
@@ -870,6 +889,8 @@ typedef void * (*traverse_action_callback)(const void *, void **, int (*)(const 
 
 static int search_tree_traverse_BFS(void ** p_search_root, enum traverse_action_type type, block_info_t * node)
 {
+	assert(node);
+	
 	static traverse_action_callback actions[traverse_action_types_count] = {
 		[traverse_action_type_add] = tsearch,
 		[traverse_action_type_remove] = tdelete,
@@ -932,14 +953,12 @@ static int list_remove(active_chain_list_t * list, active_chain_t * chain)
 	for(i = 0; i < list->count; ++i)
 	{
 		if(list->chains[i] == chain) {
+			search_tree_traverse_BFS(&list->search_root, traverse_action_type_remove, chain->head);
 			list->chains[i] = list->chains[--list->count];
 			list->chains[list->count] = NULL;
 			break;
 		}
 	}
-	if(i == list->count) return -1;
-	
-	search_tree_traverse_BFS(&list->search_root, traverse_action_type_remove, chain->head);
 	return 0;
 }
  
