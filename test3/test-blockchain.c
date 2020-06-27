@@ -34,6 +34,14 @@
 #include "chains.h"
 #include <gtk/gtk.h>
 
+#include <pthread.h>
+
+#include <locale.h>
+#include <libintl.h>
+#ifndef _
+#define _(str) gettext(str)
+#endif
+
 typedef struct shell_context
 {
 	void * user_data;
@@ -44,6 +52,8 @@ typedef struct shell_context
 	GtkWidget * window;
 	GtkWidget * header_bar;
 	GtkWidget * content_area;
+	GtkWidget * statusbar;
+	
 	GtkWidget * main_chain;	// the BLOCKCHAIN
 	
 	ssize_t num_active_chains;
@@ -62,6 +72,11 @@ void shell_cleanup(shell_context_t * shell);
 
 int main(int argc, char **argv)
 {
+	#define TEXT_DOMAIN "bitcoin-clib"
+	setlocale(LC_ALL, "");
+	bindtextdomain(TEXT_DOMAIN, NULL);
+	textdomain(TEXT_DOMAIN);
+	
 	blockchain_t * main_chain = blockchain_init(g_main_chain, NULL, NULL, NULL);
 	shell_context_t * shell = shell_new(argc, argv, main_chain);
 	assert(shell);
@@ -69,6 +84,8 @@ int main(int argc, char **argv)
 	shell_init(shell, NULL);
 	shell_run(shell);
 	shell_cleanup(shell);
+	
+	blockchain_cleanup(main_chain);
 	
 	return 0;
 }
@@ -151,8 +168,13 @@ static void init_treeview_main_chain(GtkTreeView * main_chain)
 	return;
 }
 
+static void run_test(shell_context_t * shell);
+
 shell_context_t * shell_new(int argc, char ** argv, void * user_data)
 {
+	char * text_domain = textdomain("bitcoin-clib");
+	
+	
 	gtk_init(&argc, &argv);
 	shell_context_t * shell = g_shell;
 	
@@ -187,6 +209,7 @@ shell_context_t * shell_new(int argc, char ** argv, void * user_data)
 	shell->window = window;
 	shell->header_bar = header_bar;
 	shell->content_area = grid;
+	shell->statusbar = statusbar;
 	
 	GtkWidget * scrolled_win = NULL;
 	
@@ -206,7 +229,12 @@ shell_context_t * shell_new(int argc, char ** argv, void * user_data)
 	gtk_widget_set_vexpand(treeview, TRUE);
 	gtk_grid_attach(GTK_GRID(grid), scrolled_win, 0, 0, 1, 1);
 	
+	
+	GtkWidget * button = gtk_button_new_from_icon_name("system-run", GTK_ICON_SIZE_BUTTON);
+	gtk_header_bar_pack_start(GTK_HEADER_BAR(header_bar), button);
+	g_signal_connect_swapped(button, "clicked", G_CALLBACK(run_test), shell);
 	g_signal_connect_swapped(window, "destroy", G_CALLBACK(shell_stop), shell);
+	
 	return shell;
 }
 
@@ -307,5 +335,65 @@ int shell_init(shell_context_t * shell, void * jconfig)
 	gtk_tree_view_set_model(treeview, GTK_TREE_MODEL(store));
 	
 	return 0;
+}
+
+
+static int s_finished = 0;
+
+static gboolean on_timer(shell_context_t * shell)
+{
+	if(shell->quit) {
+		s_finished = 1;
+	}
+	if(s_finished == 1) {
+		char text[100] = "";
+		snprintf(text, sizeof(text), "blockchain height:  %d", (int)g_main_chain->height);
+		gtk_header_bar_set_subtitle(GTK_HEADER_BAR(shell->header_bar), text);
+		gdk_window_set_cursor(gtk_widget_get_window(shell->window), 
+		gdk_cursor_new_from_name(gtk_widget_get_display(shell->window), "default"));
+		
+		return G_SOURCE_REMOVE;
+	}
+	// display messages
+	// ...
+	
+	return G_SOURCE_CONTINUE;
+}
+
+
+static void * do_test(void * user_data)
+{
+	shell_context_t * shell = user_data;
+	assert(shell);
+	
+	///< @todo
+	/// ...
+	sleep(3);
+	
+	s_finished = 1;
+	pthread_exit((void *)(long)0);
+}
+
+static void run_test(shell_context_t * shell)
+{
+	GtkWidget * header_bar = shell->header_bar;
+	GtkWidget * statusbar = shell->statusbar;
+	assert(header_bar && statusbar);
+	
+	s_finished = 0;
+	guint timer_id = g_timeout_add(100, (GSourceFunc)on_timer, shell);
+	gtk_header_bar_set_subtitle(GTK_HEADER_BAR(header_bar), "testing ...");
+	
+	gdk_window_set_cursor(gtk_widget_get_window(shell->window), 
+		gdk_cursor_new_from_name(gtk_widget_get_display(shell->window), "wait"));
+		
+	// do_test()
+	pthread_t th;
+	int rc = pthread_create(&th, NULL, do_test, shell);
+	assert(0 == rc);
+	
+	pthread_detach(th);
+
+	return;
 }
 
