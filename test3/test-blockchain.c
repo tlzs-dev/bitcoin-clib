@@ -654,11 +654,29 @@ static void search_tree_node_on_write(const void * nodep, const VISIT which, con
 		if(NULL == info) return;
 		
 		char text[200] = "";
-		int cb = snprintf(text, sizeof(text), "%.*s----(%.3d)\n", 
-			depth * 8, white_chars,
-			info->hdr?info->hdr->nonce:-1);
+		int cb = 0;
+		if(info->hdr) {
+			cb = snprintf(text, sizeof(text), "%.*s----(%.3d)\n", 
+				depth * 8, white_chars,
+				info->hdr->nonce);
+		} else {
+			char * p = text;
+			char * p_end = p + sizeof(text);
+			cb = snprintf(p, p_end - p, "%.*s--<b>[", depth * 8, white_chars);
+			assert(cb > 0);
+			p += cb;
+			cb = bin2hex(&info->hash, 32, &p);
+			assert(cb == 64);
+			
+			p += 6; // output first 3-bytes only
+			cb = snprintf(p, p_end - p, "]</b>\n");
+			assert(cb > 0);
+			p += cb;
+			
+			cb = p - text;
+		}
 		assert(cb > 0 && cb < 200);
-		gtk_text_buffer_insert(s_action_param.buffer, s_action_param.iter, text, cb);
+		gtk_text_buffer_insert_markup(s_action_param.buffer, s_action_param.iter, text, cb);
 	}
 }
 
