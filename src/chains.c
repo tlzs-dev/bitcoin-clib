@@ -856,8 +856,9 @@ active_chain_t * active_chain_new(block_info_t * orphan, void ** p_search_root)
 	// add the new orphan and 'head->hash' to the search-root
 	if(p_search_root)
 	{
-		tsearch(orphan, p_search_root, blockchain_heir_compare);
-		tsearch(head, p_search_root, blockchain_heir_compare);
+		search_tree_traverse_BFS(p_search_root, traverse_action_type_add, head);
+		//~ tsearch(orphan, p_search_root, blockchain_heir_compare);
+		//~ tsearch(head, p_search_root, blockchain_heir_compare);
 	}
 	
 	return chain;

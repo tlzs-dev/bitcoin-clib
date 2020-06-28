@@ -275,6 +275,24 @@ static int init_windows(shell_context_t * shell)
 	//~ gtk_stack_add_titled(GTK_STACK(stack), scrolled_win, "summary", "summary");
 	//~ gtk_stack_switcher_set_stack(GTK_STACK_SWITCHER(switcher), GTK_STACK(stack));
 	shell->logview = logview;
+	
+	GtkCssProvider * css = gtk_css_provider_new();
+	GError * gerr = NULL;
+	gtk_css_provider_load_from_data(css, ".logview { font: 16px monospace;}", -1, &gerr);
+	if(gerr)
+	{
+		g_printerr("gtk_css_provider_load_from_data() failed: %s\n", gerr->message);
+		g_error_free(gerr);
+		abort();
+	}
+	GtkStyleContext * style = gtk_widget_get_style_context(logview);
+	gtk_widget_set_name(logview, "logview");
+	
+	gtk_style_context_add_provider(style, GTK_STYLE_PROVIDER(css), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+	gtk_style_context_add_class(style, "logview");
+	
+	
+	
 	GtkWidget * label = gtk_label_new("Summary");
 	gtk_notebook_append_page(GTK_NOTEBOOK(notebook), scrolled_win, label);
 	
@@ -491,6 +509,11 @@ static void dump_block_info(const void * nodep,
 
 
 void block_info_dump_BFS(block_info_t * root);
+
+static void no_free(void *p)
+{
+	
+}
 static int test_random_adding(shell_context_t * shell, void * user_data)
 {
 	assert(shell && user_data);
@@ -505,11 +528,16 @@ static int test_random_adding(shell_context_t * shell, void * user_data)
 	debug_printf("current height: %d\n", (int)chain->height);
 	
 	printf("-- chain->search-root: %p\n", chain->search_root);
-	if(chain->search_root) twalk(chain->search_root, dump_heir_info);
+	if(chain->search_root) {
+		//	twalk(chain->search_root, dump_heir_info);
+	}
 	
 	printf("-- list->search-root: %p\n", list->search_root);
-	if(list->search_root) twalk(list->search_root, dump_block_info);
-	
+	if(list->search_root) {
+	//	twalk(list->search_root, dump_block_info);
+		tdestroy(list->search_root, no_free);
+	}
+	list->search_root = NULL;
 //	assert(NULL == list->search_root);
 	
 	printf("============ %s() ======================\n", __FUNCTION__);
@@ -529,7 +557,7 @@ static int test_random_adding(shell_context_t * shell, void * user_data)
 			active_chain_t * active = list->chains[ii];
 			
 			printf("---- chain %Zd ----: \n", ii);
-			block_info_dump_BFS(active->head);
+		//	block_info_dump_BFS(active->head);
 		}
 	}
 	
@@ -611,6 +639,30 @@ static void dump_active_chain_info(GtkWidget * textview, active_chain_t * chain)
 	return;
 }
 
+struct twalk_action_param
+{
+	GtkTextBuffer * buffer;
+	GtkTextIter * iter;
+};
+
+static struct twalk_action_param s_action_param;
+
+static void search_tree_node_on_write(const void * nodep, const VISIT which, const int depth)
+{
+	if(which == leaf || which == postorder)
+	{
+		block_info_t * info = *(block_info_t **)nodep;
+		
+		char text[200] = "";
+		int cb = snprintf(text, sizeof(text), "%.*s----(%.3d)\n", 
+			depth * 8, white_chars,
+			info->hdr?info->hdr->nonce:-1);
+		assert(cb > 0 && cb < 200);
+		gtk_text_buffer_insert(s_action_param.buffer, s_action_param.iter, text, cb);
+	}
+}
+
+
 static void on_summary(shell_context_t * shell, blockchain_t * main_chain)
 {
 	char summary[4096] = "";
@@ -623,9 +675,17 @@ static void on_summary(shell_context_t * shell, blockchain_t * main_chain)
 		(int)g_main_chain->height, 
 		(int)g_main_chain->candidates_list->count);
 	gtk_text_buffer_insert(buffer, &iter, summary, cb);
-	gtk_text_view_set_buffer(GTK_TEXT_VIEW(shell->logview), buffer);
-		
+	
+	s_action_param.buffer = buffer;
+	s_action_param.iter = &iter;
+	
 	active_chain_list_t * list = main_chain->candidates_list;
+	twalk(list->search_root, search_tree_node_on_write);
+	gtk_text_view_set_buffer(GTK_TEXT_VIEW(shell->logview), buffer);
+	
+	s_action_param.buffer = NULL;
+	s_action_param.iter = NULL;
+	
 	if(list->count < shell->num_active_chains)
 	{
 		for(int i = list->count; i <= shell->num_active_chains; ++i)
