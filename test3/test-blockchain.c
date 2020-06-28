@@ -54,6 +54,12 @@ typedef struct shell_context
 	GtkWidget * content_area;
 	GtkWidget * statusbar;
 	
+	//~ GtkWidget * switcher;
+	//~ GtkWidget * stack;
+	
+	GtkWidget * notebook;
+	GtkWidget * logview;
+	
 	GtkWidget * main_chain;	// the BLOCKCHAIN
 	
 	ssize_t num_active_chains;
@@ -170,16 +176,9 @@ static void init_treeview_main_chain(GtkTreeView * main_chain)
 
 static void run_test(shell_context_t * shell);
 
-shell_context_t * shell_new(int argc, char ** argv, void * user_data)
+
+static int init_windows(shell_context_t * shell)
 {
-	char * text_domain = textdomain("bitcoin-clib");
-	
-	
-	gtk_init(&argc, &argv);
-	shell_context_t * shell = g_shell;
-	
-	shell->user_data = user_data;
-	
 	GtkWidget * window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
 	GtkWidget * header_bar = gtk_header_bar_new();
 	gtk_header_bar_set_show_close_button(GTK_HEADER_BAR(header_bar), TRUE);
@@ -219,15 +218,45 @@ shell_context_t * shell_new(int argc, char ** argv, void * user_data)
 	gtk_scrolled_window_set_shadow_type(GTK_SCROLLED_WINDOW(scrolled_win), GTK_SHADOW_ETCHED_IN);
 	gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scrolled_win), GTK_POLICY_AUTOMATIC, GTK_POLICY_ALWAYS);
 	gtk_widget_set_vexpand(scrolled_win, TRUE);
-	gtk_widget_set_hexpand(scrolled_win, TRUE);
 	
 	gtk_widget_set_size_request(scrolled_win, 300, 180);
 	shell->main_chain = treeview;
 	
 	init_treeview_main_chain(GTK_TREE_VIEW(treeview));
-	gtk_widget_set_hexpand(treeview, TRUE);
-	gtk_widget_set_vexpand(treeview, TRUE);
-	gtk_grid_attach(GTK_GRID(grid), scrolled_win, 0, 0, 1, 1);
+	//~ gtk_widget_set_hexpand(treeview, TRUE);
+	//~ gtk_widget_set_vexpand(treeview, TRUE);
+	gtk_grid_attach(GTK_GRID(grid), scrolled_win, 0, 0, 1, 2);
+	
+	//~ GtkWidget * switcher = gtk_stack_switcher_new();
+	//~ GtkWidget * stack = gtk_stack_new();
+	
+	//~ shell->switcher = switcher;
+	//~ shell->stack = stack;
+
+	//~ gtk_grid_attach(GTK_GRID(grid), switcher, 1, 0, 1, 1);
+	//~ gtk_grid_attach(GTK_GRID(grid), stack, 1, 1, 1, 1);
+	//~ gtk_widget_set_hexpand(stack, TRUE);
+	//~ gtk_widget_set_vexpand(stack, TRUE);
+	
+	//~ gtk_widget_set_size_request(switcher, 300, -1);
+	
+	GtkWidget * notebook = gtk_notebook_new();
+	gtk_notebook_set_scrollable(GTK_NOTEBOOK(notebook), TRUE);
+	shell->notebook = notebook;
+	
+	scrolled_win = gtk_scrolled_window_new(NULL, NULL);
+	GtkWidget * logview = gtk_text_view_new();
+	gtk_container_add(GTK_CONTAINER(scrolled_win), logview);
+	gtk_widget_set_hexpand(scrolled_win, TRUE);
+	gtk_widget_set_vexpand(scrolled_win, TRUE);
+	
+	//~ gtk_stack_add_titled(GTK_STACK(stack), scrolled_win, "summary", "summary");
+	//~ gtk_stack_switcher_set_stack(GTK_STACK_SWITCHER(switcher), GTK_STACK(stack));
+	shell->logview = logview;
+	GtkWidget * label = gtk_label_new("Summary");
+	gtk_notebook_append_page(GTK_NOTEBOOK(notebook), scrolled_win, label);
+	
+	gtk_grid_attach(GTK_GRID(grid), notebook, 1, 0, 1, 2);
 	
 	
 	GtkWidget * button = gtk_button_new_from_icon_name("system-run", GTK_ICON_SIZE_BUTTON);
@@ -235,6 +264,15 @@ shell_context_t * shell_new(int argc, char ** argv, void * user_data)
 	g_signal_connect_swapped(button, "clicked", G_CALLBACK(run_test), shell);
 	g_signal_connect_swapped(window, "destroy", G_CALLBACK(shell_stop), shell);
 	
+	return 0;
+}
+shell_context_t * shell_new(int argc, char ** argv, void * user_data)
+{
+	gtk_init(&argc, &argv);
+	shell_context_t * shell = g_shell;
+	shell->user_data = user_data;
+	
+	init_windows(shell);
 	return shell;
 }
 
@@ -511,6 +549,48 @@ static gboolean on_timer(shell_context_t * shell)
 		gtk_header_bar_set_subtitle(GTK_HEADER_BAR(shell->header_bar), text);
 		gdk_window_set_cursor(gtk_widget_get_window(shell->window), 
 		gdk_cursor_new_from_name(gtk_widget_get_display(shell->window), "default"));
+		
+		char summary[4096] = "";
+		GtkTextBuffer * buffer = gtk_text_buffer_new(NULL);
+		GtkTextIter iter;
+		gtk_text_buffer_get_start_iter(buffer, &iter);
+		
+		int cb = snprintf(summary, sizeof(summary), "blockchain height: %d\n"
+			"active_chains count: %d\n",
+			(int)g_main_chain->height, 
+			(int)g_main_chain->candidates_list->count);
+		gtk_text_buffer_insert(buffer, &iter, summary, cb);
+		gtk_text_view_set_buffer(GTK_TEXT_VIEW(shell->logview), buffer);
+			
+		active_chain_list_t * list = g_main_chain->candidates_list;
+		if(list->count < shell->num_active_chains)
+		{
+			for(int i = list->count; i <= shell->num_active_chains; ++i)
+			{
+				gtk_notebook_remove_page(GTK_NOTEBOOK(shell->notebook), i + 1);
+			}
+		}
+		
+		
+		if(shell->num_active_chains <= list->count)
+		{
+			char name[100] = "";
+			shell->active_chains = realloc(shell->active_chains, list->count * sizeof(*shell->active_chains));
+			assert(shell->active_chains);
+			
+			for(int i = shell->num_active_chains; i < list->count; ++i)
+			{
+				snprintf(name, sizeof(name), "chain %d", i);
+				GtkWidget * scrolled_win = gtk_scrolled_window_new(NULL, NULL);
+				shell->active_chains[i] = gtk_tree_view_new();
+				gtk_container_add(GTK_CONTAINER(scrolled_win), shell->active_chains[i]);
+				
+				gtk_widget_show_all(scrolled_win);
+				gtk_notebook_append_page(GTK_NOTEBOOK(shell->notebook), scrolled_win, gtk_label_new(name));
+			}
+		}
+		shell->num_active_chains = list->count;
+		
 		
 		return G_SOURCE_REMOVE;
 	}
