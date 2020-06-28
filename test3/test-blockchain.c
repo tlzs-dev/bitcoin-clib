@@ -299,7 +299,7 @@ static int init_windows(shell_context_t * shell)
 	gtk_grid_attach(GTK_GRID(grid), notebook, 1, 0, 1, 2);
 	
 	
-	GtkWidget * button = gtk_button_new_from_icon_name("system-run", GTK_ICON_SIZE_BUTTON);
+	GtkWidget * button = gtk_button_new_from_icon_name("go-next", GTK_ICON_SIZE_BUTTON);
 	gtk_header_bar_pack_start(GTK_HEADER_BAR(header_bar), button);
 	g_signal_connect_swapped(button, "clicked", G_CALLBACK(run_test), shell);
 	g_signal_connect_swapped(window, "destroy", G_CALLBACK(shell_stop), shell);
@@ -518,49 +518,47 @@ static int test_random_adding(shell_context_t * shell, void * user_data)
 {
 	assert(shell && user_data);
 	blockchain_t * chain = user_data;
+	static int last_index = -1;
+	static int indices[MAX_HEIGHT] = {0};
 	
-	blockchain_abandon_inheritances(chain, &chain->heirs[0]);
-	assert(0 == chain->height);
-	
-	active_chain_list_t * list = chain->candidates_list;
-	active_chain_list_cleanup(list);
-	
-	debug_printf("current height: %d\n", (int)chain->height);
-	
-	printf("-- chain->search-root: %p\n", chain->search_root);
-	if(chain->search_root) {
-		//	twalk(chain->search_root, dump_heir_info);
+	++last_index;
+	if(last_index == 0)	// reset dataset
+	{
+		randomize_indices(indices, MAX_HEIGHT);
+		
+		blockchain_abandon_inheritances(chain, &chain->heirs[0]);
+		assert(0 == chain->height);
+		
+		active_chain_list_t * list = chain->candidates_list;
+		active_chain_list_cleanup(list);
+		
+		debug_printf("current height: %d\n", (int)chain->height);
+		
+		printf("-- chain->search-root: %p\n", chain->search_root);
+		if(chain->search_root) {
+			//	twalk(chain->search_root, dump_heir_info);
+		}
+		
+		printf("-- list->search-root: %p\n", list->search_root);
+		if(list->search_root) {
+		//	twalk(list->search_root, dump_block_info);
+			tdestroy(list->search_root, no_free);
+		}
+		list->search_root = NULL;
+	//	assert(NULL == list->search_root);
 	}
 	
-	printf("-- list->search-root: %p\n", list->search_root);
-	if(list->search_root) {
-	//	twalk(list->search_root, dump_block_info);
-		tdestroy(list->search_root, no_free);
-	}
-	list->search_root = NULL;
-//	assert(NULL == list->search_root);
+	if(last_index >= MAX_HEIGHT) last_index = 0;
+	
 	
 	printf("============ %s() ======================\n", __FUNCTION__);
 	
-	int indices[MAX_HEIGHT] = {0};
-	randomize_indices(indices, MAX_HEIGHT);
 	
-	for(int i = 0; i < MAX_HEIGHT; ++i)
-	{
-		int index = indices[i] + 1;
-		printf("\t add blocks[%d] ...\n", index);
-		
-		chain->add(chain, &s_block_hashes[index], &s_block_hdrs[index]);
-		
-		for(ssize_t ii = 0; ii < list->count; ++ii)
-		{
-			active_chain_t * active = list->chains[ii];
-			
-			printf("---- chain %Zd ----: \n", ii);
-		//	block_info_dump_BFS(active->head);
-		}
-	}
+	int index = indices[last_index] + 1;
+	printf("\t add blocks[%d] ...\n", index);
 	
+	int rc = chain->add(chain, &s_block_hashes[index], &s_block_hdrs[index]);
+	assert(0 == rc);
 	
 	printf("==> block height: %d, list.count=%d\n", 
 		(int)chain->height,
@@ -589,6 +587,7 @@ static test_module_func tests[MAX_TESTS] = {
 static void write_buffer(block_info_t * info, VISIT which, int depth, 
 	GtkTextBuffer * buffer, GtkTextIter * iter)
 {
+	if(NULL == info) return;
 	if(which == leaf || which == preorder)
 	{
 		char text[200] = "";
@@ -652,6 +651,7 @@ static void search_tree_node_on_write(const void * nodep, const VISIT which, con
 	if(which == leaf || which == postorder)
 	{
 		block_info_t * info = *(block_info_t **)nodep;
+		if(NULL == info) return;
 		
 		char text[200] = "";
 		int cb = snprintf(text, sizeof(text), "%.*s----(%.3d)\n", 
