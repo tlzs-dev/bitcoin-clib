@@ -415,12 +415,6 @@ static void dump_block_info(const void * nodep,
 	const VISIT which,
 	const int depth)
 {
-	static const char white_chars[] = 
-		"                                " "                                "
-		"                                " "                                "
-		"                                " "                                "
-		"                                " "                                ";
-	
 	block_info_t * info;
 	switch(which)
 	{
@@ -434,7 +428,7 @@ static void dump_block_info(const void * nodep,
 } 
 
 
-
+void block_info_dump_BFS(block_info_t * root);
 static int test_random_adding(shell_context_t * shell, void * user_data)
 {
 	assert(shell && user_data);
@@ -448,11 +442,15 @@ static int test_random_adding(shell_context_t * shell, void * user_data)
 	
 	debug_printf("current height: %d\n", (int)chain->height);
 	
+	printf("-- chain->search-root: %p\n", chain->search_root);
 	if(chain->search_root) twalk(chain->search_root, dump_heir_info);
+	
+	printf("-- chain->search-root: %p\n", list->search_root);
 	if(list->search_root) twalk(list->search_root, dump_block_info);
 	
 	assert(NULL == list->search_root);
 	
+	printf("============ %s() ======================\n", __FUNCTION__);
 	
 	int indices[MAX_HEIGHT] = {0};
 	randomize_indices(indices, MAX_HEIGHT);
@@ -463,7 +461,16 @@ static int test_random_adding(shell_context_t * shell, void * user_data)
 		printf("\t add blocks[%d] ...\n", index);
 		
 		chain->add(chain, &s_block_hashes[index], &s_block_hdrs[index]);
+		
+		for(ssize_t ii = 0; ii < list->count; ++ii)
+		{
+			active_chain_t * active = list->chains[ii];
+			
+			printf("---- chain %Zd ----: \n", ii);
+			block_info_dump_BFS(active->head);
+		}
 	}
+	
 	
 	printf("==> block height: %d, list.count=%d\n", 
 		(int)chain->height,

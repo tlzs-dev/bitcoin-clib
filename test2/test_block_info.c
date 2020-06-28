@@ -61,8 +61,7 @@ void hash256(const void * data, size_t length, unsigned char hash[])
  */
 
 
-#ifdef _DEBUG
-
+#ifdef 0
 // Breadth-first search
 void block_info_dump_BFS(block_info_t * root)
 {
@@ -98,7 +97,6 @@ void block_info_dump_BFS(block_info_t * root)
 	
 	clib_queue_cleanup(queue);
 }
-#undef MAX_QUEUE_SIZE
 #endif
 
 #define NUM_BLOCK_INFO	(10)

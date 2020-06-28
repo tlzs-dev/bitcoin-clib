@@ -229,9 +229,11 @@ static inline blockchain_heir_t * add_heir(blockchain_t * chain,
 		&heir->cumulative_difficulty, 
 		&child->cumulative_difficulty));
 		
-	tsearch(heir, &chain->search_root, blockchain_heir_compare);
+	blockchain_heir_t ** p_node = tsearch(heir, &chain->search_root, blockchain_heir_compare);
+	assert(p_node && *p_node == heir);
 	
-	debug_printf("\t add heir: timestamp=%d", (int)heir->timestamp);
+	debug_printf("\t add heir: timestamp=%d", 
+		(int)heir->timestamp);
 	return heir;
 }
 
@@ -267,6 +269,7 @@ block_info_t * blockchain_abandon_inheritances(blockchain_t * chain, blockchain_
 	
 	// reset current blockchain's height
 	chain->height = height;
+	printf("chain->height: %d\n", (int)chain->height);
 	return orphans;
 }
 
@@ -384,7 +387,9 @@ static void update_first_child_cumulative_difficulty(block_info_t * child, compa
 	while(child)
 	{
 		compact_uint256_t difficulty = compact_uint256_complement(*(compact_uint256_t *)&child->hdr->bits);
-		child->cumulative_difficulty = compact_uint256_add(difficulty, cumulative_difficulty);
+		cumulative_difficulty = compact_uint256_add(difficulty, cumulative_difficulty);
+		child->cumulative_difficulty = cumulative_difficulty;
+		
 		child = child->first_child;
 	}
 	return;
@@ -416,6 +421,8 @@ static int blockchain_add(blockchain_t * block_chain,
 	if(orphan){
 		// check chain's sub-rule
 		if(orphan->parent != NULL) return -1;
+		
+		printf("\e[32m" "--> [%s]: " "\e[39m" "\n", "CHAIN::sub-rules");
 	
 		/**
 		 * orphan is the 'head' of an active_chain, 
@@ -441,6 +448,7 @@ static int blockchain_add(blockchain_t * block_chain,
 			child = child->next_sibling;
 		}
 		head->first_child = orphan;
+		orphan->parent = head;
 		
 		// add the new orphan and 'head->hash' to the search-root
 		tsearch(orphan, &list->search_root, blockchain_heir_compare);
@@ -465,8 +473,13 @@ static int blockchain_add(blockchain_t * block_chain,
 		memcpy(orphan->hdr, hdr, sizeof(*hdr));
 		
 		// Rule I. find parent in the active_chain_list
+		
+		printf("\e[32m" "--> [%s]: " "\e[39m" "\n", "Rule I");
 		block_info_t * parent = active_chain_list_find(list, orphan->hdr->prev_hash);
 		if(parent) { // Rule II.
+			
+			printf("\e[32m" "--> [%s]: " "\e[39m" "\n", "Rule II");
+			
 			chain = get_current_chain(parent);
 			assert(chain);
 			
@@ -483,6 +496,8 @@ static int blockchain_add(blockchain_t * block_chain,
 				chain->longest_end = longest_end;
 			}
 		}else { // Rule III.
+			printf("\e[32m" "--> [%s]: " "\e[39m" "\n", "Rule III");
+			
 			chain = active_chain_new(orphan, &list->search_root);
 			assert(chain);
 			
@@ -506,6 +521,8 @@ static int blockchain_add(blockchain_t * block_chain,
 	heir = block_chain->find(block_chain, &chain->head->hash);
 	if(NULL == heir) return 0;
 	
+	
+	printf("\e[32m" "--> [%s]: " "\e[39m" "\n", "Rule IV");
 	// update longest_end's cumulative_difficulty 
 	update_first_child_cumulative_difficulty(chain->head->first_child, heir->cumulative_difficulty);
 	blockchain_heir_t * current = &block_chain->heirs[block_chain->height];
@@ -1096,6 +1113,57 @@ compact_uint256_t compact_uint256_complement(const compact_uint256_t target)
 	
 	return c;
 }
+
+
+
+/************************************
+ * utils
+ ***********************************/
+
+// Breadth-first search
+void block_info_dump_BFS(block_info_t * root)
+{
+	struct clib_queue queue[1];
+	memset(queue, 0, sizeof(queue));
+	clib_queue_init(queue, 0);
+	
+	queue->enter(queue, root);
+	
+	int level = 0;
+	void * last_id_of_current_level = root;
+	
+	printf("======== level %d ========\n", level++);
+	while(queue->length > 0)
+	{
+		block_info_t * node = queue->leave(queue);
+		printf("\t info.id = %p, parent=%p, cumulative_difficulty = 0x%.8x\n", 
+			node, node->parent,
+			node->cumulative_difficulty.bits);
+		dump_line("hash: ", &node->hash, 32);
+		if(node->hdr) {
+			dump_line("    prev-hash: ", &node->hdr->prev_hash, 32);
+			printf("    bits: 0x%.8x, nonce: %d, timestamp: %d\n", 
+				node->hdr->bits,  node->hdr->nonce, (int)node->hdr->timestamp); 
+		}
+		
+		if(node == last_id_of_current_level && node->first_child)
+		{
+			printf("======== level %d ========\n", level++);
+			last_id_of_current_level = NULL;
+		}
+
+		block_info_t * sibling = node->first_child;
+		while(sibling)
+		{
+			queue->enter(queue, sibling);
+			if(last_id_of_current_level == NULL && sibling->next_sibling == NULL) last_id_of_current_level = sibling;
+			sibling = sibling->next_sibling;
+		}
+	}
+	
+	clib_queue_cleanup(queue);
+}
+
 
 #if defined(_TEST_CHAINS) && defined(_STAND_ALONE)
 void test_compact_int_arithmetic_operations(void)
