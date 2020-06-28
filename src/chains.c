@@ -870,9 +870,8 @@ static void active_chain_remove_child(block_info_t * parent, void ** p_search_ro
 	block_info_t * child = parent->first_child;
 	while(child)
 	{
-		active_chain_remove_child(child, p_search_root);
 		tdelete(child, p_search_root, blockchain_heir_compare);
-		
+		active_chain_remove_child(child, p_search_root);
 		child = child->next_sibling;
 	}
 	return;
@@ -884,6 +883,7 @@ void active_chain_free(active_chain_t * chain)
 	
 	// remove all children from the tsearch-tree first. 
 	active_chain_remove_child(chain->head, chain->p_search_root);
+	tdelete(chain->head, chain->p_search_root, blockchain_heir_compare);
 	
 	// free all nodes except the 'head'
 	block_info_t * child = chain->head->first_child;
@@ -970,7 +970,7 @@ static int list_remove(active_chain_list_t * list, active_chain_t * chain)
 	for(i = 0; i < list->count; ++i)
 	{
 		if(list->chains[i] == chain) {
-			search_tree_traverse_BFS(&list->search_root, traverse_action_type_remove, chain->head);
+			active_chain_free(chain);
 			list->chains[i] = list->chains[--list->count];
 			list->chains[list->count] = NULL;
 			break;

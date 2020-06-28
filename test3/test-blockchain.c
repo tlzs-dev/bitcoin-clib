@@ -34,6 +34,8 @@
 #include "chains.h"
 #include <gtk/gtk.h>
 
+#include "utils.h"
+
 #include <pthread.h>
 
 #include <locale.h>
@@ -99,6 +101,7 @@ int main(int argc, char **argv)
 enum 
 {
 	main_chain_column_height,
+	main_chain_column_hash,
 	main_chain_column_bits,
 	main_chain_column_difficulty_accum,
 	main_chain_column_timestamp,
@@ -112,9 +115,17 @@ static void on_cell_data(GtkTreeViewColumn * col, GtkCellRenderer * cr, GtkTreeM
 	int index = GPOINTER_TO_INT(user_data);
 	uint64_t u64 = 0;
 	char text[100] = "";
+	unsigned char * hash = NULL;
+	int cb = 0;
 	
+	char * p = text;
 	switch(index)
 	{
+	case main_chain_column_hash:
+		gtk_tree_model_get(model, iter, index, &hash, -1);
+		cb = bin2hex(hash, 32, &p);
+		assert(cb > 0);
+		break;
 	case main_chain_column_bits:
 	case main_chain_column_difficulty_accum:
 	case main_chain_column_timestamp:
@@ -137,6 +148,16 @@ static void init_treeview_main_chain(GtkTreeView * main_chain)
 	
 	cr = gtk_cell_renderer_text_new();
 	col = gtk_tree_view_column_new_with_attributes("height", cr, "text", main_chain_column_height, NULL);
+	gtk_tree_view_append_column(main_chain, col);
+	
+	cr = gtk_cell_renderer_text_new();
+	col = gtk_tree_view_column_new_with_attributes("hash", cr, 
+	//	"text", main_chain_column_hash, 
+		NULL);
+	gtk_tree_view_column_set_resizable(col, TRUE);
+	gtk_tree_view_column_set_cell_data_func(col, cr, on_cell_data, 
+		GINT_TO_POINTER(main_chain_column_hash), 
+		NULL);
 	gtk_tree_view_append_column(main_chain, col);
 	
 	cr = gtk_cell_renderer_text_new();
@@ -166,6 +187,7 @@ static void init_treeview_main_chain(GtkTreeView * main_chain)
 	
 	GtkListStore * store = gtk_list_store_new(main_chain_columns_count, 
 		G_TYPE_INT, 
+		G_TYPE_POINTER,
 		G_TYPE_UINT, 
 		G_TYPE_UINT,
 		G_TYPE_INT64, 
@@ -336,6 +358,7 @@ void refresh_main_chain(shell_context_t * shell, blockchain_t * main_chain)
 {
 	GtkListStore * store = gtk_list_store_new(main_chain_columns_count, 
 		G_TYPE_INT, 
+		G_TYPE_POINTER,
 		G_TYPE_UINT, 
 		G_TYPE_UINT,
 		G_TYPE_INT64, 
@@ -354,6 +377,7 @@ void refresh_main_chain(shell_context_t * shell, blockchain_t * main_chain)
 		gtk_list_store_append(store, &iter);
 		gtk_list_store_set(store, &iter, 
 			main_chain_column_height, i,
+			main_chain_column_hash, (gpointer)&heirs[i].hash,
 			main_chain_column_bits, heirs[i].bits,
 			main_chain_column_difficulty_accum, heirs[i].cumulative_difficulty.bits,
 			main_chain_column_timestamp, heirs[i].timestamp,
@@ -392,7 +416,7 @@ int shell_init(shell_context_t * shell, void * jconfig)
 }
 
 
-static int s_finished = 0;
+static int s_finished = 1;
 
 typedef int (* test_module_func)(shell_context_t * shell, void * user_data);
 
@@ -483,10 +507,10 @@ static int test_random_adding(shell_context_t * shell, void * user_data)
 	printf("-- chain->search-root: %p\n", chain->search_root);
 	if(chain->search_root) twalk(chain->search_root, dump_heir_info);
 	
-	printf("-- chain->search-root: %p\n", list->search_root);
+	printf("-- list->search-root: %p\n", list->search_root);
 	if(list->search_root) twalk(list->search_root, dump_block_info);
 	
-	assert(NULL == list->search_root);
+//	assert(NULL == list->search_root);
 	
 	printf("============ %s() ======================\n", __FUNCTION__);
 	
@@ -534,6 +558,111 @@ static test_module_func tests[MAX_TESTS] = {
 	
 };
 
+static void write_buffer(block_info_t * info, VISIT which, int depth, 
+	GtkTextBuffer * buffer, GtkTextIter * iter)
+{
+	if(which == leaf || which == preorder)
+	{
+		char text[200] = "";
+		int cb = snprintf(text, sizeof(text), "%.*s(%.3d)\n", 
+			depth * 4, white_chars,
+			info->hdr?info->hdr->nonce:-1);
+		gtk_text_buffer_insert(buffer, iter, text, cb);
+	}
+}
+
+void traverse_chain(block_info_t * info, int depth, GtkTextBuffer * buffer, GtkTextIter * iter)
+{
+	if(NULL == info) return;
+	
+	if(info->first_child == NULL && info->next_sibling == NULL){	// leaf
+		write_buffer(info, leaf, depth, buffer, iter);
+	}else
+	{
+		write_buffer(info, preorder, depth, buffer, iter);
+		traverse_chain(info->first_child, depth + 1, buffer, iter);
+		
+		write_buffer(info, postorder, depth, buffer, iter);
+		traverse_chain(info->next_sibling, depth, buffer, iter);
+		
+		write_buffer(info, endorder, depth, buffer, iter);
+	}
+}
+
+static void dump_active_chain_info(GtkWidget * textview, active_chain_t * chain)
+{
+	char text[4096] = "";
+	int cb = 0;
+	GtkTextBuffer * buffer = gtk_text_buffer_new(NULL);
+	GtkTextIter iter;
+	
+	gtk_text_buffer_get_start_iter(buffer, &iter);
+	block_info_t * head = chain->head;
+	cb = snprintf(text, sizeof(text), "parent (head->hash): "); 
+	gtk_text_buffer_insert(buffer, &iter, text, cb);
+	char * hex = text;
+	cb = bin2hex(&head->hash, 32, &hex);
+	gtk_text_buffer_insert(buffer, &iter, text, cb);
+	gtk_text_buffer_insert(buffer, &iter, "\n", 1);
+	 
+	traverse_chain(head, 0, buffer, &iter);
+	
+	gtk_text_view_set_buffer(GTK_TEXT_VIEW(textview), buffer);
+	return;
+}
+
+static void on_summary(shell_context_t * shell, blockchain_t * main_chain)
+{
+	char summary[4096] = "";
+	GtkTextBuffer * buffer = gtk_text_buffer_new(NULL);
+	GtkTextIter iter;
+	gtk_text_buffer_get_start_iter(buffer, &iter);
+	
+	int cb = snprintf(summary, sizeof(summary), "blockchain height: %d\n"
+		"active_chains count: %d\n",
+		(int)g_main_chain->height, 
+		(int)g_main_chain->candidates_list->count);
+	gtk_text_buffer_insert(buffer, &iter, summary, cb);
+	gtk_text_view_set_buffer(GTK_TEXT_VIEW(shell->logview), buffer);
+		
+	active_chain_list_t * list = main_chain->candidates_list;
+	if(list->count < shell->num_active_chains)
+	{
+		for(int i = list->count; i <= shell->num_active_chains; ++i)
+		{
+			gtk_notebook_remove_page(GTK_NOTEBOOK(shell->notebook), i + 1);
+		}
+	}
+	
+	
+	if(shell->num_active_chains <= list->count)
+	{
+		char name[100] = "";
+		shell->active_chains = realloc(shell->active_chains, list->count * sizeof(*shell->active_chains));
+		assert(shell->active_chains);
+		
+		for(int i = 0; i < list->count; ++i)
+		{
+			if(i >= shell->num_active_chains)
+			{
+				snprintf(name, sizeof(name), "chain %d", i);
+				GtkWidget * scrolled_win = gtk_scrolled_window_new(NULL, NULL);
+				shell->active_chains[i] = gtk_text_view_new();
+				gtk_container_add(GTK_CONTAINER(scrolled_win), shell->active_chains[i]);
+				gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scrolled_win), GTK_POLICY_AUTOMATIC, GTK_POLICY_ALWAYS);
+				gtk_scrolled_window_set_shadow_type(GTK_SCROLLED_WINDOW(scrolled_win), GTK_SHADOW_ETCHED_IN);
+				
+				gtk_widget_show_all(scrolled_win);
+				gtk_notebook_append_page(GTK_NOTEBOOK(shell->notebook), scrolled_win, gtk_label_new(name));
+			}
+			
+			dump_active_chain_info(shell->active_chains[i], list->chains[i]);
+			
+		}
+	}
+	shell->num_active_chains = list->count;
+}
+
 
 static gboolean on_timer(shell_context_t * shell)
 {
@@ -550,46 +679,7 @@ static gboolean on_timer(shell_context_t * shell)
 		gdk_window_set_cursor(gtk_widget_get_window(shell->window), 
 		gdk_cursor_new_from_name(gtk_widget_get_display(shell->window), "default"));
 		
-		char summary[4096] = "";
-		GtkTextBuffer * buffer = gtk_text_buffer_new(NULL);
-		GtkTextIter iter;
-		gtk_text_buffer_get_start_iter(buffer, &iter);
-		
-		int cb = snprintf(summary, sizeof(summary), "blockchain height: %d\n"
-			"active_chains count: %d\n",
-			(int)g_main_chain->height, 
-			(int)g_main_chain->candidates_list->count);
-		gtk_text_buffer_insert(buffer, &iter, summary, cb);
-		gtk_text_view_set_buffer(GTK_TEXT_VIEW(shell->logview), buffer);
-			
-		active_chain_list_t * list = g_main_chain->candidates_list;
-		if(list->count < shell->num_active_chains)
-		{
-			for(int i = list->count; i <= shell->num_active_chains; ++i)
-			{
-				gtk_notebook_remove_page(GTK_NOTEBOOK(shell->notebook), i + 1);
-			}
-		}
-		
-		
-		if(shell->num_active_chains <= list->count)
-		{
-			char name[100] = "";
-			shell->active_chains = realloc(shell->active_chains, list->count * sizeof(*shell->active_chains));
-			assert(shell->active_chains);
-			
-			for(int i = shell->num_active_chains; i < list->count; ++i)
-			{
-				snprintf(name, sizeof(name), "chain %d", i);
-				GtkWidget * scrolled_win = gtk_scrolled_window_new(NULL, NULL);
-				shell->active_chains[i] = gtk_tree_view_new();
-				gtk_container_add(GTK_CONTAINER(scrolled_win), shell->active_chains[i]);
-				
-				gtk_widget_show_all(scrolled_win);
-				gtk_notebook_append_page(GTK_NOTEBOOK(shell->notebook), scrolled_win, gtk_label_new(name));
-			}
-		}
-		shell->num_active_chains = list->count;
+		on_summary(shell, g_main_chain);
 		
 		
 		return G_SOURCE_REMOVE;
@@ -608,8 +698,7 @@ static void * do_test(void * user_data)
 	
 	///< @todo
 	/// ...
-	test_module_func func = tests[test_index++];
-	test_index %= MAX_TESTS;
+	test_module_func func = tests[test_index];
 	
 	if(func) func(shell, g_main_chain);
 	
@@ -623,7 +712,7 @@ static void run_test(shell_context_t * shell)
 	GtkWidget * statusbar = shell->statusbar;
 	assert(header_bar && statusbar);
 	
-	if(s_finished) return; // is busy
+	if(!s_finished) return; // is busy
 	
 	s_finished = 0;
 	guint timer_id = g_timeout_add(100, (GSourceFunc)on_timer, shell);
