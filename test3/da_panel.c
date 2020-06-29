@@ -54,9 +54,12 @@ static gboolean on_button_release(GtkWidget * da, GdkEventButton * event, struct
 static gboolean on_motion_notify(GtkWidget * da, GdkEventMotion * event, struct da_panel * panel);
 
 
-static inline void clear_surface(cairo_surface_t * surface)
+static void clear_surface(struct da_panel * panel)
 {
+	assert(panel);
+	cairo_surface_t * surface = panel->surface;
 	if(NULL == surface) return;
+	
 	cairo_t * cr = cairo_create(surface);
 	assert(cr);
 	cairo_set_source_rgba(cr, 0, 0, 0, 1);
@@ -70,6 +73,7 @@ struct da_panel * da_panel_init(struct da_panel * panel, int image_width, int im
 	if(NULL == panel) panel = calloc(1, sizeof(*panel));
 	assert(panel);
 	panel->shell = shell;
+	panel->clear = clear_surface;
 	
 	assert(image_width > 1 && image_height > 1);
 	unsigned char * image_data = malloc(image_width * image_height * 4);	// bgra_data
@@ -81,13 +85,14 @@ struct da_panel * da_panel_init(struct da_panel * panel, int image_width, int im
 		image_width * 4);
 	assert(surface && CAIRO_STATUS_SUCCESS == cairo_surface_status(surface));
 	
-	clear_surface(surface);
+	
 	
 	panel->surface = surface;
 	panel->image_data = image_data;
 	panel->image_width = image_width;
 	panel->image_height = image_height;
 	
+	panel->clear(panel);
 	
 	GtkWidget * da = gtk_drawing_area_new();
 	GtkWidget * frame = gtk_frame_new(NULL);

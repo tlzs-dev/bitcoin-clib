@@ -21,6 +21,8 @@ struct da_panel
 	
 	double x_offset;
 	double y_offset;
+	
+	void (* clear)(struct da_panel * panel);
 };
 struct da_panel * da_panel_init(struct da_panel * panel, int image_width, int image_height, void * shell);
 void da_panel_cleanup(struct da_panel * panel);

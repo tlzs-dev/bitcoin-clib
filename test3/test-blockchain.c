@@ -845,6 +845,8 @@ static void draw_summary(shell_context_t * shell)
 {
 	struct da_panel * panel = &shell->panels[0];
 	assert(panel && panel->image_width > 1 && panel->image_height > 1);
+	
+	panel->clear(panel);
 
 	blockchain_t * main_chain = g_main_chain;
 	active_chain_list_t * list = main_chain->candidates_list;
