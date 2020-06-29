@@ -78,6 +78,7 @@ typedef struct shell_context
 	struct da_panel panels[1];
 	
 	int indices_selected[MAX_HEIGHT];
+	int last_indice;
 }shell_context_t;
 
 static blockchain_t g_main_chain[1];
@@ -544,6 +545,7 @@ static int test_random_adding(shell_context_t * shell, void * user_data)
 	++last_index;
 	if(last_index >= MAX_HEIGHT) last_index = 0;
 	
+	
 	if(last_index == 0)	// reset dataset
 	{
 		randomize_indices(indices, MAX_HEIGHT);
@@ -572,6 +574,7 @@ static int test_random_adding(shell_context_t * shell, void * user_data)
 	}
 	
 	shell->indices_selected[indices[last_index]] = 1;
+	shell->last_indice = indices[last_index];
 	int index = indices[last_index] + 1;
 	
 	printf("============ %s() ======================\n", __FUNCTION__);
@@ -843,9 +846,9 @@ static void draw_summary(shell_context_t * shell)
 	struct da_panel * panel = &shell->panels[0];
 	assert(panel && panel->image_width > 1 && panel->image_height > 1);
 
+	blockchain_t * main_chain = g_main_chain;
+	active_chain_list_t * list = main_chain->candidates_list;
 
-
-#define NUM_CHAINS 3
 	int * indices_selected = shell->indices_selected;
 	
 	cairo_t * cr = cairo_create(panel->surface);
@@ -861,14 +864,22 @@ static void draw_summary(shell_context_t * shell)
 	}colors[] = {
 		[0] = {0, 1, 0, 1}, // green, means 'not selected'
 		[1] = {1, 0, 0, 1}, // red, means 'selected'
+		
 		[2] = {1, 1, 1, 1}, // white, border color
+		[3] = {0.5, 0.5, 0.5, 1}, // gray, means already in the BLOCKCHAIN
 	};
 	
 	for(int i = 0; i < MAX_HEIGHT; ++i)
 	{
 		x = i * item_size;
 		int state = indices_selected[i];
-		cairo_set_source_rgba(cr, colors[state].r,  colors[state].g,  colors[state].b,  colors[state].a);
+		if((i + 1) <= main_chain->height)
+		{
+			cairo_set_source_rgba(cr, colors[3].r,  colors[3].g,  colors[3].b,  colors[3].a);
+		}else
+		{
+			cairo_set_source_rgba(cr, colors[state].r,  colors[state].g,  colors[state].b,  colors[state].a);
+		}
 		cairo_rectangle(cr, x, y, item_size, item_size);
 		cairo_fill_preserve(cr);
 		
@@ -878,28 +889,35 @@ static void draw_summary(shell_context_t * shell)
 	
 	// draw active_chains
 	
-	
 	int radius = item_size / 2 - 2;
 	if(radius < 1) radius = 1;
 	
-	blockchain_t * main_chain = g_main_chain;
-	active_chain_list_t * list = main_chain->candidates_list;
-		
 	for(int i = 0; i < list->count; ++i)
 	{
 		y += item_size * 2;
 		active_chain_t * chain = list->chains[i];
 		block_info_t * child = chain->head->first_child;
 		
+		// clear current region
+		cairo_set_source_rgb(cr, 0, 0, 0);
+		cairo_rectangle(cr, 0, y, panel->image_width, item_size * 2);
+		cairo_fill(cr);
+		
 		// draw first-child only
-		cairo_set_line_width(cr, 1);
-		cairo_set_source_rgba(cr, 0, 1, 1, 0.8); // cyan for chain's nodes
 		cairo_set_dash(cr, NULL, 0, 0);
 		
 		while(child)
 		{
 			assert(child->hdr);
-			int indice = (int)child->hdr->timestamp - 1;	
+			int indice = (int)child->hdr->timestamp - 1;
+			if(indice == shell->last_indice) {
+				cairo_set_line_width(cr, 3);
+				cairo_set_source_rgb(cr, 1, 1, 0);	// set to yellow for newly added item
+			}
+			else {
+				cairo_set_line_width(cr, 1);
+				cairo_set_source_rgba(cr, 0, 1, 1, 1); // cyan for other chain's nodes
+			}
 			x = indice * item_size;
 			cairo_arc(cr, x + radius, y + radius, radius, 0, M_PI * 2.0);
 			
@@ -919,6 +937,7 @@ static void draw_summary(shell_context_t * shell)
 	}
 	
 	cairo_destroy(cr);
+	gtk_widget_queue_draw(panel->da);
 	return;
 }
 
