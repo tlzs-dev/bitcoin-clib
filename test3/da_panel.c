@@ -40,24 +40,10 @@
 #include <assert.h>
 
 #include <math.h>
+#include "da_panel.h"
 
 #include <gtk/gtk.h>
 
-struct da_panel
-{
-	void * shell;
-	GtkWidget * frame;
-	GtkWidget * da;
-	int width, height;	// widget size
-	
-	cairo_surface_t * surface;
-	unsigned char * image_data;
-	int image_width;
-	int image_height;
-	
-	double x_offset;
-	double y_offset;
-};
 static void on_da_resize(GtkWidget * da, GdkRectangle * allocation, struct da_panel * panel);
 static gboolean on_da_draw(GtkWidget * da, cairo_t * cr, struct da_panel * panel);
 

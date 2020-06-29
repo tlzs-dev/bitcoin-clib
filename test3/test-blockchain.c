@@ -30,9 +30,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+#include <math.h>
 
 #include "chains.h"
 #include <gtk/gtk.h>
+
+
 
 #include "utils.h"
 
@@ -44,6 +47,10 @@
 #define _(str) gettext(str)
 #endif
 
+#include "da_panel.h"
+
+
+#define MAX_HEIGHT (100)
 typedef struct shell_context
 {
 	void * user_data;
@@ -67,6 +74,10 @@ typedef struct shell_context
 	ssize_t num_active_chains;
 	GtkWidget ** active_chains;
 
+	// struct da_panel
+	struct da_panel panels[1];
+	
+	int indices_selected[MAX_HEIGHT];
 }shell_context_t;
 
 static blockchain_t g_main_chain[1];
@@ -77,6 +88,7 @@ int shell_init(shell_context_t * shell, void * jconfig);
 int shell_run(shell_context_t * shell);
 int shell_stop(shell_context_t * shell);
 void shell_cleanup(shell_context_t * shell);
+
 
 int main(int argc, char **argv)
 {
@@ -197,7 +209,7 @@ static void init_treeview_main_chain(GtkTreeView * main_chain)
 }
 
 static void run_test(shell_context_t * shell);
-
+static void draw_summary(shell_context_t * shell);
 
 static int init_windows(shell_context_t * shell)
 {
@@ -276,6 +288,8 @@ static int init_windows(shell_context_t * shell)
 	//~ gtk_stack_switcher_set_stack(GTK_STACK_SWITCHER(switcher), GTK_STACK(stack));
 	shell->logview = logview;
 	
+	
+	
 	GtkCssProvider * css = gtk_css_provider_new();
 	GError * gerr = NULL;
 	gtk_css_provider_load_from_data(css, ".logview { font: 16px monospace;}", -1, &gerr);
@@ -291,10 +305,17 @@ static int init_windows(shell_context_t * shell)
 	gtk_style_context_add_provider(style, GTK_STYLE_PROVIDER(css), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
 	gtk_style_context_add_class(style, "logview");
 	
+	GtkWidget * vpaned = gtk_paned_new(GTK_ORIENTATION_VERTICAL);
+	gtk_paned_add1(GTK_PANED(vpaned), scrolled_win);
 	
+	struct da_panel * panel = da_panel_init(&shell->panels[0], 1000, 800, shell);
+	assert(panel);
+	
+	gtk_paned_add2(GTK_PANED(vpaned), panel->frame);
+	gtk_paned_set_position(GTK_PANED(vpaned), 180);
 	
 	GtkWidget * label = gtk_label_new("Summary");
-	gtk_notebook_append_page(GTK_NOTEBOOK(notebook), scrolled_win, label);
+	gtk_notebook_append_page(GTK_NOTEBOOK(notebook), vpaned, label);
 	
 	gtk_grid_attach(GTK_GRID(grid), notebook, 1, 0, 1, 2);
 	
@@ -350,7 +371,6 @@ void shell_cleanup(shell_context_t * shell)
 extern const uint256_t g_genesis_block_hash[1];
 extern const struct satoshi_block_header g_genesis_block_hdr[1];
 
-#define MAX_HEIGHT (100)
 static uint256_t s_block_hashes[1 + MAX_HEIGHT];
 static struct satoshi_block_header s_block_hdrs[1 + MAX_HEIGHT];
 
@@ -364,7 +384,7 @@ static int init_dataset(void)
 	{
 		struct satoshi_block_header * hdr = &s_block_hdrs[i];
 		memcpy(hdr->prev_hash, &s_block_hashes[i - 1], 32);
-		hdr->timestamp = i;
+		hdr->timestamp = i;	// use timestamp as index just for testing
 		hdr->bits = 0x1d00ffff;
 		hdr->nonce = seed++;
 		hash256(hdr, sizeof(*hdr), (unsigned char *)&s_block_hashes[i]);
@@ -522,9 +542,12 @@ static int test_random_adding(shell_context_t * shell, void * user_data)
 	static int indices[MAX_HEIGHT] = {0};
 	
 	++last_index;
+	if(last_index >= MAX_HEIGHT) last_index = 0;
+	
 	if(last_index == 0)	// reset dataset
 	{
 		randomize_indices(indices, MAX_HEIGHT);
+		memset(shell->indices_selected, 0, sizeof(shell->indices_selected));
 		
 		blockchain_abandon_inheritances(chain, &chain->heirs[0]);
 		assert(0 == chain->height);
@@ -548,13 +571,10 @@ static int test_random_adding(shell_context_t * shell, void * user_data)
 	//	assert(NULL == list->search_root);
 	}
 	
-	if(last_index >= MAX_HEIGHT) last_index = 0;
-	
+	shell->indices_selected[indices[last_index]] = 1;
+	int index = indices[last_index] + 1;
 	
 	printf("============ %s() ======================\n", __FUNCTION__);
-	
-	
-	int index = indices[last_index] + 1;
 	printf("\t add blocks[%d] ...\n", index);
 	
 	int rc = chain->add(chain, &s_block_hashes[index], &s_block_hdrs[index]);
@@ -739,6 +759,8 @@ static void on_summary(shell_context_t * shell, blockchain_t * main_chain)
 		}
 	}
 	shell->num_active_chains = list->count;
+	
+	draw_summary(shell);
 }
 
 
@@ -809,3 +831,97 @@ static void run_test(shell_context_t * shell)
 	return;
 }
 
+
+
+
+
+/*******************************************************
+ * draw summary graph
+******************************************************/
+static void draw_summary(shell_context_t * shell)
+{
+	struct da_panel * panel = &shell->panels[0];
+	assert(panel && panel->image_width > 1 && panel->image_height > 1);
+
+
+
+#define NUM_CHAINS 3
+	int * indices_selected = shell->indices_selected;
+	
+	cairo_t * cr = cairo_create(panel->surface);
+	cairo_set_line_width(cr, 2);
+	
+	// draw main_chain
+	int x = 0;
+	int y = 0; 
+	int item_size = 10;
+	
+	struct {
+		double r, g, b, a;
+	}colors[] = {
+		[0] = {0, 1, 0, 1}, // green, means 'not selected'
+		[1] = {1, 0, 0, 1}, // red, means 'selected'
+		[2] = {1, 1, 1, 1}, // white, border color
+	};
+	
+	for(int i = 0; i < MAX_HEIGHT; ++i)
+	{
+		x = i * item_size;
+		int state = indices_selected[i];
+		cairo_set_source_rgba(cr, colors[state].r,  colors[state].g,  colors[state].b,  colors[state].a);
+		cairo_rectangle(cr, x, y, item_size, item_size);
+		cairo_fill_preserve(cr);
+		
+		cairo_set_source_rgba(cr, colors[2].r,  colors[2].g,  colors[2].b,  colors[2].a);
+		cairo_stroke(cr);
+	}
+	
+	// draw active_chains
+	
+	
+	int radius = item_size / 2 - 2;
+	if(radius < 1) radius = 1;
+	
+	blockchain_t * main_chain = g_main_chain;
+	active_chain_list_t * list = main_chain->candidates_list;
+		
+	for(int i = 0; i < list->count; ++i)
+	{
+		y += item_size * 2;
+		active_chain_t * chain = list->chains[i];
+		block_info_t * child = chain->head->first_child;
+		
+		// draw first-child only
+		cairo_set_line_width(cr, 1);
+		cairo_set_source_rgba(cr, 0, 1, 1, 0.8); // cyan for chain's nodes
+		cairo_set_dash(cr, NULL, 0, 0);
+		
+		while(child)
+		{
+			assert(child->hdr);
+			int indice = (int)child->hdr->timestamp - 1;	
+			x = indice * item_size;
+			cairo_arc(cr, x + radius, y + radius, radius, 0, M_PI * 2.0);
+			
+			child = child->first_child;
+		}
+		cairo_stroke(cr);
+		
+		// draw a line for separation
+		
+		double dashes[1] = {2.0};
+		cairo_set_line_width(cr, 2);
+		cairo_set_dash(cr, dashes, 1, 0);
+		cairo_set_source_rgb(cr, 0.8, 0.8, 0.8);
+		cairo_move_to(cr, 0, y + item_size + item_size / 2);
+		cairo_line_to(cr, panel->image_width, y + item_size + item_size / 2);
+		cairo_stroke(cr);
+	}
+	
+	cairo_destroy(cr);
+	return;
+}
+
+
+
+#undef MAX_HEIGHT 

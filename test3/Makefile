@@ -42,7 +42,7 @@ UTILS_OBJECTS := $(UTILS_SOURCES:$(UTILS_SRC_DIR)/%.c=$(UTILS_OBJ_DIR)/%.o)
 
 all: do_init $(TARGET)
 
-$(TARGET): $(OBJECTS) $(BASE_OBJECTS) $(UTILS_OBJECTS) test-blockchain.c
+$(TARGET): $(OBJECTS) $(BASE_OBJECTS) $(UTILS_OBJECTS) test-blockchain.c da_panel.c
 	$(LINKER) $(OPTIMIZE) -o $@ $^ $(LIBS) $(CFLAGS)
 	
 
