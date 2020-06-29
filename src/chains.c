@@ -440,78 +440,65 @@ static int blockchain_add(blockchain_t * block_chain,
 		assert(orphan);
 		memcpy(orphan->hdr, hdr, sizeof(*hdr));
 		
-		// set parent hash to the 'head', and claim the chain
-		memcpy(head, hdr->prev_hash, sizeof(uint256_t));
+		// and claim the children on the chain
 		block_info_t * child = head->first_child;
 		while(child) {
 			block_info_add_child(orphan, child);
 			child = child->next_sibling;
 		}
-		head->first_child = orphan;
-		orphan->parent = head;
 		
-		// add the new orphan and 'head->hash' to the search-root
+		// delte the chain from the list.
+		chain->head->first_child = NULL;
+		list->remove(list, chain);
+	}
+	
+	// create a new node if chain's sub-rule is not executed
+	if(NULL == orphan) {
+		orphan = block_info_new(block_hash, NULL);
+		assert(orphan);
+		memcpy(orphan->hdr, hdr, sizeof(*hdr));
+	}
+	
+	// Rule I. find parent in the active_chain_list
+	
+	printf("\e[32m" "--> [%s]: " "\e[39m" "\n", "Rule I");
+	block_info_t * parent = active_chain_list_find(list, orphan->hdr->prev_hash);
+	if(parent) { // Rule II.
+		
+		printf("\e[32m" "--> [%s]: " "\e[39m" "\n", "Rule II");
+		
+		chain = get_current_chain(parent);
+		assert(chain);
+		
+		block_info_add_child(parent, orphan);
+		block_info_update_cumulative_difficulty(orphan, parent->cumulative_difficulty, &longest_end);
+		
+		// add the new orphan to the search-root
 		tsearch(orphan, &list->search_root, blockchain_heir_compare);
-		tsearch(head, &list->search_root, blockchain_heir_compare);
 		
 		// update chain's longest_end
-		block_info_update_cumulative_difficulty(orphan, compact_uint256_zero, &longest_end);
 		if(longest_end != chain->longest_end)
 		{
 			block_info_declare_inheritance(longest_end);
 			chain->longest_end = longest_end;
 		}
+	}else { // Rule III.
+		printf("\e[32m" "--> [%s]: " "\e[39m" "\n", "Rule III");
+		
+		chain = active_chain_new(orphan, &list->search_root);
+		assert(chain);
+		
+		list->add(list, chain);
+		
+		debug_printf("== new chain: %p", chain);
+		
+		// find the longest-end
+		block_info_update_cumulative_difficulty(orphan, 
+			compact_uint256_zero,
+			&chain->longest_end);
 
 	}
 	
-	if(NULL == chain)
-	{
-		// create a new node
-		assert(NULL == orphan);
-		orphan = block_info_new(block_hash, NULL);
-		assert(orphan);
-		memcpy(orphan->hdr, hdr, sizeof(*hdr));
-		
-		// Rule I. find parent in the active_chain_list
-		
-		printf("\e[32m" "--> [%s]: " "\e[39m" "\n", "Rule I");
-		block_info_t * parent = active_chain_list_find(list, orphan->hdr->prev_hash);
-		if(parent) { // Rule II.
-			
-			printf("\e[32m" "--> [%s]: " "\e[39m" "\n", "Rule II");
-			
-			chain = get_current_chain(parent);
-			assert(chain);
-			
-			block_info_add_child(parent, orphan);
-			block_info_update_cumulative_difficulty(orphan, parent->cumulative_difficulty, &longest_end);
-			
-			// add the new orphan to the search-root
-			tsearch(orphan, &list->search_root, blockchain_heir_compare);
-			
-			// update chain's longest_end
-			if(longest_end != chain->longest_end)
-			{
-				block_info_declare_inheritance(longest_end);
-				chain->longest_end = longest_end;
-			}
-		}else { // Rule III.
-			printf("\e[32m" "--> [%s]: " "\e[39m" "\n", "Rule III");
-			
-			chain = active_chain_new(orphan, &list->search_root);
-			assert(chain);
-			
-			list->add(list, chain);
-			
-			debug_printf("== new chain: %p", chain);
-			
-			// find the longest-end
-			block_info_update_cumulative_difficulty(orphan, 
-				compact_uint256_zero,
-				&chain->longest_end);
-
-		}
-	}
 	
 	assert(chain);
 	

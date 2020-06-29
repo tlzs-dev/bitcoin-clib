@@ -574,8 +574,9 @@ static int test_random_adding(shell_context_t * shell, void * user_data)
 	}
 	
 	shell->indices_selected[indices[last_index]] = 1;
-	shell->last_indice = indices[last_index];
+	
 	int index = indices[last_index] + 1;
+	shell->last_indice = index;
 	
 	printf("============ %s() ======================\n", __FUNCTION__);
 	printf("\t add blocks[%d] ...\n", index);
@@ -875,8 +876,7 @@ static void draw_summary(shell_context_t * shell)
 	{
 		x = i * item_size;
 		int state = indices_selected[i];
-		if((i + 1) <= main_chain->height)
-		{
+		if((i + 1) <= main_chain->height) {
 			cairo_set_source_rgba(cr, colors[3].r,  colors[3].g,  colors[3].b,  colors[3].a);
 		}else
 		{
@@ -908,11 +908,19 @@ static void draw_summary(shell_context_t * shell)
 		// draw first-child only
 		cairo_set_dash(cr, NULL, 0, 0);
 		
+		int has_newly_added_node = 0;
 		while(child)
 		{
 			assert(child->hdr);
 			int indice = (int)child->hdr->timestamp - 1;
-			if(indice == shell->last_indice) {
+			
+			if((indice + 1) == shell->last_indice){
+				has_newly_added_node = 1;
+			}
+			
+		
+			if(has_newly_added_node)
+			{
 				cairo_set_line_width(cr, 3);
 				cairo_set_source_rgb(cr, 1, 1, 0);	// set to yellow for newly added item
 			}

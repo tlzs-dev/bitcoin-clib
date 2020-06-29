@@ -86,7 +86,9 @@ typedef struct active_chain
 		
 		- When a new-orphan(A) is looking for himself according to the Rule-0,
 		  and gets a node whose parent is NULL, then the node is not A himself, 
-		  but A is the parent whom the chain is looking for, and A should claim the chain.
+		  but A is the parent whom the chain is looking for, and A should claim the children on the chain.
+		
+		- After claiming the children, continue to execute Rule-I.
 	 */
 	struct block_info head[1];
 	
