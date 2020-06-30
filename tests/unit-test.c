@@ -295,8 +295,8 @@ void test_blockchain_load_data(const char * data_dir, const char * file_prefix, 
 			
 			printf("add blocks[%d]: hash=(0x%.8x...), prev_hash=(0x%.8x)\n", 
 				num_blocks, 
-				htobe32(*(uint32_t *)&block->hash),
-				htobe32(*(uint32_t *)&block->hdr.prev_hash)
+				be32toh(*(uint32_t *)&block->hash),
+				be32toh(*(uint32_t *)&block->hdr.prev_hash)
 				);
 			
 		
@@ -344,7 +344,7 @@ void blockchain_dump(blockchain_t * main_chain)
 			"bits=0x%.8x, "
 			"cumulative_difficulty=0x%.8x\n", 
 			i,
-			htobe32(*(uint32_t *)&heir->hash),
+			be32toh(*(uint32_t *)&heir->hash),
 			heir->bits,
 			heir->cumulative_difficulty.bits
 			); 
@@ -360,7 +360,7 @@ void blockchain_dump(blockchain_t * main_chain)
 		active_chain_t * chain = list->chains[i];
 		assert(chain);
 	
-		printf("\t" "head: 0x%.8x...\n", htobe32(*(uint32_t *)&chain->head->hash)); 
+		printf("\t" "head: 0x%.8x...\n", be32toh(*(uint32_t *)&chain->head->hash)); 
 		const blockchain_heir_t * parent = main_chain->find(main_chain, &chain->head->hash);
 		
 		if(parent) printf("\t" "parent height: %Zd\n", parent - main_chain->heirs);
@@ -373,7 +373,7 @@ void blockchain_dump(blockchain_t * main_chain)
 				"hash: (0x%.8x...), "
 				"cumulative_difficulty = 0x%.8x\n", 
 				index++, 
-				htobe32(*(uint32_t *)&child->hash), 
+				be32toh(*(uint32_t *)&child->hash), 
 				child->cumulative_difficulty.bits);
 			child = child->first_child;
 		}

@@ -175,6 +175,14 @@ typedef struct blockchain
 	 * add(): only increments are allowed, any reorganization must be done by internal.
 	 */
 	int (* add)(struct blockchain * chain, const uint256_t * hash, const struct satoshi_block_header * hdr);
+	
+	/**
+	 * virtual functions: 
+	 *     callbacks for updating utxoes_db
+	 *     would be executed when adding/removing heirs if these callbacks are not set to NULL.
+	 */ 
+	int (* on_remove_block)(struct blockchain * chain, const uint256_t * block_hash, const int height, void * user_data);
+	int (* on_add_block)(struct blockchain * chain, const uint256_t * block_hash, const int height, void * user_data);
 }blockchain_t;
 
 blockchain_t * blockchain_init(blockchain_t * chain, 

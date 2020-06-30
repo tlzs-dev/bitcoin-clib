@@ -249,22 +249,24 @@ block_info_t * blockchain_abandon_inheritances(blockchain_t * chain, blockchain_
 		return NULL;
 	}
 	
+	// abandon in reverse order (from the last-child to the parent)
 	blockchain_heir_t * last_offspring = &chain->heirs[chain->height];
-	struct block_info * orphans = abandon_child(chain, parent, parent + 1);
+	struct block_info * orphans = NULL;
 	
-	if(orphans)
+	while(last_offspring > parent)
 	{
-		// bring all the orphan's heirs away
-		struct block_info * orphan = orphans;
-		++parent;	// next child
-		while(parent < last_offspring)
-		{
-			struct block_info * child = abandon_child(chain, parent, parent + 1);
-			block_info_add_child(orphan, child);
-			
-			orphan = child;
-			++parent;
-		}
+		struct block_info * current = abandon_child(chain, last_offspring - 1, last_offspring);
+		
+		if(chain->on_remove_block) chain->on_remove_block(chain, 
+			last_offspring->hash,
+			last_offspring - chain->heirs,
+			chain->user_data); 
+		
+		current->first_child = orphans;
+		if(orphans) orphans->parent = current;
+		orphans = current;
+		
+		--last_offspring;
 	}
 	
 	// reset current blockchain's height
@@ -286,6 +288,13 @@ static struct block_info * blockchain_add_inheritances(blockchain_t * chain,
 		parent = add_heir(chain, parent, child);
 		assert(parent);
 		
+		if(chain->on_add_block) {
+			chain->on_add_block(chain, 
+				&child->hash, 
+				parent - chain->heirs,
+				chain->user_data);
+		}
+		
 		++height;
 		child = child->first_child;
 	}
@@ -293,6 +302,11 @@ static struct block_info * blockchain_add_inheritances(blockchain_t * chain,
 	chain->height = height;
 	return orphans;
 }
+
+/*
+static int on_remove_block(struct blockchain * chain, const uint256_t * block_hash, const int height, void * user_data);
+static int on_add_block(struct blockchain * chain, const uint256_t * block_hash, const int height, void * user_data);
+*/
 
 blockchain_t * blockchain_init(blockchain_t * chain, 
 	const uint256_t * genesis_block_hash, 
