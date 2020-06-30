@@ -433,7 +433,7 @@ static int blockchain_add(blockchain_t * block_chain,
 		chain = (active_chain_t *)head;
 		
 		// First, remove the head->hash from the search-root.
-		tdelete(head, &list->search_root, blockchain_heir_compare);
+		list->search_tree_remove(list, head);
 		
 		// create a new node
 		orphan = block_info_new(block_hash, NULL);
@@ -447,7 +447,9 @@ static int blockchain_add(blockchain_t * block_chain,
 			child = child->next_sibling;
 		}
 		
-		// delte the chain from the list.
+		block_info_update_cumulative_difficulty(orphan, compact_uint256_zero, NULL);
+		
+		// delete the chain from the list.
 		chain->head->first_child = NULL;
 		list->remove(list, chain);
 	}
@@ -458,6 +460,8 @@ static int blockchain_add(blockchain_t * block_chain,
 		assert(orphan);
 		memcpy(orphan->hdr, hdr, sizeof(*hdr));
 	}
+
+	list->search_tree_add(list, orphan);
 	
 	// Rule I. find parent in the active_chain_list
 	
@@ -472,10 +476,7 @@ static int blockchain_add(blockchain_t * block_chain,
 		
 		block_info_add_child(parent, orphan);
 		block_info_update_cumulative_difficulty(orphan, parent->cumulative_difficulty, &longest_end);
-		
-		// add the new orphan to the search-root
-		tsearch(orphan, &list->search_root, blockchain_heir_compare);
-		
+	
 		// update chain's longest_end
 		if(longest_end != chain->longest_end)
 		{
@@ -485,9 +486,11 @@ static int blockchain_add(blockchain_t * block_chain,
 	}else { // Rule III.
 		printf("\e[32m" "--> [%s]: " "\e[39m" "\n", "Rule III");
 		
-		chain = active_chain_new(orphan, &list->search_root);
+		chain = active_chain_new(orphan, NULL);
 		assert(chain);
+		chain->p_search_root = &list->search_root;
 		
+		list->search_tree_add(list, chain->head);
 		list->add(list, chain);
 		
 		debug_printf("== new chain: %p", chain);
@@ -496,23 +499,24 @@ static int blockchain_add(blockchain_t * block_chain,
 		block_info_update_cumulative_difficulty(orphan, 
 			compact_uint256_zero,
 			&chain->longest_end);
-
 	}
 	
 	
 	assert(chain);
-	
 	longest_end = chain->longest_end;
 	
 	// Rule IV. find parent in the BLOCKCHAIN
 	heir = block_chain->find(block_chain, &chain->head->hash);
 	if(NULL == heir) return 0;
-	
-	
+
 	printf("\e[32m" "--> [%s]: " "\e[39m" "\n", "Rule IV");
 	// update longest_end's cumulative_difficulty 
 	update_first_child_cumulative_difficulty(chain->head->first_child, heir->cumulative_difficulty);
 	blockchain_heir_t * current = &block_chain->heirs[block_chain->height];
+	
+	printf("chain->difficulty: 0x%.8x\n", chain->longest_end->cumulative_difficulty.bits);
+	printf("current->max_diff: 0x%.8x\n", current->cumulative_difficulty.bits);
+		
 	
 	if(compact_uint256_compare(
 		&chain->longest_end->cumulative_difficulty, 
@@ -536,11 +540,9 @@ static int blockchain_add(blockchain_t * block_chain,
 		block_info_t * child = successor->first_child;
 		while(child)	
 		{
-			tdelete(child, &list->search_root, blockchain_heir_compare);
-			child = child->next_sibling;
+			list->search_tree_remove(list, child);
+			child = child->first_child;
 		} 
-		
-		
 		
 		// leave the current chain (swap positions with the orphan or the next_sibling)
 		if(orphans) {
@@ -652,11 +654,6 @@ void block_info_free(block_info_t * info)
 	if(info->hdr_free) {
 		info->hdr_free(info->hdr);
 	}
-	
-#ifdef _DEBUG
-	printf("==> free %p, id=%d\n", info, info->id);
-#endif
-	
 	free(info);
 }
 
@@ -823,8 +820,7 @@ int block_info_declare_inheritance(block_info_t * heir)
 active_chain_t * active_chain_new(block_info_t * orphan, void ** p_search_root)
 {
 	assert(orphan && orphan->hdr);
-	assert(p_search_root);
-	
+
 	active_chain_t * chain = calloc(1, sizeof(*chain));
 	assert(chain);
 	chain->p_search_root = p_search_root;
@@ -986,6 +982,22 @@ static int active_chain_list_resize(active_chain_list_t * list, ssize_t max_size
 	return 0;
 }
 
+static int list_search_tree_remove(struct active_chain_list * list, block_info_t * node)
+{
+	debug_printf("node->hash: (0x%.8x...)", htobe32(*(uint32_t *)&node->hash));
+	void * p_parent_node = tdelete(node, &list->search_root, blockchain_heir_compare);
+	assert(p_parent_node);
+	return 0;
+}
+
+static int list_search_tree_add(struct active_chain_list * list, block_info_t * node)
+{
+	debug_printf("node->hash: (0x%.8x...)", htobe32(*(uint32_t *)&node->hash));
+	block_info_t ** p_node = tsearch(node, &list->search_root, blockchain_heir_compare);
+	assert(p_node && *p_node == node);
+	return 0;
+}
+
 active_chain_list_t * active_chain_list_init(active_chain_list_t * list, ssize_t max_size, void * user_data)
 {
 	if(NULL == list) list = calloc(1, sizeof(*list));
@@ -994,6 +1006,9 @@ active_chain_list_t * active_chain_list_init(active_chain_list_t * list, ssize_t
 	
 	list->add = list_add;
 	list->remove = list_remove;
+	
+	list->search_tree_add = list_search_tree_add;
+	list->search_tree_remove = list_search_tree_remove;
 	
 	int rc = active_chain_list_resize(list, max_size);
 	assert(0 == rc);

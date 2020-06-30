@@ -31,11 +31,14 @@
 #include <string.h>
 #include <assert.h>
 
+#include <search.h>
+
 #include <sys/types.h>
 #include <limits.h>
 
 #include "utils.h"
 #include "satoshi-types.h"
+#include "chains.h"
 
 void test_uint256(void);
 void test_parse_blocks(void);
@@ -191,10 +194,12 @@ void test_parse_blocks(void)
 
 static ssize_t load_data(const char * filename, unsigned char ** p_data)
 {
-	debug_printf("filename: %s", filename);
 	ssize_t cb = 0;
 	FILE * fp = fopen(filename, "rb");
+	
+	debug_printf("fopen(%s) ==> %p", filename, fp);
 	if(NULL == fp) return -1;
+	
 	
 	fseek(fp, 0, SEEK_END);
 	ssize_t file_size = ftell(fp);
@@ -243,7 +248,10 @@ void test_blockchain_load_data(const char * data_dir, const char * file_prefix, 
 	if(NULL == file_prefix) file_prefix = "blk";
 	
 	if(start_index < 0) start_index = 0;
-	int blocks_height = 0;
+	int num_blocks = 0;
+	
+	blockchain_t * main_chain = blockchain_init(NULL, NULL, NULL, NULL);
+	assert(main_chain);
 	
 	while(1)
 	{
@@ -274,43 +282,102 @@ void test_blockchain_load_data(const char * data_dir, const char * file_prefix, 
 			ssize_t cb = satoshi_block_parse(block, length, p);
 			assert(cb == length);
 			
-			printf("== block %d: \n", blocks_height);
+			printf("== block %d: \n", num_blocks);
 			printf("\t-> num transctions: %d\n", (int)block->txn_count);
 			
-			//~ // verify merkle tree
-			//~ uint256_merkle_tree_t * mtree = uint256_merkle_tree_new(block->txn_count, NULL);
+			
 			
 			for(ssize_t i = 0; i < block->txn_count; ++i)
 			{
-				//~ uint256_t tx_hash[1];
 				satoshi_tx_t * tx = &block->txns[i];
 				assert(tx);
-				
-				//~ satoshi_tx_get_hash(tx, tx_hash);
-				//~ assert(0 == memcmp(tx_hash, tx->txid, 32));
-				//~ mtree->add(mtree, 1, tx_hash);
-				
-				// todo: utxoes = get_utxos(tx);
-				// toto tx->verify
 			}
-			//~ mtree->recalc(mtree, 0, -1);
-			//~ dump_line("             block::merkle_root: ", block->hdr.merkle_root, 32);
-			//~ dump_line("merkle_tree_recalc::merkle_root: ", &mtree->merkle_root, 32);
-			//~ assert(0 == memcmp(block->hdr.merkle_root, &mtree->merkle_root, 32));
-			//~ uint256_merkle_tree_free(mtree);
+			
+			printf("add blocks[%d]: hash=(0x%.8x...), prev_hash=(0x%.8x)\n", 
+				num_blocks, 
+				htobe32(*(uint32_t *)&block->hash),
+				htobe32(*(uint32_t *)&block->hdr.prev_hash)
+				);
+			
+		
+			main_chain->add(main_chain, &block->hash, &block->hdr);
+			printf("blockchain-height: %Zd\n", (ssize_t)main_chain->height);
 			
 			satoshi_block_cleanup(block);
-			++blocks_height;
+			++num_blocks;
 			p += cb;
 			
+		//	if(num_blocks > 10000) break;
+			
 		}
+	//	if(num_blocks > 10000) break;
 		assert(p == p_end);
 		
 		free(blocks_data);
 		blocks_data = NULL;
+		
+		
 	}
 	
 	printf("num_files : %d\n", start_index);
-	printf("num_blocks: %d\n", blocks_height);
+	printf("num_blocks: %d\n", num_blocks);
+	
+	
+	void blockchain_dump(blockchain_t *);
+	blockchain_dump(main_chain);
+	
+	blockchain_cleanup(main_chain);
+	free(main_chain);
+	
 	return;
+}
+
+
+void blockchain_dump(blockchain_t * main_chain)
+{
+	printf("==== BLOCKCHAIN height: %d ====\n", (int)main_chain->height);
+	printf("max_cumulative_difficulty: 0x%.8x\n", main_chain->heirs[main_chain->height].cumulative_difficulty.bits);
+	for(int i = 0; i <= main_chain->height; ++i)
+	{
+		blockchain_heir_t * heir = &main_chain->heirs[i];
+		printf("\t" "heirs[%d]: (0x%.8x...), "
+			"bits=0x%.8x, "
+			"cumulative_difficulty=0x%.8x\n", 
+			i,
+			htobe32(*(uint32_t *)&heir->hash),
+			heir->bits,
+			heir->cumulative_difficulty.bits
+			); 
+	}
+	
+	active_chain_list_t * list = main_chain->candidates_list;
+	printf("active chains: %d\n", (int)list->count);
+	
+	
+	for(int i = 0; i < list->count; ++i)
+	{
+		printf("-- chain %d: \n", i);
+		active_chain_t * chain = list->chains[i];
+		assert(chain);
+	
+		printf("\t" "head: 0x%.8x...\n", htobe32(*(uint32_t *)&chain->head->hash)); 
+		const blockchain_heir_t * parent = main_chain->find(main_chain, &chain->head->hash);
+		
+		if(parent) printf("\t" "parent height: %Zd\n", parent - main_chain->heirs);
+		
+		block_info_t * child = chain->head->first_child;
+		int index = 0;
+		while(child)
+		{
+			printf("\t" "child %d: "
+				"hash: (0x%.8x...), "
+				"cumulative_difficulty = 0x%.8x\n", 
+				index++, 
+				htobe32(*(uint32_t *)&child->hash), 
+				child->cumulative_difficulty.bits);
+			child = child->first_child;
+		}
+		
+	}
+	
 }

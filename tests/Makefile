@@ -112,5 +112,5 @@ do_init:
 	mkdir -p ../obj/base ../obj/utils
 	
 clean:
-	rm -rf ../obj/base ../obj/utils
+	rm -f $(OBJ_DIR)/*.o $(OBJ_DIR)/base/*.o $(OBJ_DIR)/utils/*.o $(TARGET) 
 

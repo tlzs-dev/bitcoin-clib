@@ -119,8 +119,9 @@ typedef struct active_chain_list
 	
 	block_info_t * (* find_node)(struct active_chain_list * list, const uint256_t * hash, active_chain_t ** p_chain);
 	
-	// only remove the node from the 'search-tree' 
-	int (* remove_node)(struct active_chain_list * list, block_info_t * node); 
+	// add or remove the node from the 'search-tree' 
+	int (* search_tree_add)(struct active_chain_list * list, block_info_t * node); 
+	int (* search_tree_remove)(struct active_chain_list * list, block_info_t * node); 
 	
 	int (* add)(struct active_chain_list * list, struct active_chain * chain);
 	int (* remove)(struct active_chain_list * list, struct active_chain * chain);
