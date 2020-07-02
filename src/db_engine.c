@@ -309,7 +309,9 @@ static inline db_handle_t * db_engine_find_db(db_engine_t * engine, DB * dbp)
 }
 
 
-static int secondary_db_get_key(DB * secondary, const DBT * key, const DBT * value, DBT * result)
+static int secondary_db_get_key(DB * secondary, 
+	const DBT * key, const DBT * value, 
+	DBT * result)
 {
 	db_engine_t * engine = db_engine_get();
 	assert(engine);
@@ -320,17 +322,50 @@ static int secondary_db_get_key(DB * secondary, const DBT * key, const DBT * val
 	db_private_t * priv = db->priv;
 	assert(priv->associate_func);
 	
-	void * skey = NULL;
-	ssize_t cb_skey = 0;
+	db_record_data_t * skeys = NULL;
 	
-	int rc = priv->associate_func(db, 
-		key->data, key->size, value->data, value->size,
-		&skey, &cb_skey);
-	assert(0 == rc);
+	ssize_t num_keys = priv->associate_func(db, 
+		&(db_record_data_t){ .data = key->data, .size = key->size}, 
+		&(db_record_data_t){ .data = value->data, .size = value->size},
+		&skeys);
+		
+	if(num_keys < 1 || NULL == skeys) return -1;
 	
-	result->data = skey;
-	result->size = cb_skey;
-	return 0;
+	if(num_keys == 1)
+	{
+		result->data = skeys[0].data;
+		result->size = skeys[0].size;
+	}else
+	{
+		/**
+		 * Working with Multiple Keys 
+		 * (if need to be sorted by multiple skeys in the secondary_db)
+		 */
+		 
+		DBT * multiple_keys = calloc(num_keys, sizeof(*multiple_keys));
+		assert(multiple_keys);
+	
+		for(ssize_t i = 0; i < num_keys; ++i)
+		{
+			multiple_keys[i].data = skeys[i].data;
+			multiple_keys[i].size = (u_int32_t)skeys[i].size;
+		}
+
+		/* 
+		 * set flags for the returned DBT. 
+		 * DB_DBT_MULTIPLE is required in order for DB to know that 
+		 * the DBT references an array. 
+		 * DB_DBT_APPMALLOC is also required since we
+		 * dynamically allocated memory for the DBT's data field. 
+		 */
+		result->flags = DB_DBT_MULTIPLE | DB_DBT_APPMALLOC;
+	
+		result->data = multiple_keys;
+		result->size = num_keys;
+	}
+	
+	free(skeys);
+	return num_keys;
 }
 
 
@@ -350,41 +385,34 @@ static int db_close(struct db_handle * db)
 {
 	return 0;
 }
-static int db_find(struct db_handle * db, 
-	const void * key, size_t cb_key,
-	void ** p_value, size_t * cb_value)
+static ssize_t db_find(struct db_handle * db, const db_record_data_t * key, db_record_data_t ** p_values)
 {
 	return 0;
 }
 
-static int db_find_secondary(struct db_handle * db, 
-	const void * skey, size_t cb_skey,		// the key of secondary database
-	void * p_key, ssize_t * cb_key,			// if need return the key of the primary database
-	void ** p_value, ssize_t * cb_value)
+static ssize_t db_find_secondary(struct db_handle * secondary_db, 
+	const db_record_data_t * skey,		// the key of secondary database
+	db_record_data_t ** p_keys,			// if need return the key of the primary database
+	db_record_data_t ** p_values)
 {
 	return 0;
 }
 	
 
-static int db_insert(struct db_handle * db, 
-	const void * key, size_t cb_key, 
-	const void * value, size_t cb_value)
+static int db_insert(struct db_handle * db, const db_record_data_t * key, const db_record_data_t * value)
 {
 	return 0;
 }
 
-static int db_update(struct db_handle * db, 
-	const void * key, size_t cb_key, 
-	const void * value, size_t cb_value)
+static int db_update(struct db_handle * db, const db_record_data_t * key, const db_record_data_t * value)
 {
 	return 0;
 }
 
-static int db_del(struct db_handle * db, const void * key, size_t cb_key)
+static int db_del(struct db_handle * db, const db_record_data_t * key)
 {
 	return 0;
 }
-
 
 
 db_handle_t * db_handle_init(db_handle_t * db, db_engine_t * engine, void * user_data)

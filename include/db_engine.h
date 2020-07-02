@@ -33,9 +33,17 @@ typedef struct db_engine_txn
 db_engine_txn_t * db_engine_txn_init(db_engine_txn_t * txn, struct db_engine * env);
 void db_engine_txn_cleanup(db_engine_txn_t * txn);
 
-typedef int (* db_associate_callback)(struct db_handle * sdb, 
-		const void * key, size_t cb_key, const void * value, size_t cb_value, // records in the primary db
-		void ** p_skey, ssize_t * cb_skey	// return key(s) in the secondary db
+
+typedef struct db_record_data
+{
+	void * data;
+	ssize_t size;
+	int flags;
+}db_record_data_t;
+
+typedef ssize_t (* db_associate_callback)(struct db_handle * sdb, 
+		const db_record_data_t * key, const db_record_data_t * value, // records in the primary db
+		db_record_data_t ** p_skeys // return key(s) in the secondary db
 	);
 typedef struct db_handle
 {
@@ -45,32 +53,34 @@ typedef struct db_handle
 	void * user_data;
 	unsigned int err_code;
 	
-	int (* open)(struct db_handle * db, db_engine_txn_t * txn, const char * name, 
+	int (* open)(struct db_handle * db, 
+		db_engine_txn_t * txn, // nullable 
+		const char * name, 
 		int db_type, // 0: DB_BTREE, 1: DB_HASH
 		int flags);
-	int (* associate)(struct db_handle * primary, db_engine_txn_t * txn, struct db_handle * secondary, 
+	int (* associate)(struct db_handle * primary, 
+		db_engine_txn_t * txn, // nullable
+		struct db_handle * secondary, 
 		db_associate_callback associated_by);
 	int (* close)(struct db_handle * db);
 	
-	int (* find)(struct db_handle * db, 
-		const void * key, size_t cb_key,		// the key of the primary database
-		void ** p_value, size_t * cb_value);
-	
-	int (* find_secondary)(struct db_handle * db, 
-		const void * skey, size_t cb_skey,		// the key of secondary database
-		void * p_key, ssize_t * cb_key,			// if need return the key of the primary database
-		void ** p_value, ssize_t * cb_value);
-		
-	
-	int (* insert)(struct db_handle * db, 
-		const void * key, size_t cb_key, 
-		const void * value, size_t cb_value);
+	/**
+	 * find(): 				Find value(s) in the primary_db or secondary_db by key 
+	 * find_secondary(): 	Use the secondary_key to find the primary_keys and values in the primary_db
+	 *   @return num_records, can be greater than 1 if duplicated key is allowed
+	 */
+	ssize_t (* find)(struct db_handle * db, 
+		const db_record_data_t * key, 
+		db_record_data_t ** p_values);
 
-	int (* update)(struct db_handle * db, 
-		const void * key, size_t cb_key, 
-		const void * value, size_t cb_value);
+	ssize_t (* find_secondary)(struct db_handle * secondary_db, 
+		const db_record_data_t * skey,		// the key of secondary database
+		db_record_data_t ** p_keys,			// if need return the key of the primary database
+		db_record_data_t ** p_values);
 	
-	int (* del)(struct db_handle * db, const void * key, size_t cb_key);
+	int (* insert)(struct db_handle * db, const db_record_data_t * key, const db_record_data_t * value);
+	int (* update)(struct db_handle * db, const db_record_data_t * key, const db_record_data_t * value);
+	int (* del)(struct db_handle * db, const db_record_data_t * key);
 
 }db_handle_t;
 db_handle_t * db_handle_init(db_handle_t * db, struct db_engine * engine, void * user_data);
