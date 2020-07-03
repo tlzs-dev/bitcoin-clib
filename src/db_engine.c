@@ -93,7 +93,7 @@ static int txn_begin(struct db_engine_txn * txn, struct db_engine_txn * parent_t
 	DB_TXN * parent = parent_txn?parent_txn->priv:NULL;
 	int rc = env->txn_begin(env, parent, (DB_TXN **)&txn->priv, DB_READ_COMMITTED | DB_TXN_SYNC);
 	if(rc) {
-		env->err(env, rc, "%s() failed.", __FUNCTION__);
+		env->err(env, rc, "%s() failed: ", __FUNCTION__);
 	}
 	return rc;
 }
@@ -105,7 +105,7 @@ static int txn_commit(struct db_engine_txn * txn, int flags)
 	if(db_txn) {
 		rc = db_txn->commit(db_txn, flags);
 		txn->priv = NULL;
-		db_check_error(rc, "%s() failed.", __FUNCTION__);
+		db_check_error(rc, "%s() failed: ", __FUNCTION__);
 	}
 	return rc;
 }
@@ -116,7 +116,7 @@ static int txn_abort(struct db_engine_txn * txn)
 	if(db_txn) {
 		rc = db_txn->abort(db_txn);
 		txn->priv = NULL;
-		db_check_error(rc, "%s() failed.", __FUNCTION__);
+		db_check_error(rc, "%s() failed: ", __FUNCTION__);
 	}
 	return rc;
 }
@@ -127,7 +127,7 @@ static int txn_prepare(struct db_engine_txn * txn, unsigned char gid[])
 	DB_TXN * db_txn = txn->priv;
 	if(db_txn) {
 		rc = db_txn->prepare(db_txn, gid);
-		db_check_error(rc, "%s() failed.", __FUNCTION__);
+		db_check_error(rc, "%s() failed: ", __FUNCTION__);
 	}
 	return rc;
 }
@@ -139,7 +139,7 @@ static int txn_discard(struct db_engine_txn * txn)
 	if(db_txn) {
 		rc = db_txn->discard(db_txn, 0);
 		txn->priv = NULL;
-		db_check_error(rc, "%s() failed.", __FUNCTION__);
+		db_check_error(rc, "%s() failed: ", __FUNCTION__);
 	}
 	return rc;
 }
@@ -150,7 +150,7 @@ static int txn_set_name(struct db_engine_txn * txn, const char * name)
 	DB_TXN * db_txn = txn->priv;
 	if(db_txn) {
 		rc = db_txn->set_name(db_txn, name);
-		db_check_error(rc, "%s() failed.", __FUNCTION__);
+		db_check_error(rc, "%s() failed: ", __FUNCTION__);
 	}
 	return rc;
 }
@@ -161,7 +161,7 @@ static const char * txn_get_name(struct db_engine_txn * txn)
 	DB_TXN * db_txn = txn->priv;
 	if(db_txn) {
 		rc = db_txn->get_name(db_txn, &name);
-		db_check_error(rc, "%s() failed.", __FUNCTION__);
+		db_check_error(rc, "%s() failed: ", __FUNCTION__);
 	}
 	return name;
 }
@@ -223,7 +223,7 @@ db_private_t * db_private_new(db_handle_t * db)
 	DB_ENV * env = db_engine_get_env(db->engine);
 	int rc = db_create(&dbp, env, 0);
 	if(rc || NULL == dbp ) {
-		env->err(env, rc, "%s()::db_create() failed.\n", __FUNCTION__);
+		env->err(env, rc, "%s()::db_create() failed: ", __FUNCTION__);
 		return NULL;
 	}
 	
@@ -251,7 +251,7 @@ void db_private_free(db_private_t * priv)
 	return;
 }
 
-static int db_open(struct db_handle * db, db_engine_txn_t * txn, const char * name, int db_type, int flags)
+static int db_open(struct db_handle * db, db_engine_txn_t * txn, const char * name, int db_type, enum db_flags flags)
 {
 	assert(db && db->priv && name);
 	int rc = -1;
@@ -268,9 +268,14 @@ static int db_open(struct db_handle * db, db_engine_txn_t * txn, const char * na
 		priv->db_type = DB_UNKNOWN;
 	}
 	
-	if(flags <= 0) flags = DB_CREATE | DB_AUTO_COMMIT;
-	rc = dbp->open(dbp, db_txn_get_handle(txn), name, NULL, priv->db_type, flags, 0660);
-	db_check_error(rc, "%s() failed.\n", __FUNCTION__);
+	if(flags & db_flags_dup_sort) {
+		dbp->set_flags(dbp, DB_DUPSORT);
+		db->record_flags |= db_record_flags_multiple;
+	}
+	
+	rc = dbp->open(dbp, db_txn_get_handle(txn), name, NULL, priv->db_type, 
+		DB_CREATE | DB_AUTO_COMMIT, 0660);
+	db_check_error(rc, "%s() failed: ", __FUNCTION__);
 	return rc;
 }
 
@@ -355,6 +360,8 @@ static int db_associate(struct db_handle * primary, db_engine_txn_t * txn,
 	
 	DB * dbp = db_get_handle(primary);
 	DB * sdbp = db_get_handle(secondary);
+	
+	
 	int rc = dbp->associate(dbp, db_txn_get_handle(txn), sdbp, secondary_db_get_key, DB_CREATE);
 	
 	return rc;
@@ -363,16 +370,198 @@ static int db_close(struct db_handle * db)
 {
 	return 0;
 }
-static ssize_t db_find(struct db_handle * db, db_engine_txn_t * _txn, const db_record_data_t * key, db_record_data_t ** p_values)
+
+void db_record_data_cleanup(struct db_record_data * record)
 {
-	return 0;
+	if(NULL == record) return;
+	if(record->flags == 1)
+	{
+		free(record->data);
+		record->data = NULL;
+		record->flags = 0;
+	}
+	return;
 }
 
-static ssize_t db_find_secondary(struct db_handle * secondary_db, db_engine_txn_t * _txn, 
-	const db_record_data_t * skey,		// the key of secondary database
+static db_record_data_t * db_record_data_set(db_record_data_t * restrict result, const DBT * restrict value)
+{
+	assert(value && value->data && value->size > 0);
+	
+	if(NULL == result) result = calloc(1, sizeof(*result));
+	assert(result);
+	
+	if(0 == result->size) result->size = value->size;
+	assert(result->size == (ssize_t)value->size);
+	
+	if(NULL == result->data) {
+		result->flags = 1;
+		result->data = malloc(value->size);
+		assert(result->data);
+	}
+	
+	memcpy(result->data, value->data, value->size);
+	return result;
+}
+
+static ssize_t db_find(struct db_handle * db, db_engine_txn_t * _txn, 
+	const db_record_data_t * _key, 
+	db_record_data_t ** p_values)
+{
+	int rc = -1;
+	assert(db && _key);
+	DB * dbp = db_get_handle(db);
+	assert(dbp);
+	DB_TXN * txn = db_txn_get_handle(_txn);
+	
+	DBT key, value;
+	memset(&key, 0, sizeof(key));
+	memset(&value, 0, sizeof(value));
+	
+	key.data = (void *)_key->data;
+	key.size = _key->size;
+	
+	/**
+	 * if DB_THREAD flags was applied to db_engine, 
+	 * then setting memory allocation flag on data DBT is mandated.
+	 */
+	value.flags = DB_DBT_MALLOC;
+	
+	if(0 == (db->record_flags & db_record_flags_multiple)) // no duplicate keys
+	{
+		if(NULL == p_values) return 1;
+		
+		value.flags = DB_DBT_MALLOC;
+		rc = dbp->get(dbp, txn, &key, &value, DB_READ_COMMITTED);
+		db_check_error(rc, "dbp->get():");
+		if(0 == rc) {
+			*p_values = db_record_data_set(*p_values, &value);
+		}
+		free(value.data);
+		return 1;
+	}
+
+#define MAX_RECORDS (1024)
+
+	assert(p_values);
+	ssize_t max_size = MAX_RECORDS;
+	db_record_data_t * results = calloc(max_size, sizeof(*results));
+	// find the first record
+	DBC * cursor = NULL;
+	rc = dbp->cursor(dbp, txn, &cursor, DB_READ_COMMITTED);
+	assert(0 == rc && cursor);
+
+	rc = cursor->get(cursor, &key, &value, DB_SET);
+	db_check_error(rc, "cursor->get(): ");
+	ssize_t count = 0;
+	while(0 == rc)
+	{
+		if(count >= max_size) {
+			results = realloc(results, (max_size * 2) * sizeof(*results));
+			assert(results);
+			memset(results + max_size, 0, max_size * sizeof(*results));
+			max_size *= 2;
+		}
+		db_record_data_set(&results[count++], &value);
+
+		free(value.data); value.data = NULL;
+		rc = cursor->get(cursor, &key, &value, DB_NEXT_DUP);
+	}
+	cursor->close(cursor);
+	*p_values = realloc(results, count * sizeof(*results));
+	return count;
+#undef MAX_RECORDS
+}
+
+static ssize_t db_find_secondary(struct db_handle * db, db_engine_txn_t * _txn, 
+	const db_record_data_t * _skey,		// the key of secondary database
 	db_record_data_t ** p_keys,			// if need return the key of the primary database
 	db_record_data_t ** p_values)
 {
+	int rc = -1;
+	assert(db && _skey);
+	DB * dbp = db_get_handle(db);
+	assert(dbp);
+	DB_TXN * txn = db_txn_get_handle(_txn);
+	
+	DBT skey, key, value;
+	memset(&skey, 0, sizeof(skey));
+	memset(&key, 0, sizeof(key));
+	memset(&value, 0, sizeof(value));
+	
+	skey.data = (void *)_skey->data;
+	skey.size = _skey->size;
+	
+	if(0 == (db->record_flags & db_record_flags_multiple)) // no duplicate keys
+	{
+		if(NULL == p_values) return 1;
+		
+		rc = dbp->pget(dbp, txn, &skey, &key, &value, DB_READ_COMMITTED);
+		db_check_error(rc, "dbp->pget(): ");
+		if(0 == rc) {
+			if(p_keys) {
+				*p_keys = db_record_data_set(*p_keys, &key);
+			}
+			*p_values = db_record_data_set(*p_values, &value);
+		}
+		return 1;
+	}
+
+#define MAX_RECORDS (1024)
+
+	assert(p_values);
+	ssize_t max_size = MAX_RECORDS;
+	
+	db_record_data_t * keys = NULL;
+	db_record_data_t * results = calloc(max_size, sizeof(*results));
+	if(p_keys) keys = calloc(max_size, sizeof(*results));
+	
+	// find the first record
+	DBC * cursor = NULL;
+	rc = dbp->cursor(dbp, txn, &cursor, DB_READ_COMMITTED);
+	assert(0 == rc && cursor);
+	
+	key.flags = DB_DBT_MALLOC;
+	value.flags = DB_DBT_MALLOC;
+	rc = cursor->pget(cursor, &skey, &key, &value, DB_SET);
+	db_check_error(rc, "cursor->pget(): ");
+	ssize_t count = 0;
+	while(0 == rc)
+	{
+		if(count >= max_size) {
+			if(keys) { 
+				keys = realloc(keys, (max_size * 2) * sizeof(*keys));
+				assert(keys);
+				memset(keys + max_size, 0, max_size * sizeof(*keys));
+			}
+			
+			results = realloc(results, (max_size * 2) * sizeof(*results));
+			assert(results);
+			memset(results + max_size, 0, max_size * sizeof(*results));
+			max_size *= 2;
+		}
+		
+		if(keys) db_record_data_set(&keys[count], &key);
+		db_record_data_set(&results[count], &value);
+		++count;
+		
+		free(key.data); key.data = NULL;
+		free(value.data); value.data = NULL;
+		
+		rc = cursor->pget(cursor, &skey, &key, &value, DB_NEXT_DUP);
+	}
+	cursor->close(cursor);
+	if(0 == count)
+	{
+		free(keys);
+		free(results);
+	}else
+	{
+		if(p_keys) * p_keys = realloc(keys, count * sizeof(*keys));
+		*p_values = realloc(results, count * sizeof(*results));
+	}
+	return count;
+#undef MAX_RECORDS
+	
 	return 0;
 }
 	
@@ -396,22 +585,63 @@ static int db_insert(struct db_handle * db, db_engine_txn_t * _txn,
 	DB_TXN * txn = db_txn_get_handle(_txn);
 	
 	u_int32_t flags = 0;
-	if(db->flags & db_record_flags_no_dup) flags |= DB_NODUPDATA;
-	if(db->flags & db_record_flags_no_overwrite) flags |= DB_NOOVERWRITE;
+	if(db->record_flags & db_record_flags_no_dup) flags |= DB_NODUPDATA;
+	if(db->record_flags & db_record_flags_no_overwrite) flags |= DB_NOOVERWRITE;
 	
 	int rc = dbp->put(dbp, txn, &key, &value, flags);
-	db_check_error(rc, "%s() failed.\n", __FUNCTION__);
+	db_check_error(rc, "%s(): ", __FUNCTION__);
 	return rc;
 }
 
-static int db_update(struct db_handle * db, db_engine_txn_t * _txn, const db_record_data_t * key, const db_record_data_t * value)
+static int db_update(struct db_handle * db, db_engine_txn_t * _txn, 
+	const db_record_data_t * _key, const db_record_data_t * _value)
 {
-	return 0;
+	int rc = -1;
+	assert(db && _key && _value);
+	DB * dbp = db_get_handle(db);
+	assert(dbp);
+	DB_TXN * txn = db_txn_get_handle(_txn);
+	
+	DBT key, value;
+	memset(&key, 0, sizeof(key));
+	memset(&value, 0, sizeof(value));
+	
+	key.data = (void *)_key->data;		key.size = _key->size;
+
+	// find the record
+	DBC * cursor = NULL;
+	
+	rc = dbp->cursor(dbp, txn, &cursor, DB_READ_COMMITTED);
+	assert(0 == rc && cursor);
+	rc = cursor->get(cursor, &key, &value, DB_SET);
+	db_check_error(rc, "cursor->get(): ");
+	if(0 == rc)
+	{
+		value.data = (void *)_value->data;
+		value.size = _value->size;
+		rc = cursor->put(cursor, &key, &value, DB_CURRENT);	// overwrite the data which the cursor currenttly refers.
+	}
+	cursor->close(cursor);
+	
+	return rc;
 }
 
-static int db_del(struct db_handle * db, db_engine_txn_t * _txn, const db_record_data_t * key)
+static int db_del(struct db_handle * db, db_engine_txn_t * _txn, const db_record_data_t * _key)
 {
-	return 0;
+	int rc = -1;
+	assert(db && _key);
+	DB * dbp = db_get_handle(db);
+	assert(dbp);
+	DB_TXN * txn = db_txn_get_handle(_txn);
+	
+	DBT key;
+	memset(&key, 0, sizeof(key));
+	key.data = (void *)_key->data;
+	key.size = _key->size;
+	
+	rc = dbp->del(dbp, txn, &key, 0);
+	db_check_error(rc, "%s(): ", __FUNCTION__);
+	return rc;
 }
 
 
@@ -726,44 +956,16 @@ static ssize_t associate_blocks_height(db_handle_t * db,
 	return num_results;
 }
 
-int main(int argc, char **argv)
+static void dump_records(db_handle_t * db)
 {
-	db_engine_t * engine = db_engine_init("data", NULL);
-	assert(engine);
-	
-	// create primary_db and secondary_db
-	db_handle_t * sdb = engine->open_db(engine, "blocks_height.db", db_format_type_btree, 0);
-	db_handle_t * db = engine->open_db(engine, "blocks.db", db_format_type_btree, 0);
-	assert(sdb && db);
-	int rc = db->associate(db, NULL, sdb, associate_blocks_height);
-	assert(0 == rc);
-	
-	// add records 
-	unsigned char hash[32] = { 0 };
-	struct db_record_block_data block[1];
-	
-	db->flags = db_record_flags_no_overwrite;
-	
-	for(int i = 0; i < 10; ++i)
-	{	
-		*(int *)hash = 1000 + i;
-		memset(block, 0, sizeof(block));
-		block->height = i;
-		
-		rc = db->insert(db, NULL,
-			&(db_record_data_t){.data = hash, .size = sizeof(hash) },
-			&(db_record_data_t){.data = block, .size = sizeof(block)}
-		);
-		if(rc == DB_KEYEXIST) break;
-		assert(0 == rc);
-	}
-	
-	// dump records
 	DBC * cursor = NULL;
 	DB * dbp = db_get_handle(db);
-	DB * sdbp = db_get_handle(sdb);
+	assert(dbp);
+	int rc = -1;
 	
-	assert(dbp && sdbp);
+	unsigned char hash[32];
+	memset(hash, 0, sizeof(hash));
+	
 	rc = dbp->cursor(dbp, NULL, &cursor, DB_READ_COMMITTED);
 	db_check_error(rc, "db->cursor() failed");
 	assert(0 == rc);
@@ -772,11 +974,10 @@ int main(int argc, char **argv)
 	memset(&key, 0, sizeof(key));
 	memset(&value, 0, sizeof(value));
 	
-	memset(hash, 0, sizeof(hash));
+	
 	key.flags = DB_DBT_USERMEM;
 	key.data = hash;
 	key.ulen = 32;
-	
 	
 	rc = cursor->get(cursor, &key, &value, DB_FIRST);
 	assert(0 == rc);
@@ -786,17 +987,137 @@ int main(int argc, char **argv)
 		struct db_record_block_data * data = value.data;
 		assert(data && value.size == sizeof(*data));
 		
-		printf("key: %d, value: height=%d\n", *(int *)hash, data->height);
+		printf("key: %d, value: height=%d, timestamp=%d\n", 
+			*(int *)hash, 
+			data->height, data->hdr.timestamp);
 		rc = cursor->get(cursor, &key, &value, DB_NEXT);
 		db_check_error(rc, "cursor->get()\n");
 	}
 	
 	assert(rc == DB_NOTFOUND);
 	cursor->close(cursor);
+	return;
+}
+
+int main(int argc, char **argv)
+{
+	char * home_dir = "data";
+	if(argc > 1) home_dir = argv[1];
+	
+	db_engine_t * engine = db_engine_init(home_dir, NULL);
+	assert(engine);
+
+	
+	// create primary_db and secondary_db
+	db_handle_t * sdb = engine->open_db(engine, "blocks_height.db", db_format_type_btree, db_flags_dup_sort);
+	
+	db_handle_t * db = engine->open_db(engine, "blocks.db", db_format_type_btree, 0);
+	assert(sdb && db);
+	int rc = db->associate(db, NULL, sdb, associate_blocks_height);
+	assert(0 == rc);
+	
+	// add records 
+	unsigned char hash[32] = { 0 };
+	struct db_record_block_data block[1];
+	
+	db->record_flags |= db_record_flags_no_overwrite;
+	
+	for(int i = 0; i < 10; ++i)
+	{	
+		*(int *)hash = 1000 + i + 1;
+		memset(block, 0, sizeof(block));
+		block->height = i;
+		block->hdr.timestamp = 1000 + i;
+		
+		rc = db->insert(db, NULL,
+			&(db_record_data_t){.data = hash, .size = sizeof(hash) },
+			&(db_record_data_t){.data = block, .size = sizeof(block)}
+		);
+		if(rc == DB_KEYEXIST) break;
+		assert(0 == rc);
+	}
+	
+	// append orphan blocks (same height but diffent hash)
+	memset(block, 0, sizeof(block));
+	
+	for(int i = 3; i < 5; ++i)
+	{
+		*(int *)hash = 2000 + i + 1;
+		block->height = i;
+		block->hdr.timestamp = 1000 + i;
+		rc = db->insert(db, NULL,
+			&(db_record_data_t){.data = hash, .size = sizeof(hash) },
+			&(db_record_data_t){.data = block, .size = sizeof(block)}
+		);
+		if(rc == DB_KEYEXIST) break;
+		assert(0 == rc);
+	}
+	
+	printf("=== dump blocks.db ====\n");
+	dump_records(db);
+	
+	printf("=== dump blocks_height.db ====\n");
+	dump_records(sdb);
+	
+	// test find 
+	*(int *)hash = 1003;
+	db_record_data_t * values = NULL;
+	ssize_t count = db->find(db, NULL, 
+		&(db_record_data_t){.data = hash, .size = sizeof(hash)},
+		&values);
+	assert(count > 0);
+	
+	printf("== find in blocks.db: \n");
+	for(int i = 0; i < count; ++i)
+	{
+		struct db_record_block_data * data = values[i].data;
+		assert(values[i].data && values[i].size == sizeof(*data));
+		printf("key: %d, value: height=%d, timestamp=%d\n", 
+			*(int *)hash, 
+			data->height, data->hdr.timestamp);
+	}
+	
+	// cleanup
+	for(int i = 0; i < count; ++i) {
+		db_record_data_cleanup(&values[i]);
+	}
+	free(values);
+	values = NULL;
+	
+	// test find_secondary
+	int32_t height = 3;
+	values = NULL;
+	db_record_data_t * keys = NULL;
+	
+	count = sdb->find_secondary(sdb, NULL, 
+		&(db_record_data_t){.data = &height, .size = sizeof(int32_t)},
+		&keys, 
+		&values);
+	assert(count > 0);
+	
+	printf("== find in blocks_height.db: \n");
+	for(int i = 0; i < count; ++i)
+	{
+		unsigned char * key = keys[i].data;
+		struct db_record_block_data * data = values[i].data;
+		assert(values[i].data && values[i].size == sizeof(*data));
+		printf("key: %d, value: height=%d, timestamp=%d\n", 
+			*(int *)key, 
+			data->height, data->hdr.timestamp);
+	}
+	
+	// cleanup
+	for(int i = 0; i < count; ++i) {
+		db_record_data_cleanup(&keys[i]);
+		db_record_data_cleanup(&values[i]);
+	}
+	free(keys);
+	free(values);
+	keys = NULL;
+	values = NULL;
 	
 	
-	
-// test add_ref / unref
+	// test add_ref / unref
 	db_engine_add_ref(engine);
 	db_engine_cleanup(engine);
 	db_engine_cleanup(engine);

@@ -45,12 +45,20 @@ enum db_record_flags
 {
 	db_record_flags_no_dup = 0x01,	// disable dup-insert even if the database allows duplicate-keys
 	db_record_flags_no_overwrite = 0x02, // insertion(s) would be failed if the key already exists in the db.
+	
+	db_record_flags_multiple = 0x8000,
 };
 
 typedef ssize_t (* db_associate_callback)(struct db_handle * sdb, 
 		const db_record_data_t * key, const db_record_data_t * value, // records in the primary db
 		db_record_data_t ** p_skeys // return key(s) in the secondary db
 	);
+
+enum db_flags
+{
+	db_flags_dup_sort = 1, // if want to support duplicate keys
+};
+
 typedef struct db_handle
 {
 	void * priv;
@@ -59,13 +67,13 @@ typedef struct db_handle
 	void * user_data;
 	unsigned int err_code;
 	
-	enum db_record_flags flags; 
+	enum db_record_flags record_flags; 
 	
 	int (* open)(struct db_handle * db, 
 		db_engine_txn_t * txn, // nullable 
 		const char * name, 
 		int db_type, // 0: DB_BTREE, 1: DB_HASH
-		int flags);
+		enum db_flags flags);
 	int (* associate)(struct db_handle * primary, 
 		db_engine_txn_t * txn, // nullable
 		struct db_handle * secondary, 

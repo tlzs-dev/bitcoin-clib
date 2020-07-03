@@ -110,6 +110,9 @@ test_chains: $(BASE_OBJECTS) $(UTILS_OBJECTS) \
 db_engine: test_db_engine
 test_db_engine: $(SRC_DIR)/db_engine.c
 	echo "build $@ ..."
+	echo 'rm data/*'
+	[ -e data -a ! -L data ] && rm -f data/*.db data/__db.* data/log.*
+	mkdir -p data
 	$(LINKER) -o $@ $(CFLAGS) $^ \
 	-lm -lpthread -ldb \
 	-D_TEST_DB_ENGINE -D_STAND_ALONE -D_VERBOSE=7
