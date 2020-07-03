@@ -106,6 +106,13 @@ test_chains: $(BASE_OBJECTS) $(UTILS_OBJECTS) \
 	$(LINKER) -o $@ $(CFLAGS) $(LIBS) $^ \
 	-lgmp \
 	-D_TEST_CHAINS -D_STAND_ALONE -D_VERBOSE=7
+	
+db_engine: test_db_engine
+test_db_engine: $(SRC_DIR)/db_engine.c
+	echo "build $@ ..."
+	$(LINKER) -o $@ $(CFLAGS) $^ \
+	-lm -lpthread -ldb \
+	-D_TEST_DB_ENGINE -D_STAND_ALONE -D_VERBOSE=7
 
 .PHONY: do_init clean
 do_init:
