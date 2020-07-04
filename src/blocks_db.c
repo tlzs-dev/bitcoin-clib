@@ -78,8 +78,8 @@ static ssize_t associate_blocks_height(db_handle_t * db,
 	struct db_record_block * block = (struct db_record_block *)value->data;
 	assert(sizeof(*block) == value->size);
 	
-	results[0].data = &block->is_orphan;
-	results[0].size = sizeof(block->is_orphan) + sizeof(block->height);
+	results[0].data = &block->height;
+	results[0].size = sizeof(block->height);
 	
 	return num_results;
 }
@@ -107,6 +107,7 @@ static ssize_t associate_blocks_is_orphan(db_handle_t * db,
 	return num_results;
 }
 
+
 #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
 static int compare_little_endian_int32(DB * db, const DBT * dbt1, const DBT * dbt2)
 {
@@ -114,14 +115,21 @@ static int compare_little_endian_int32(DB * db, const DBT * dbt1, const DBT * db
 	int32_t b = *(int32_t *)dbt2->data;
 	return a - b;
 }
-static int compare_little_endian_int64(DB * db, const DBT * dbt1, const DBT * dbt2)
-{
-	int64_t a = *(int64_t *)dbt1->data;
-	int64_t b = *(int64_t *)dbt2->data;
-	if(a == b) return 0;
-	if(a > b) return 1;
-	return -1;
-}
+
+//~ static int compare_height_and_orphan(DB * db, const DBT * dbt1, const DBT * dbt2)
+//~ {
+	//~ const struct {
+		//~ int32_t height;
+		//~ int32_t is_orphan;
+	//~ } *a = dbt1->data, *b = dbt2->data;
+	
+	//~ if(a->height == b->height) {
+		//~ if(dbt1->size == sizeof(uint64_t) && dbt2->size == sizeof(uint64_t)) 
+			//~ return a->is_orphan - b->is_orphan;
+		//~ return 0;
+	//~ }
+	//~ return a->height - b->height;
+//~ }
 #endif
 
 blocks_db_private_t * blocks_db_private_new(blocks_db_t * db, db_engine_t * engine, const char * db_name)
@@ -166,7 +174,7 @@ blocks_db_private_t * blocks_db_private_new(blocks_db_t * db, db_engine_t * engi
 #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
 	// do not use memcmp to compare an (LE)interger value.
 	DB * sdbp = *(DB **)heights_db->priv;
-	sdbp->set_bt_compare(sdbp, compare_little_endian_int64); // sorted by { is_orphan, height }
+	sdbp->set_bt_compare(sdbp, compare_little_endian_int32); // sorted by { is_orphan, height }
 	
 	sdbp = *(DB **)orphan_blocks->priv;
 	sdbp->set_bt_compare(sdbp, compare_little_endian_int32);
@@ -306,7 +314,7 @@ static ssize_t blocks_db_find_at(struct blocks_db * db, db_engine_txn_t * txn,
 	
 	db_record_data_t * keys = NULL;
 	db_record_data_t * values = NULL;
-
+	
 	count = sdb->find_secondary(sdb, txn, 
 		&(db_record_data_t){.data = (void *)&height, .size = sizeof(int32_t)},
 		&keys, &values);
@@ -371,8 +379,8 @@ static int32_t blocks_db_get_latest(struct blocks_db * db, db_engine_txn_t * txn
 	DBC * cursor = NULL;
 	
 	struct {
-		int32_t is_orphan;
 		int32_t height;
+		int32_t is_orphan;
 	}indice;
 	memset(&indice, 0, sizeof(indice));
 	
@@ -491,7 +499,7 @@ static void dump_records(db_handle_t * db)
 		{
 			int32_t * p_key = (int32_t *)hash;
 			printf("key: {%d, %d}, value: height=%d, timestamp=%d, is_orphan=%d\n", 
-				p_key[1], p_key[0],
+				p_key[0], p_key[1],
 				data->height, data->hdr.timestamp,
 				data->is_orphan
 				);
@@ -559,12 +567,27 @@ int main(int argc, char **argv)
 	// get latest block
 	memset(hash, 0, sizeof(uint256_t));
 	memset(block, 0, sizeof(block));
-	
 	int32_t height = db->get_latest(db, NULL, hash, block);
 	printf("== latest: height=%d, hash=%d, timestamp=%d\n",
 		height, 
 		*(int32_t *)hash,
 		block->hdr.timestamp);
+	
+	// find at (height = 3)
+	memset(hash, 0, sizeof(uint256_t));
+	memset(block, 0, sizeof(block));
+	
+	uint256_t * hashes = NULL;
+	db_record_block_t * blocks = NULL;
+	ssize_t count = db->find_at(db, NULL, 3, &hashes, &blocks);
+	printf("height: 3, count=%Zd\n", count);
+	
+	for(ssize_t i = 0; i < count; ++i)
+	{
+		printf("hash: %d, is_orphan: %d\n", *(int *)hashes[i].val, blocks[i].is_orphan);
+	}
+	free(hashes);
+	free(blocks);
 	
 	
 	blocks_db_cleanup(db);

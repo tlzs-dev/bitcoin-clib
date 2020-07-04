@@ -14,11 +14,11 @@ typedef struct db_record_block db_record_block_t;
 struct db_record_block
 {
 	struct satoshi_block_header hdr;
-	struct{ // index of the secondary_db by { heights, is_orphan }
-		int32_t is_orphan;
-		int32_t height;
-	}__attribute__((packed));
-	// block.dat file info
+	
+	int32_t height;
+	int32_t is_orphan;
+
+	// blk(nnnnn).dat file info
 	int64_t file_index;
 	int64_t start_pos;		// the begining of the block_data (just after block_file_hdr{magic, size} )
 	
