@@ -78,12 +78,11 @@ static ssize_t associate_blocks_height(db_handle_t * db,
 	struct db_record_block * block = (struct db_record_block *)value->data;
 	assert(sizeof(*block) == value->size);
 	
-	results[0].data = &block->height;
-	results[0].size = sizeof(block->height);
+	results[0].data = &block->is_orphan;
+	results[0].size = sizeof(block->is_orphan) + sizeof(block->height);
 	
 	return num_results;
 }
-
 
 static ssize_t associate_blocks_is_orphan(db_handle_t * db, 
 	const db_record_data_t * key, 
@@ -114,6 +113,14 @@ static int compare_little_endian_int32(DB * db, const DBT * dbt1, const DBT * db
 	int32_t a = *(int32_t *)dbt1->data;
 	int32_t b = *(int32_t *)dbt2->data;
 	return a - b;
+}
+static int compare_little_endian_int64(DB * db, const DBT * dbt1, const DBT * dbt2)
+{
+	int64_t a = *(int64_t *)dbt1->data;
+	int64_t b = *(int64_t *)dbt2->data;
+	if(a == b) return 0;
+	if(a > b) return 1;
+	return -1;
 }
 #endif
 
@@ -159,7 +166,7 @@ blocks_db_private_t * blocks_db_private_new(blocks_db_t * db, db_engine_t * engi
 #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
 	// do not use memcmp to compare an (LE)interger value.
 	DB * sdbp = *(DB **)heights_db->priv;
-	sdbp->set_bt_compare(sdbp, compare_little_endian_int32);
+	sdbp->set_bt_compare(sdbp, compare_little_endian_int64); // sorted by { is_orphan, height }
 	
 	sdbp = *(DB **)orphan_blocks->priv;
 	sdbp->set_bt_compare(sdbp, compare_little_endian_int32);
@@ -187,6 +194,7 @@ blocks_db_private_t * blocks_db_private_new(blocks_db_t * db, db_engine_t * engi
 
 	return priv;
 #undef HEIGHTS_DB_SUFFIX
+#undef ORPHANS_DB_SUFFIX
 }
 
 static void blocks_db_private_free(blocks_db_private_t * priv)
@@ -199,6 +207,14 @@ static void blocks_db_private_free(blocks_db_private_t * priv)
 			priv->heights_db->close(priv->heights_db);
 			priv->heights_db = NULL;
 		}
+		
+		if(priv->orphan_blocks)
+		{
+			engine->list_remove(engine, priv->orphan_blocks);
+			priv->orphan_blocks->close(priv->orphan_blocks);
+			priv->orphan_blocks = NULL;
+		}
+		
 		if(priv->blocks) {
 			engine->list_remove(engine, priv->blocks);
 			priv->blocks->close(priv->blocks);
@@ -340,10 +356,65 @@ static ssize_t blocks_db_find_at(struct blocks_db * db, db_engine_txn_t * txn,
 	return count;
 }
 
-static int32_t blocks_db_get_latest(struct blocks_db * db, db_engine_txn_t * txn, uint256_t * p_hash)
+static int32_t blocks_db_get_latest(struct blocks_db * db, db_engine_txn_t * txn, 
+	uint256_t * hash,
+	db_record_block_t * block
+)
 {
-	int32_t height = 0;
-	return height;
+	int rc = -1;
+	assert(db && db->priv);
+	
+	blocks_db_private_t * priv = db->priv;
+	assert(priv->heights_db && priv->heights_db->priv);
+	
+	DB * sdbp = *(DB **)priv->heights_db->priv;
+	DBC * cursor = NULL;
+	
+	struct {
+		int32_t is_orphan;
+		int32_t height;
+	}indice;
+	memset(&indice, 0, sizeof(indice));
+	
+	rc = sdbp->cursor(sdbp, txn?txn->priv:NULL, &cursor, DB_READ_COMMITTED);
+	assert(0 == rc);
+	
+	DBT skey, key, value;
+	memset(&skey, 0, sizeof(skey));
+	memset(&key, 0, sizeof(key));
+	memset(&value, 0, sizeof(value));
+
+	skey.data = &indice;
+	skey.ulen = sizeof(indice);
+	skey.flags = DB_DBT_USERMEM;
+	
+	key.flags = DB_DBT_MALLOC;
+	value.flags = DB_DBT_MALLOC;
+	
+	if(hash){
+		key.flags = DB_DBT_USERMEM;
+		key.data = hash;
+		key.ulen = sizeof(*hash);
+	}
+	
+	if(block) {
+		value.flags = DB_DBT_USERMEM;
+		value.data = block;
+		value.ulen = sizeof(*block);
+	}
+	
+	rc = cursor->pget(cursor, &skey, &key, &value, DB_LAST);
+	while(0 == rc)
+	{
+		if(0 == indice.is_orphan) break;
+		rc = cursor->pget(cursor, &skey, &key, &value, DB_PREV_DUP);
+	}
+	cursor->close(cursor);
+	if(key.flags & DB_DBT_MALLOC) free(key.data);
+	if(value.flags & DB_DBT_MALLOC) free(value.data);
+	
+	if(0 == rc) return indice.height;
+	return -1;
 }
 
 blocks_db_t * blocks_db_init(blocks_db_t * db, db_engine_t * engine, const char * db_name, void * user_data)
@@ -409,11 +480,22 @@ static void dump_records(db_handle_t * db)
 		struct db_record_block * data = value.data;
 		assert(data && value.size == sizeof(*data));
 		
-		printf("key: %d, value: height=%d, timestamp=%d, is_orphan=%d\n", 
-			*(int *)hash, 
-			data->height, data->hdr.timestamp,
-			data->is_orphan
-			);
+		if(key.size != sizeof(int64_t))
+		{
+			printf("key: %d, value: height=%d, timestamp=%d, is_orphan=%d\n", 
+				*(int *)hash, 
+				data->height, data->hdr.timestamp,
+				data->is_orphan
+				);
+		}else
+		{
+			int32_t * p_key = (int32_t *)hash;
+			printf("key: {%d, %d}, value: height=%d, timestamp=%d, is_orphan=%d\n", 
+				p_key[1], p_key[0],
+				data->height, data->hdr.timestamp,
+				data->is_orphan
+				);
+		}
 		rc = cursor->get(cursor, &key, &value, DB_NEXT);
 	}
 	
@@ -472,6 +554,18 @@ int main(int argc, char **argv)
 	
 	printf("=== dump blocks_orphans.db ====\n");
 	dump_records(priv->orphan_blocks);
+	
+	
+	// get latest block
+	memset(hash, 0, sizeof(uint256_t));
+	memset(block, 0, sizeof(block));
+	
+	int32_t height = db->get_latest(db, NULL, hash, block);
+	printf("== latest: height=%d, hash=%d, timestamp=%d\n",
+		height, 
+		*(int32_t *)hash,
+		block->hdr.timestamp);
+	
 	
 	blocks_db_cleanup(db);
 	return 0;

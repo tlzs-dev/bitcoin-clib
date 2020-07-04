@@ -14,9 +14,10 @@ typedef struct db_record_block db_record_block_t;
 struct db_record_block
 {
 	struct satoshi_block_header hdr;
-	int32_t is_orphan;
-	int32_t height;			// index of the secondary_db
-	
+	struct{ // index of the secondary_db by { heights, is_orphan }
+		int32_t is_orphan;
+		int32_t height;
+	}__attribute__((packed));
 	// block.dat file info
 	int64_t file_index;
 	int64_t start_pos;		// the begining of the block_data (just after block_file_hdr{magic, size} )
@@ -40,7 +41,10 @@ typedef struct blocks_db
 	ssize_t (* find_at)(struct blocks_db * db, db_engine_txn_t * txn, 
 		int height, uint256_t ** p_hashes, db_record_block_t ** p_blocks);
 	
-	int32_t (* get_latest)(struct blocks_db * db, db_engine_txn_t * txn, uint256_t * p_hash); ///< @return  block_height
+	int32_t (* get_latest)(struct blocks_db * db, db_engine_txn_t * txn, 
+		uint256_t * hash,				// nullable
+		db_record_block_t * block		// nullable
+		); ///< @return  block_height
 }blocks_db_t;
 blocks_db_t * blocks_db_init(blocks_db_t * db, db_engine_t * engine, const char * db_name, void * user_data);
 void blocks_db_cleanup(blocks_db_t * db);
