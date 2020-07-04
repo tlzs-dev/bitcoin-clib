@@ -213,6 +213,9 @@ static void blocks_db_private_free(blocks_db_private_t * priv)
 		if(priv->heights_db) {
 			engine->list_remove(engine, priv->heights_db);
 			priv->heights_db->close(priv->heights_db);
+			
+			db_handle_cleanup(priv->heights_db);
+			free(priv->heights_db);
 			priv->heights_db = NULL;
 		}
 		
@@ -220,12 +223,16 @@ static void blocks_db_private_free(blocks_db_private_t * priv)
 		{
 			engine->list_remove(engine, priv->orphan_blocks);
 			priv->orphan_blocks->close(priv->orphan_blocks);
+			db_handle_cleanup(priv->orphan_blocks);
+			free(priv->orphan_blocks);
 			priv->orphan_blocks = NULL;
 		}
 		
 		if(priv->blocks) {
 			engine->list_remove(engine, priv->blocks);
 			priv->blocks->close(priv->blocks);
+			db_handle_cleanup(priv->blocks);
+			free(priv->blocks);
 			priv->blocks = NULL;
 		}
 	}
@@ -375,54 +382,39 @@ static int32_t blocks_db_get_latest(struct blocks_db * db, db_engine_txn_t * txn
 	blocks_db_private_t * priv = db->priv;
 	assert(priv->heights_db && priv->heights_db->priv);
 	
-	DB * sdbp = *(DB **)priv->heights_db->priv;
-	DBC * cursor = NULL;
+	db_cursor_t cursor[1];
+	memset(cursor, 0, sizeof(cursor));
+	db_cursor_init(cursor, priv->heights_db, txn, 0);
 	
-	struct {
-		int32_t height;
-	//	int32_t is_orphan;
-	}indice;
-	memset(&indice, 0, sizeof(indice));
+	int32_t height = -1;
 	
-	rc = sdbp->cursor(sdbp, txn?txn->priv:NULL, &cursor, DB_READ_COMMITTED);
-	assert(0 == rc);
+	cursor->skey->data = &height;
+	cursor->skey->size = sizeof(int32_t);
 	
-	DBT skey, key, value;
-	memset(&skey, 0, sizeof(skey));
-	memset(&key, 0, sizeof(key));
-	memset(&value, 0, sizeof(value));
-
-	skey.data = &indice;
-	skey.ulen = sizeof(indice);
-	skey.flags = DB_DBT_USERMEM;
-	
-	key.flags = DB_DBT_MALLOC;
-	value.flags = DB_DBT_MALLOC;
-	
-	if(hash){
-		key.flags = DB_DBT_USERMEM;
-		key.data = hash;
-		key.ulen = sizeof(*hash);
+	if(hash)
+	{
+		cursor->key->data = hash;
+		cursor->key->size = sizeof(uint256_t);
+	}
+	if(block)
+	{
+		cursor->value->data = block;
+		cursor->value->size = sizeof(*block);
 	}
 	
-	if(block) {
-		value.flags = DB_DBT_USERMEM;
-		value.data = block;
-		value.ulen = sizeof(*block);
-	}
-	
-	rc = cursor->pget(cursor, &skey, &key, &value, DB_LAST);
+	rc = cursor->last(cursor);
 	while(0 == rc)
 	{
-		db_record_block_t * block = value.data;
-		if(0 == block->is_orphan) break;
-		rc = cursor->pget(cursor, &skey, &key, &value, DB_PREV_DUP);
+		db_record_block_t * data = cursor->value->data;
+		assert(cursor->value->size == sizeof(*data));
+		if(!data->is_orphan) break;
+		
+		rc = cursor->prev_dup(cursor);
 	}
-	cursor->close(cursor);
-	if(key.flags & DB_DBT_MALLOC) free(key.data);
-	if(value.flags & DB_DBT_MALLOC) free(value.data);
 	
-	if(0 == rc) return indice.height;
+	db_cursor_cleanup(cursor);
+
+	if(0 == rc) return height;
 	return -1;
 }
 
@@ -599,6 +591,9 @@ int main(int argc, char **argv)
 	
 	
 	blocks_db_cleanup(db);
+	free(db);
+	
+	db_engine_cleanup(engine);
 	return 0;
 }
 #endif

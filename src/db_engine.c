@@ -697,12 +697,172 @@ void db_handle_cleanup(db_handle_t * db)
 	return;
 }
 
+/***************************************************************
+ * struct db_cursor
+****************************************************************/
+static inline void db_cursor_clear_data(struct db_cursor * cursor)
+{
+	assert(cursor);
+	db_record_data_cleanup(cursor->skey);
+	db_record_data_cleanup(cursor->key);
+	db_record_data_cleanup(cursor->value);
+}
+
+static inline int db_cursor_op(struct db_cursor * cursor, u_int32_t flags)
+{
+	int rc = -1;
+	
+	DBC * cursorp = cursor->priv;
+	DBT skey, key, value;
+	memset(&skey, 0, sizeof(skey));
+	memset(&key, 0, sizeof(key));
+	memset(&value, 0, sizeof(value));
+	
+	int duplicate_flags = cursor->db->record_flags & db_record_flags_multiple;
+	
+	key.flags = DB_DBT_MALLOC;
+	value.flags = DB_DBT_MALLOC;
+	
+	
+	if(cursor->key->data && cursor->key->size > 0) {
+		key.flags = DB_DBT_USERMEM;
+		key.data = cursor->key->data;
+		key.ulen = cursor->key->size;
+	}
+
+	
+	if(cursor->value->data && cursor->value->size > 0) {
+		value.flags = DB_DBT_USERMEM;
+		value.data = cursor->value->data;
+		value.ulen = cursor->value->size;
+	}
+
+	if(duplicate_flags) {
+		skey.flags = DB_DBT_MALLOC;
+		if(cursor->skey->data && cursor->skey->size > 0) {
+			skey.flags = DB_DBT_USERMEM;
+			skey.data = cursor->skey->data;
+			skey.ulen = cursor->skey->size;
+		}
+		rc = cursorp->pget(cursorp, &skey, &key, &value, flags);
+	}else {
+		rc = cursorp->get(cursorp, &key, &value, flags);
+	}
+	
+	db_check_error(rc, "cursorp->get()=%d: ", rc);
+	
+	if(0 == rc) {
+		if(duplicate_flags && skey.flags & DB_DBT_MALLOC) db_record_data_set(cursor->skey, &skey);
+		if(key.flags & DB_DBT_MALLOC) 		db_record_data_set(cursor->key, &key);
+		if(value.flags & DB_DBT_MALLOC) 	db_record_data_set(cursor->value, &value);
+	}
+	
+	if(key.flags & DB_DBT_MALLOC) 	free(key.data);
+	if(skey.flags & DB_DBT_MALLOC) 	free(skey.data);
+	if(value.flags & DB_DBT_MALLOC) free(value.data);
+	return rc;
+}
+
+static int db_cursor_first(struct db_cursor * cursor)
+{
+	return db_cursor_op(cursor, DB_FIRST);
+}
+static int db_cursor_last(struct db_cursor * cursor)
+{
+	return db_cursor_op(cursor, DB_LAST);
+}
+static int db_cursor_next(struct db_cursor * cursor)
+{
+	return db_cursor_op(cursor, DB_NEXT);
+}
+static int db_cursor_prev(struct db_cursor * cursor)
+{
+	return db_cursor_op(cursor, DB_PREV);
+}
+static int db_cursor_next_dup(struct db_cursor * cursor)
+{
+	return db_cursor_op(cursor, DB_NEXT_DUP);
+}
+static int db_cursor_prev_dup(struct db_cursor * cursor)
+{
+	return db_cursor_op(cursor, DB_PREV_DUP);
+}
+static int db_cursor_move_to(struct db_cursor * cursor, const db_record_data_t * key)
+{
+	db_record_data_t * dst = (cursor->db->record_flags & db_record_flags_multiple)?
+		cursor->skey:cursor->key;
+	
+	db_record_data_set(dst, &(DBT){.data = (void *)key->data, .size = key->size, });
+	return db_cursor_op(cursor, DB_SET);
+}
+static int db_cursor_set(struct db_cursor * cursor)
+{
+	assert(cursor && cursor->priv);
+	/*
+	 * Overwrite the data of the key/data pair to which the cursor currently refers.
+	 * The key parameter is ignored.
+	 */ 
+	DBT key, value;
+	memset(&key, 0, sizeof(key));
+	memset(&value, 0, sizeof(value));
+	
+	value.data = cursor->value->data;
+	value.size = cursor->value->size;
+	
+	DBC * cursorp = cursor->priv;
+	return cursorp->put(cursorp, &key, &value, DB_CURRENT);
+}
+static int db_cursor_del(struct db_cursor * cursor) 
+{
+	assert(cursor && cursor->priv);
+	DBC * cursorp = cursor->priv;
+	return cursorp->del(cursorp, 0);
+}
+
+db_cursor_t * db_cursor_init(db_cursor_t * cursor, db_handle_t * db, db_engine_txn_t * txn, int flags)
+{
+	assert(db);
+	DB * dbp = db_get_handle(db);
+	assert(dbp);
+	
+	DBC * cursorp = NULL;
+	int rc = dbp->cursor(dbp, db_txn_get_handle(txn), &cursorp, DB_READ_COMMITTED);
+	if(rc) return NULL;
+	
+	if(NULL == cursor) cursor = calloc(1, sizeof(*cursor));
+	assert(cursor);
+	
+	cursor->priv = cursorp;
+	cursor->db = db;
+	
+	cursor->first = db_cursor_first;
+	cursor->last = db_cursor_last;
+	cursor->next = db_cursor_next;
+	cursor->prev = db_cursor_prev;
+	cursor->next_dup = db_cursor_next_dup;
+	cursor->prev_dup = db_cursor_prev_dup;
+	
+	cursor->move_to = db_cursor_move_to;
+	cursor->set = db_cursor_set;
+	cursor->del = db_cursor_del;
+	return cursor;
+}
+
+void db_cursor_cleanup(db_cursor_t * cursor)
+{
+	if(NULL == cursor || NULL == cursor->priv) return;
+	
+	DBC * cursorp = cursor->priv;
+	cursorp->close(cursorp);
+	
+	db_cursor_clear_data(cursor);
+	return;
+}
+
 
 /*****************************************************************
  * struct db_engine
 ****************************************************************/
-
-
 #define DB_ENGINE_ALLOC_SIZE	(64)
 static int db_engine_resize(db_engine_t * engine, int new_size)
 {
@@ -805,8 +965,6 @@ static int engine_set_home(struct db_engine * engine, const char * home_dir)
 	strncpy(priv->home_dir, home_dir, sizeof(priv->home_dir));
 	return 0;
 }
-
-
 
 static inline int list_find(db_engine_private_t * priv, db_handle_t * db)
 {
@@ -1172,6 +1330,26 @@ int main(int argc, char **argv)
 	keys = NULL;
 	values = NULL;
 	
+	
+	// test db_cursor
+	printf("==== TEST db_cursor ====\n");
+	db_cursor_t * cursor = db_cursor_init(NULL, db, NULL, DB_READ_COMMITTED);
+	assert(cursor);
+	
+	rc = cursor->first(cursor);
+	while(0 == rc)
+	{
+		unsigned char * key = cursor->key->data;
+		struct db_record_block_data * data = cursor->value->data;
+		printf("key: %d, value: height=%d, timestamp=%d\n", 
+			*(int *)key, 
+			data->height, data->hdr.timestamp);
+		
+		rc = cursor->next(cursor);
+	}
+	
+	db_cursor_cleanup(cursor);
+	free(cursor);
 	
 	// test add_ref / unref
 	db_engine_add_ref(engine);

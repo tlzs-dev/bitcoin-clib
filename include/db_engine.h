@@ -60,6 +60,12 @@ enum db_flags
 	db_flags_dup_sort = 1, // if want to support duplicate keys
 };
 
+enum db_format_type
+{
+	db_format_type_btree = 0, 
+	db_format_type_hash = 1
+};
+
 typedef struct db_handle
 {
 	void * priv;
@@ -92,7 +98,7 @@ typedef struct db_handle
 
 	ssize_t (* find_secondary)(struct db_handle * secondary_db, db_engine_txn_t * txn, 
 		const db_record_data_t * skey,		// the key of secondary database
-		db_record_data_t ** p_keys,			// if need return the key of the primary database
+		db_record_data_t ** p_keys,			// if need return the key(s) of the primary database
 		db_record_data_t ** p_values);
 	
 	int (* insert)(struct db_handle * db, db_engine_txn_t * txn, const db_record_data_t * key, const db_record_data_t * value);
@@ -103,12 +109,29 @@ typedef struct db_handle
 db_handle_t * db_handle_init(db_handle_t * db, struct db_engine * engine, void * user_data);
 void db_handle_cleanup(db_handle_t * db);
 
-
-enum db_format_type
+typedef struct db_cursor
 {
-	db_format_type_btree = 0, 
-	db_format_type_hash = 1
-};
+	void * priv;
+	db_handle_t * db;
+	
+	db_record_data_t skey[1];
+	db_record_data_t key[1];
+	db_record_data_t value[1];
+	
+	int (* first)(struct db_cursor * cursor);
+	int (* last)(struct db_cursor * cursor);
+	int (* next)(struct db_cursor * cursor);
+	int (* prev)(struct db_cursor * cursor);
+	
+	int (* next_dup)(struct db_cursor * cursor);
+	int (* prev_dup)(struct db_cursor * cursor);
+	
+	int (* move_to)(struct db_cursor * cursor, const db_record_data_t * key);
+	int (* set)(struct db_cursor * cursor);
+	int (* del)(struct db_cursor * cursor);
+}db_cursor_t;
+db_cursor_t * db_cursor_init(db_cursor_t * cursor, db_handle_t * db, db_engine_txn_t * txn, int flags);
+void db_cursor_cleanup(db_cursor_t * cursor);
 
 typedef struct db_engine
 {
@@ -119,8 +142,8 @@ typedef struct db_engine
 	int (* set_home)(struct db_engine * engine, const char * home_dir);
 	
 	db_handle_t * (* open_db)(struct db_engine * engine, 
-		const char * db_filename, // can be NULL if just keep the db in memory
-		enum db_format_type db_type, 
+		const char * db_filename, 		// can be NULL if just keep the db in memory
+		enum db_format_type db_type, 	// btree or hash
 		int flags	// if need more control, overload this function, define the meaning of the 'flags' and add corresponding implementations
 	);
 	int (* close_db)(struct db_engine * engine, db_handle_t * db);
@@ -134,7 +157,6 @@ typedef struct db_engine
 db_engine_t * db_engine_init(const char * home_dir, void * user_data);
 void db_engine_cleanup(db_engine_t * engine);
 db_engine_t * db_engine_get();
-
 
 #ifdef __cplusplus
 }
