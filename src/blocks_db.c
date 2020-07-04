@@ -380,7 +380,7 @@ static int32_t blocks_db_get_latest(struct blocks_db * db, db_engine_txn_t * txn
 	
 	struct {
 		int32_t height;
-		int32_t is_orphan;
+	//	int32_t is_orphan;
 	}indice;
 	memset(&indice, 0, sizeof(indice));
 	
@@ -414,7 +414,8 @@ static int32_t blocks_db_get_latest(struct blocks_db * db, db_engine_txn_t * txn
 	rc = cursor->pget(cursor, &skey, &key, &value, DB_LAST);
 	while(0 == rc)
 	{
-		if(0 == indice.is_orphan) break;
+		db_record_block_t * block = value.data;
+		if(0 == block->is_orphan) break;
 		rc = cursor->pget(cursor, &skey, &key, &value, DB_PREV_DUP);
 	}
 	cursor->close(cursor);
@@ -552,6 +553,13 @@ int main(int argc, char **argv)
 		if(rc == DB_KEYEXIST) break;
 		assert(0 == rc);
 	}
+	
+	block->height = 9;
+	*(int *)hash->val = 2000 + block->height  + 1;
+	block->hdr.timestamp = 1000 + block->height;
+	block->is_orphan = 1;
+	rc = db->add(db, NULL, hash, block);
+	
 	
 	blocks_db_private_t * priv = db->priv;
 	printf("=== dump blocks.db ====\n");
