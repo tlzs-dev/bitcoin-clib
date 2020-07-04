@@ -40,6 +40,7 @@ typedef struct db_record_data
 	ssize_t size;
 	int flags;
 }db_record_data_t;
+void db_record_data_cleanup(struct db_record_data * record);
 
 enum db_record_flags
 {
@@ -123,6 +124,9 @@ typedef struct db_engine
 		int flags	// if need more control, overload this function, define the meaning of the 'flags' and add corresponding implementations
 	);
 	int (* close_db)(struct db_engine * engine, db_handle_t * db);
+	
+	int (* list_add)(struct db_engine * engine, db_handle_t * db);
+	int (* list_remove)(struct db_engine * engine, db_handle_t * db);
 	
 	db_engine_txn_t * (* txn_new)(struct db_engine * engine, struct db_engine_txn * parent_txn);
 	void (* txn_free)(struct db_engine * engine, db_engine_txn_t * txn);

@@ -40,6 +40,10 @@
 
 #include "db_engine.h"
 
+static pthread_mutex_t g_mutex = PTHREAD_MUTEX_INITIALIZER;
+#define global_lock() 		pthread_mutex_lock(&g_mutex)
+#define global_unlock()		pthread_mutex_unlock(&g_mutex)
+
 static inline DB_ENV * db_engine_get_env(db_engine_t * engine) { return *(DB_ENV **)engine->priv; }
 
 #define db_check_error(ret_code, fmt, ...) do {				\
@@ -268,6 +272,8 @@ static int db_open(struct db_handle * db, db_engine_txn_t * txn, const char * na
 		priv->db_type = DB_UNKNOWN;
 	}
 	
+	assert(priv->db_type != DB_UNKNOWN);
+	
 	if(flags & db_flags_dup_sort) {
 		dbp->set_flags(dbp, DB_DUPSORT);
 		db->record_flags |= db_record_flags_multiple;
@@ -383,7 +389,7 @@ void db_record_data_cleanup(struct db_record_data * record)
 	return;
 }
 
-static db_record_data_t * db_record_data_set(db_record_data_t * restrict result, const DBT * restrict value)
+static db_record_data_t * db_record_data_set(db_record_data_t * restrict result, DBT * restrict value)
 {
 	assert(value && value->data && value->size > 0);
 	
@@ -395,6 +401,13 @@ static db_record_data_t * db_record_data_set(db_record_data_t * restrict result,
 	
 	if(NULL == result->data) {
 		result->flags = 1;
+		if(value->flags & DB_DBT_MALLOC)
+		{
+			result->data = value->data; // transfer the pointer of DBT.data to result.data
+			value->data = NULL;
+			return result;
+		}
+		
 		result->data = malloc(value->size);
 		assert(result->data);
 	}
@@ -436,7 +449,7 @@ static ssize_t db_find(struct db_handle * db, db_engine_txn_t * _txn,
 		if(0 == rc) {
 			*p_values = db_record_data_set(*p_values, &value);
 		}
-		free(value.data);
+		if(value.data) { free(value.data); value.data = NULL; }
 		return 1;
 	}
 
@@ -463,7 +476,7 @@ static ssize_t db_find(struct db_handle * db, db_engine_txn_t * _txn,
 		}
 		db_record_data_set(&results[count++], &value);
 
-		free(value.data); value.data = NULL;
+		if(value.data) { free(value.data); value.data = NULL; }
 		rc = cursor->get(cursor, &key, &value, DB_NEXT_DUP);
 	}
 	cursor->close(cursor);
@@ -478,6 +491,8 @@ static ssize_t db_find_secondary(struct db_handle * db, db_engine_txn_t * _txn,
 	db_record_data_t ** p_values)
 {
 	int rc = -1;
+	ssize_t count = 0;
+	
 	assert(db && _skey);
 	DB * dbp = db_get_handle(db);
 	assert(dbp);
@@ -491,10 +506,18 @@ static ssize_t db_find_secondary(struct db_handle * db, db_engine_txn_t * _txn,
 	skey.data = (void *)_skey->data;
 	skey.size = _skey->size;
 	
+	/**
+	 * if DB_THREAD flags was applied to db_engine, 
+	 * then setting memory allocation flag on data DBT is mandated.
+	 */
+	key.flags = DB_DBT_MALLOC;
+	value.flags = DB_DBT_MALLOC;
+	
 	if(0 == (db->record_flags & db_record_flags_multiple)) // no duplicate keys
 	{
 		if(NULL == p_values) return 1;
 		
+		count = 0;
 		rc = dbp->pget(dbp, txn, &skey, &key, &value, DB_READ_COMMITTED);
 		db_check_error(rc, "dbp->pget(): ");
 		if(0 == rc) {
@@ -502,8 +525,12 @@ static ssize_t db_find_secondary(struct db_handle * db, db_engine_txn_t * _txn,
 				*p_keys = db_record_data_set(*p_keys, &key);
 			}
 			*p_values = db_record_data_set(*p_values, &value);
+			count = 1;
 		}
-		return 1;
+		
+		if(key.data) { free(key.data); 	key.data = NULL; }
+		if(value.data) { free(value.data);	value.data = NULL; }
+		return count;
 	}
 
 #define MAX_RECORDS (1024)
@@ -520,11 +547,9 @@ static ssize_t db_find_secondary(struct db_handle * db, db_engine_txn_t * _txn,
 	rc = dbp->cursor(dbp, txn, &cursor, DB_READ_COMMITTED);
 	assert(0 == rc && cursor);
 	
-	key.flags = DB_DBT_MALLOC;
-	value.flags = DB_DBT_MALLOC;
 	rc = cursor->pget(cursor, &skey, &key, &value, DB_SET);
 	db_check_error(rc, "cursor->pget(): ");
-	ssize_t count = 0;
+	
 	while(0 == rc)
 	{
 		if(count >= max_size) {
@@ -544,8 +569,8 @@ static ssize_t db_find_secondary(struct db_handle * db, db_engine_txn_t * _txn,
 		db_record_data_set(&results[count], &value);
 		++count;
 		
-		free(key.data); key.data = NULL;
-		free(value.data); value.data = NULL;
+		if(key.data) { free(key.data); key.data = NULL; }
+		if(value.data) { free(value.data); value.data = NULL; }
 		
 		rc = cursor->pget(cursor, &skey, &key, &value, DB_NEXT_DUP);
 	}
@@ -585,11 +610,10 @@ static int db_insert(struct db_handle * db, db_engine_txn_t * _txn,
 	DB_TXN * txn = db_txn_get_handle(_txn);
 	
 	u_int32_t flags = 0;
-	if(db->record_flags & db_record_flags_no_dup) flags |= DB_NODUPDATA;
-	if(db->record_flags & db_record_flags_no_overwrite) flags |= DB_NOOVERWRITE;
+	if(db->record_flags & db_record_flags_no_overwrite) flags = DB_NOOVERWRITE;
 	
 	int rc = dbp->put(dbp, txn, &key, &value, flags);
-	db_check_error(rc, "%s(): ", __FUNCTION__);
+	db_check_error(rc, "%s(rc=%d): ", __FUNCTION__, rc);
 	return rc;
 }
 
@@ -782,6 +806,54 @@ static int engine_set_home(struct db_engine * engine, const char * home_dir)
 	return 0;
 }
 
+
+
+static inline int list_find(db_engine_private_t * priv, db_handle_t * db)
+{
+	assert(priv);
+	for(int i = 0; i < priv->count; ++i)
+	{
+		if(priv->databases[i] == db) return i;
+	}
+	return -1;
+}
+
+
+static int engine_list_add(db_engine_t * engine, db_handle_t * db)
+{
+	int rc = -1;
+	assert(engine && engine->priv);
+	
+	global_lock();
+	db_engine_private_t * priv = engine->priv;
+	int index = list_find(priv, db);
+	if(index < 0) {
+		rc = db_engine_resize(engine, priv->count + 1);
+		if(0 == rc) priv->databases[priv->count++] = db;
+	}
+	global_unlock();
+	return rc;
+}
+
+static int engine_list_remove(db_engine_t * engine, db_handle_t * db)
+{
+	int rc = -1;
+	assert(engine && engine->priv);
+	
+	global_lock();
+	db_engine_private_t * priv = engine->priv;
+	
+	int index = list_find(priv, db);
+	if(index >= 0 && index < priv->count)
+	{
+		priv->databases[index] = priv->databases[--priv->count];
+		priv->databases[priv->count] = NULL;
+		rc = 0;
+	}
+	global_unlock();
+	return rc;
+}
+
 static db_handle_t * engine_open_db(struct db_engine * engine, const char * db_name, enum db_format_type db_type, int flags)
 {
 	assert(engine && engine->priv);
@@ -793,13 +865,8 @@ static db_handle_t * engine_open_db(struct db_engine * engine, const char * db_n
 	db_check_error(rc, "%s() failed.", __FUNCTION__);
 	assert(0 == rc);
 	
-	db_engine_private_t * priv = engine->priv;
-	pthread_mutex_lock(&priv->mutex);
-	
-	db_engine_resize(engine, priv->count + 1);
-	priv->databases[priv->count++] = db;
-	
-	pthread_mutex_unlock(&priv->mutex);
+	rc = engine_list_add(engine, db);
+	assert(0 == rc);
 	return db;
 }
 
@@ -809,22 +876,10 @@ static int engine_close_db(db_engine_t * engine, db_handle_t * db)
 	if(NULL == db) return -1;
 	assert(engine && engine->priv);
 	
-	db_engine_private_t * priv = engine->priv;
-	
 	rc = db->close(db);
 	db_check_error(rc, "%s() failed.", __FUNCTION__);
 	
-	pthread_mutex_lock(&priv->mutex);
-	for(ssize_t i = 0; i < priv->count; ++i)
-	{
-		if(priv->databases[i] == db) {
-			priv->databases[i] = priv->databases[--priv->count];
-			priv->databases[priv->count] = NULL;
-			break;
-		}
-	}
-	
-	pthread_mutex_unlock(&priv->mutex);
+	engine_list_remove(engine, db);
 	return rc;
 }
 
@@ -853,17 +908,18 @@ static void engine_txn_free(struct db_engine * engine, db_engine_txn_t * txn)
 	return;
 }
 
-
 static db_engine_t g_db_engine[1] = {{
 	.set_home = engine_set_home,
 	.open_db = engine_open_db,
 	.close_db = engine_close_db,
+	
+	.list_add = engine_list_add,
+	.list_remove = engine_list_remove,
+	
 	.txn_new = engine_txn_new,
 	.txn_free = engine_txn_free,
 }};
-static pthread_mutex_t g_mutex = PTHREAD_MUTEX_INITIALIZER;
-#define global_lock() 		pthread_mutex_lock(&g_mutex)
-#define global_unlock()		pthread_mutex_unlock(&g_mutex)
+
 
 db_engine_t * db_engine_get() { return g_db_engine; }
 static inline db_engine_t * db_engine_add_ref(db_engine_t * engine)  { 

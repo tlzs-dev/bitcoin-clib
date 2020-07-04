@@ -96,7 +96,6 @@ test_compact_int: $(SRC_DIR)/compact_int.c
 	$(CC) -o $@ $(CFLAGS) $(LIBS) $^ \
 	-lgmp \
 	-D_TEST_COMPACT_INT -D_STAND_ALONE -D_VERBOSE=7
-	
 
 chains: test_chains
 test_chains: $(BASE_OBJECTS) $(UTILS_OBJECTS) \
@@ -106,7 +105,8 @@ test_chains: $(BASE_OBJECTS) $(UTILS_OBJECTS) \
 	$(LINKER) -o $@ $(CFLAGS) $(LIBS) $^ \
 	-lgmp \
 	-D_TEST_CHAINS -D_STAND_ALONE -D_VERBOSE=7
-	
+
+
 db_engine: test_db_engine
 test_db_engine: $(SRC_DIR)/db_engine.c
 	echo "build $@ ..."
@@ -114,8 +114,16 @@ test_db_engine: $(SRC_DIR)/db_engine.c
 	[ -e data -a ! -L data ] && rm -f data/*.db data/__db.* data/log.*
 	mkdir -p data
 	$(LINKER) -o $@ $(CFLAGS) $^ \
-	-lm -lpthread -ldb \
-	-D_TEST_DB_ENGINE -D_STAND_ALONE -D_VERBOSE=7
+		-lm -lpthread -ldb \
+		-D_TEST_DB_ENGINE -D_STAND_ALONE -D_VERBOSE=7
+
+
+blocks_db: test_blocks_db
+test_blocks_db: $(SRC_DIR)/blocks_db.c $(SRC_DIR)/db_engine.c \
+	$(BASE_OBJECTS) $(UTILS_OBJECTS) 
+	echo "build $@ ..."
+	$(LINKER) -o $@ $(CFLAGS) $(LIBS) $^ \
+		-D_TEST_BLOCKS_DB -D_STAND_ALONE -D_VERBOSE=7
 
 .PHONY: do_init clean
 do_init:
