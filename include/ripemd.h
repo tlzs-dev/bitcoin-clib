@@ -16,7 +16,7 @@ typedef struct ripemd160_ctx
 
 void ripemd160_init(ripemd160_ctx_t * ripemd);
 void ripemd160_update(ripemd160_ctx_t * ripemd, const unsigned char * data, size_t len);
-void ripemd160_final(ripemd160_ctx_t * ripemd, unsigned char hash[20]);
+void ripemd160_final(ripemd160_ctx_t * ripemd, unsigned char hash[static 20]);
 
 #ifdef __cplusplus
 }

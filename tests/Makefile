@@ -125,6 +125,14 @@ test_blocks_db: $(SRC_DIR)/blocks_db.c $(SRC_DIR)/db_engine.c \
 	$(LINKER) -o $@ $(CFLAGS) $(LIBS) $^ \
 		-D_TEST_BLOCKS_DB -D_STAND_ALONE -D_VERBOSE=7
 
+
+utxoes_db: test_utxoes_db
+test_utxoes_db: $(SRC_DIR)/utxoes_db.c $(SRC_DIR)/db_engine.c \
+	$(BASE_OBJECTS) $(UTILS_OBJECTS) 
+	echo "build $@ ..."
+	$(LINKER) -o $@ $(CFLAGS) $(LIBS) $^ \
+		-D_TEST_UTXOES_DB -D_STAND_ALONE -D_VERBOSE=7
+
 .PHONY: do_init clean
 do_init:
 	mkdir -p ../obj/base ../obj/utils

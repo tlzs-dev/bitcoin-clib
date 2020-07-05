@@ -16,7 +16,7 @@ typedef struct hmac_sha256
 
 void hmac_sha256_init(hmac_sha256_t * hmac, const unsigned char * key, size_t keylen);
 void hmac_sha256_update(hmac_sha256_t * hmac, const unsigned char * data, size_t len);
-void hmac_sha256_final(hmac_sha256_t * hmac, unsigned char hash[32]);
+void hmac_sha256_final(hmac_sha256_t * hmac, unsigned char hash[static 32]);
 
 
 typedef struct hmac_sha512
@@ -27,7 +27,7 @@ typedef struct hmac_sha512
 
 void hmac_sha512_init(hmac_sha512_t * hmac, const unsigned char * key, size_t keylen);
 void hmac_sha512_update(hmac_sha512_t * hmac, const unsigned char * data, size_t len);
-void hmac_sha512_final(hmac_sha512_t * hmac, unsigned char hash[64]);
+void hmac_sha512_final(hmac_sha512_t * hmac, unsigned char hash[static 64]);
 
 
 #define hmac256(key, keylen, data, size, hash) do { \

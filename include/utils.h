@@ -14,8 +14,8 @@ void dump2(FILE * fp, const void * data, ssize_t length);
 #define dump(data, length) dump2(stdout, data, length)
 #define dump_line(prefix, data, length) do { printf("%s", prefix); dump(data, length); printf("\n"); } while(0)
 
-void hash256(const void * data, size_t length, uint8_t hash[32]);
-void hash160(const void * data, size_t length, uint8_t hash[20]);
+void hash256(const void * data, size_t length, uint8_t hash[static 32]);
+void hash160(const void * data, size_t length, uint8_t hash[static 20]);
 
 int make_nonblock(int fd);
 void global_lock();

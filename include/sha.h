@@ -17,7 +17,7 @@ typedef struct sha256_ctx
 
 void sha256_init(sha256_ctx_t * sha);
 void sha256_update(sha256_ctx_t * sha, const unsigned char * data, size_t len);
-void sha256_final(sha256_ctx_t * sha, unsigned char hash[32]);
+void sha256_final(sha256_ctx_t * sha, unsigned char hash[static 32]);
 
 
 
@@ -30,7 +30,7 @@ typedef struct sha512_ctx
 
 void sha512_init(sha512_ctx_t * sha);
 void sha512_update(sha512_ctx_t * sha, const void * data, size_t len);
-void sha512_final(sha512_ctx_t * sha, unsigned char hash[64]);
+void sha512_final(sha512_ctx_t * sha, unsigned char hash[static 64]);
 
 
 
