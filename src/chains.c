@@ -303,11 +303,6 @@ static struct block_info * blockchain_add_inheritances(blockchain_t * chain,
 	return orphans;
 }
 
-/*
-static int on_remove_block(struct blockchain * chain, const uint256_t * block_hash, const int height, void * user_data);
-static int on_add_block(struct blockchain * chain, const uint256_t * block_hash, const int height, void * user_data);
-*/
-
 blockchain_t * blockchain_init(blockchain_t * chain, 
 	const uint256_t * genesis_block_hash, 
 	const struct satoshi_block_header * genesis_block_hdr,
@@ -358,17 +353,24 @@ void blockchain_reset(blockchain_t * chain)
 	return;
 }
 
+static void no_free(void *p) 
+{
+}
 void blockchain_cleanup(blockchain_t * chain)
 {
 	if(NULL == chain) return;
 	
 	active_chain_list_cleanup(chain->candidates_list);
 	free(chain->heirs);
+	
+	tdestroy(chain->search_root, no_free);
+	
 	chain->heirs = NULL;
 	chain->max_size = 0;
 	chain->height = -1;
 	return;
 }
+
 static const blockchain_heir_t * blockchain_find(blockchain_t * chain, const uint256_t * hash)
 {
 	void ** p_node = tfind(hash, &chain->search_root, blockchain_heir_compare);

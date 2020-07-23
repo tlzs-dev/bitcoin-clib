@@ -11,6 +11,7 @@
 !Makefile
 !LICENSE
 !src
+!src/*
 !include
 !tests
 !test2

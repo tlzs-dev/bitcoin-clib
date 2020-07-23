@@ -4,8 +4,8 @@ DEBUG ?= 1
 VERBOSE ?= 7
 OPTIMIZE ?= -O2
 
-CC=gcc -std=gnu99 -Wall
-LINKER=gcc -std=gnu99 -Wall
+CC=gcc -std=gnu99 -Wall -D_GNU_SOURCE
+LINKER=gcc -std=gnu99 -Wall -D_GNU_SOURCE
 
 CFLAGS = -I../include
 LIBS = -lm -lpthread -ljson-c -ldb 
@@ -57,7 +57,8 @@ blockchain: test_blockchain
 
 test_blockchain: $(BASE_OBJECTS) $(UTILS_OBJECTS) \
 	$(OBJ_DIR)/satoshi-types.o $(OBJ_DIR)/compact_int.o $(OBJ_DIR)/merkle_tree.o \
-	$(SRC_DIR)/blockchain.c 
+	$(OBJ_DIR)/utxoes_db.o $(OBJ_DIR)/blocks_db.o $(OBJ_DIR)/db_engine.o $(OBJ_DIR)/chains.o \
+	test_blockchain.c $(SRC_DIR)/algorithm/avl_tree.c
 	echo "build $@ ..."
 	$(CC) -o $@ $(CFLAGS) $(LIBS) $^ -D_TEST_BITCOIN_BLOCKCHAIN -D_STAND_ALONE
 
@@ -128,10 +129,20 @@ test_blocks_db: $(SRC_DIR)/blocks_db.c $(SRC_DIR)/db_engine.c \
 
 utxoes_db: test_utxoes_db
 test_utxoes_db: $(SRC_DIR)/utxoes_db.c $(SRC_DIR)/db_engine.c \
+	$(SRC_DIR)/satoshi-types.c $(SRC_DIR)/compact_int.c $(SRC_DIR)/merkle_tree.c \
 	$(BASE_OBJECTS) $(UTILS_OBJECTS) 
 	echo "build $@ ..."
-	$(LINKER) -o $@ $(CFLAGS) $(LIBS) $^ \
+	$(LINKER) -o $@ $(CFLAGS) $^ \
+		$(LIBS) -lgmp \
 		-D_TEST_UTXOES_DB -D_STAND_ALONE -D_VERBOSE=7
+		
+
+avl_tree: test_avl_tree
+test_avl_tree: $(SRC_DIR)/algorithm/avl_tree.c
+	echo "build $@ ..."
+	$(LINKER) -o $@ $(CFLAGS) $^ \
+		$(LIBS) \
+		-D_TEST_AVL_TREE -D_STAND_ALONE -D_VERBOSE=7
 
 .PHONY: do_init clean
 do_init:

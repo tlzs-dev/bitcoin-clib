@@ -28,14 +28,13 @@ typedef struct utxoes_db
 	void * user_data;
 	
 	int (* add)(struct utxoes_db * db, db_engine_txn_t * txn, 
-		const uint256_t * tx_hash, int index, // satoshi_outpoint
+		const satoshi_outpoint_t * outpoint,
 		const satoshi_txout_t * txout,
 		const uint256_t * block_hash
 	);
 	
-	int (* remove)(struct utxoes_db * db, db_engine_txn_t * txn, const uint256_t * tx_hash, int index);
+	int (* remove)(struct utxoes_db * db, db_engine_txn_t * txn, const satoshi_outpoint_t * outpoint);
 	int (* remove_block)(struct utxoes_db * db, db_engine_txn_t * txn, const uint256_t * block_hash); 
-	
 	
 	ssize_t (* find)(struct utxoes_db * db, db_engine_txn_t * txn, 
 		const satoshi_outpoint_t * outpoint,

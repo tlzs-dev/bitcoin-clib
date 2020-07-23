@@ -196,9 +196,6 @@ block_info_t * block_info_new(const uint256_t * hash, struct satoshi_block_heade
 int block_info_add_child(block_info_t * parent, block_info_t * child);
 void block_info_free(block_info_t * info);
 
-
-
-
 /**
  * define the 'addition' and 'complement(~, 1's complement)' operation of compact_uint256 as below:
  * 
