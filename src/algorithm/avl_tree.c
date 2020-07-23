@@ -23,8 +23,19 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS 
  * IN THE SOFTWARE.
  * 
+ * 
  */
 
+/**
+ * origin: [ musl_libc-1.2.0 ]( https://www.musl-libc.org )
+ *     musl as a whole is licensed under the following standard MIT license.
+ *     Copyright © 2005-2020 Rich Felker, et al.
+ * 
+ * modified by: chehw (htc.chehw@gmail.com)
+ *    - append a context parameter (user_data) to twalk() 
+ *    - add items count
+ *    - add tree_iterator
+*/
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -52,6 +63,9 @@ struct clib_stack
 	
 	int (* push)(struct clib_stack * stack, void * data);
 	void * (* pop)(struct clib_stack * stack);
+	
+	// callback
+	void (* on_free_data)(void * data);
 };
 
 static void * stack_pop(struct clib_stack * stack)
@@ -91,7 +105,13 @@ struct clib_stack * clib_stack_init(struct clib_stack * stack)
 }
 void clib_stack_cleanup(struct clib_stack * stack)
 {
-	while(stack->top) stack_pop(stack);
+	struct stack_node * node = stack->top;
+	while(node) {
+		stack->top = node->next;
+		if(stack->on_free_data) stack->on_free_data(node->data);
+		free(node);
+	}
+	stack->count = 0;
 }
 
 
@@ -446,12 +466,10 @@ struct avl_node * avl_tree_iter_begin(struct avl_tree * tree)
 	}
 	assert(stack);
 	
+	clib_stack_cleanup(stack);
+	
 	struct avl_tree_iter * current = avl_tree_iter_new(tree->root, NULL);
 	assert(current);
-	
-	current->n = tree->root;
-	current->parent = NULL;
-	current->which = preorder;
 	
 	stack->push(stack, current);
 	
