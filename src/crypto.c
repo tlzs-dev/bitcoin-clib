@@ -40,6 +40,38 @@
 #include "utils.h"
 #include "crypto.h"
 
+/**
+ * utils
+ */
+void hash256(const void * data, size_t length, uint8_t hash[32])
+{
+	sha256_ctx_t sha[1];
+	uint8_t hash32[32];
+	sha256_init(sha);
+	sha256_update(sha, data, length);
+	sha256_final(sha, hash32);
+	
+	sha256_init(sha);
+	sha256_update(sha, hash32, 32);
+	sha256_final(sha, hash);
+}
+
+void hash160(const void * data, size_t length, uint8_t hash[20])
+{
+	sha256_ctx_t sha[1];
+	ripemd160_ctx_t ripemd[1];
+	uint8_t hash32[32];
+	
+	sha256_init(sha);
+	sha256_update(sha, data, length);
+	sha256_final(sha, hash32);
+	
+	ripemd160_init(ripemd);
+	ripemd160_update(ripemd, hash32, 32);
+	ripemd160_final(ripemd, hash);
+}
+
+
 
 typedef struct crypto_context_private
 {

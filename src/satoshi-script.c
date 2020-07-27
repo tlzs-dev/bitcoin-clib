@@ -34,8 +34,6 @@
 #include "satoshi-script.h"
 #include "satoshi-types.h"
 #include "utils.h"
-
-#include "blockchain.h"
 #include "crypto.h"
 
 #include "satoshi-tx.h"
