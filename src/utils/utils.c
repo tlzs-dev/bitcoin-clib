@@ -171,33 +171,33 @@ void dump2(FILE * fp, const void * data, ssize_t length)
 	return;
 }
 
-void hash256(const void * data, size_t length, uint8_t hash[32])
-{
-	sha256_ctx_t sha[1];
-	uint8_t hash32[32];
-	sha256_init(sha);
-	sha256_update(sha, data, length);
-	sha256_final(sha, hash32);
+//~ void hash256(const void * data, size_t length, uint8_t hash[32])
+//~ {
+	//~ sha256_ctx_t sha[1];
+	//~ uint8_t hash32[32];
+	//~ sha256_init(sha);
+	//~ sha256_update(sha, data, length);
+	//~ sha256_final(sha, hash32);
 	
-	sha256_init(sha);
-	sha256_update(sha, hash32, 32);
-	sha256_final(sha, hash);
-}
+	//~ sha256_init(sha);
+	//~ sha256_update(sha, hash32, 32);
+	//~ sha256_final(sha, hash);
+//~ }
 
-void hash160(const void * data, size_t length, uint8_t hash[20])
-{
-	sha256_ctx_t sha[1];
-	ripemd160_ctx_t ripemd[1];
-	uint8_t hash32[32];
+//~ void hash160(const void * data, size_t length, uint8_t hash[20])
+//~ {
+	//~ sha256_ctx_t sha[1];
+	//~ ripemd160_ctx_t ripemd[1];
+	//~ uint8_t hash32[32];
 	
-	sha256_init(sha);
-	sha256_update(sha, data, length);
-	sha256_final(sha, hash32);
+	//~ sha256_init(sha);
+	//~ sha256_update(sha, data, length);
+	//~ sha256_final(sha, hash32);
 	
-	ripemd160_init(ripemd);
-	ripemd160_update(ripemd, hash32, 32);
-	ripemd160_final(ripemd, hash);
-}
+	//~ ripemd160_init(ripemd);
+	//~ ripemd160_update(ripemd, hash32, 32);
+	//~ ripemd160_final(ripemd, hash);
+//~ }
 
 int make_nonblock(int fd)
 {
@@ -206,7 +206,9 @@ int make_nonblock(int fd)
 	
 	flags |= O_NONBLOCK;
 	int rc = fcntl(fd, F_SETFL, flags);
-	assert(0 == rc);
+	if(rc) {
+		perror("make_nonblock()::fcntl()");
+	}
 	return 0;
 }
 

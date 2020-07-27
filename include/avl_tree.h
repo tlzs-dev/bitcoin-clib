@@ -29,22 +29,6 @@ typedef struct avl_tree
 	struct avl_node * root;
 	void * user_data;
 	ssize_t count;
-
-	/**
-	 * virtual public methods: [ overidable ]
-	 * can be overiden to use inline compare functions
-	 */
-	void *(* add)(struct avl_tree * tree, const void * key);	// tsearch, 
-	void *(* del)(struct avl_tree * tree, const void * key);	// tdelete
-	void *(*find)(struct avl_tree * tree, const void * key);	// tfind
-	void  (*traverse)(struct avl_tree * tree);					// twalk
-	
-	struct avl_node * (* iter_begin)(struct avl_tree * tree);
-	struct avl_node * (* iter_next)(struct avl_tree * tree);
-	
-	// callbacks, need to be set in advance if use the default processing
-	int (* on_compare)(const void * a, const void * b);
-	void (* on_traverse)(const struct avl_node * nodep, const VISIT which, const int depth, void * user_data);
 	void (* on_free_data)(void * data);
 	
 	// priv
@@ -53,6 +37,18 @@ typedef struct avl_tree
 
 avl_tree_t * avl_tree_init(avl_tree_t * tree, void * user_data);
 void avl_tree_cleanup(avl_tree_t * tree);
+
+
+void * avl_tree_add(struct avl_tree * tree, const void *key, int (*cmp)(const void *, const void *));	// tsearch, 
+void * avl_tree_del(struct avl_tree * tree, const void * key, int (*cmp)(const void *, const void *));	// tdelete
+void * avl_tree_find(struct avl_tree * tree, const void * key, int (*cmp)(const void *, const void *));	// tfind
+void avl_tree_traverse(struct avl_tree * tree,
+	void (* on_traverse)(const struct avl_node * nodep, const VISIT which, const int depth, void * user_data),
+	void * user_data
+);					// twalk
+void avl_tree_destroy(struct avl_node *root, void (*on_free_data)(void *));	// tdestroy
+struct avl_node * avl_tree_iter_begin(struct avl_tree * tree);
+struct avl_node * avl_tree_iter_next(struct avl_tree * tree);
 
 #ifdef __cplusplus
 }

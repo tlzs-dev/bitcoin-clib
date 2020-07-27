@@ -46,7 +46,6 @@
 #include "avl_tree.h"
 
 
-
 /*************************************
  * stack
  ************************************/
@@ -78,14 +77,14 @@ static void * stack_pop(struct clib_stack * stack)
 	stack->top = node->next;
 	void * data = node->data;
 	
-	printf("%s(%p)...\n", __FUNCTION__, data);
+	// printf("%s(%p)...\n", __FUNCTION__, data);
 	free(node);
 	return data;
 }
 
 static int stack_push(struct clib_stack * stack, void * data)
 {
-	printf("%s(%p)...\n", __FUNCTION__, data);
+	// printf("%s(%p)...\n", __FUNCTION__, data);
 	struct stack_node * node = malloc(sizeof(*node));
 	assert(node);
 	++stack->count;
@@ -120,7 +119,7 @@ void clib_stack_cleanup(struct clib_stack * stack)
  ************************************/
 
 static inline int height_of(struct avl_node * node) { return node ? node->h : 0; }
-static int rot(struct avl_node **p, struct avl_node *x, int dir /* deeper side */)
+static int avl_rot(struct avl_node **p, struct avl_node *x, int dir /* deeper side */)
 {
 	struct avl_node * y = x->a[dir];
 	struct avl_node * z = y->a[!dir];
@@ -172,16 +171,8 @@ static int avl_tree_balance(struct avl_node **p)
 		n->h = h0<h1 ? h1+1 : h0+1;
 		return n->h - old;
 	}
-	return rot(p, n, h0<h1);
+	return avl_rot(p, n, h0<h1);
 }
-
-static void *avl_tree_add(struct avl_tree * tree, const void * key);	// tsearch, 
-static void *avl_tree_del(struct avl_tree * tree, const void * key);	// tdelete
-static void *avl_tree_find(struct avl_tree * tree, const void * key);	// tfind
-static void avl_tree_traverse(struct avl_tree * tree);					// twalk
-static void avl_tree_destroy(struct avl_node *root, void (*on_free_data)(void *));	// tdestroy
-struct avl_node * avl_tree_iter_begin(struct avl_tree * tree);
-struct avl_node * avl_tree_iter_next(struct avl_tree * tree);
 
 avl_tree_t * avl_tree_init(avl_tree_t * tree, void * user_data)
 {
@@ -189,14 +180,6 @@ avl_tree_t * avl_tree_init(avl_tree_t * tree, void * user_data)
 	assert(tree);
 	
 	tree->user_data = user_data;
-	tree->add = avl_tree_add;
-	tree->del = avl_tree_del;
-	tree->find = avl_tree_find;
-	tree->traverse = avl_tree_traverse;
-	
-	tree->iter_begin = avl_tree_iter_begin;
-	tree->iter_next = avl_tree_iter_next;
-	
 	return tree;
 }
 
@@ -215,9 +198,9 @@ void avl_tree_cleanup(avl_tree_t * tree)
 
 /* AVL tree height < 1.44*log2(nodes+2)-0.3, MAXH is a safe upper bound.  */
 #define AVL_TREE_MAX_HEIGHT (sizeof(void*)*8*3/2)
-void * avl_tree_add(struct avl_tree * tree, const void *key)
+void * avl_tree_add(struct avl_tree * tree, const void *key, int (*cmp)(const void *, const void *))
 {
-	assert(tree && tree->on_compare);
+	assert(tree);
 	struct avl_node **rootp = &tree->root;
 	struct avl_node *n = *rootp;
 	
@@ -226,12 +209,14 @@ void * avl_tree_add(struct avl_tree * tree, const void *key)
 	int i=0;
 	a[i++] = rootp;
 	
-	while(n) {
-		int rc = tree->on_compare(key, n->key);
-		if(0 == rc) return n;
-
-		a[i++] = &n->a[rc>0];
-		n = n->a[rc>0];
+	for (;;) {
+		if (!n)
+			break;
+		int c = cmp(key, n->key);
+		if (!c)
+			return n;
+		a[i++] = &n->a[c>0];
+		n = n->a[c>0];
 	}
 	
 	r = malloc(sizeof *r);
@@ -246,13 +231,13 @@ void * avl_tree_add(struct avl_tree * tree, const void *key)
 	++tree->count;
 	while (i && avl_tree_balance(a[--i]));
 	
-	printf("add node %p, value=%d\n", r, *(int *)r->key); 
+	// printf("add node %p, value=%d\n", r, *(int *)r->key); 
 	return r;
 }
 
-static void * avl_tree_del(struct avl_tree * tree, const void *restrict key)
+void * avl_tree_del(struct avl_tree * tree, const void *restrict key, int (*cmp)(const void *, const void *))
 {
-	assert(tree && tree->on_compare);
+	assert(tree);
 	struct avl_node ** rootp = &tree->root;
 	
 	struct avl_node **a[AVL_TREE_MAX_HEIGHT+1];
@@ -264,7 +249,7 @@ static void * avl_tree_del(struct avl_tree * tree, const void *restrict key)
 	a[i++] = rootp;
 	
 	while(n) {
-		int rc = tree->on_compare(key, n->key);
+		int rc = cmp(key, n->key);
 		if(0 == rc) break;
 		a[i++] = &n->a[rc>0];
 		n = n->a[rc>0];
@@ -297,21 +282,20 @@ static void * avl_tree_del(struct avl_tree * tree, const void *restrict key)
 
 #undef AVL_TREE_MAX_HEIGHT
 
-
-static void *avl_tree_find(struct avl_tree * tree, const void *key)
+void *avl_tree_find(struct avl_tree * tree, const void *key, int (*cmp)(const void *, const void *))
 {
-	assert(tree && tree->on_compare);
+	assert(tree);
 	struct avl_node * n = tree->root;
 	
 	while(n) {
-		int rc = tree->on_compare(key, n->key);
+		int rc = cmp(key, n->key);
 		if (0 == rc) break;
 		n = n->a[(rc > 0)];
 	}
 	return n;
 }
 
-static void avl_tree_destroy(struct avl_node *root, void (*on_free_data)(void *))
+void avl_tree_destroy(struct avl_node *root, void (*on_free_data)(void *))
 {
 	struct avl_node *r = root;
 	if (r == 0) return;
@@ -323,8 +307,7 @@ static void avl_tree_destroy(struct avl_node *root, void (*on_free_data)(void *)
 	free(r);
 }
 
-
-static void walk(const struct avl_node *r, void (*action)(const struct avl_node *, const VISIT, int, void * user_data), int d, void * user_data)
+void walk(const struct avl_node *r, void (*action)(const struct avl_node *, const VISIT, int, void * user_data), int d, void * user_data)
 {
 	if (!r)
 		return;
@@ -339,13 +322,14 @@ static void walk(const struct avl_node *r, void (*action)(const struct avl_node 
 	}
 }
 
-static void  avl_tree_traverse(struct avl_tree * tree) 
+void  avl_tree_traverse(struct avl_tree * tree,
+	void (* on_traverse)(const struct avl_node * nodep, const VISIT which, const int depth, void * user_data),
+	void * user_data
+)
 {
-	walk(tree->root, tree->on_traverse, 0, tree->user_data);
+	walk(tree->root, on_traverse, 0, user_data);
+	return;
 }
-
-
-
 
 
 struct avl_tree_iter {
@@ -363,14 +347,16 @@ struct avl_tree_iter * avl_tree_iter_new(struct avl_node * n, struct avl_tree_it
 	iter->which = preorder;
 	return iter;
 }
+
 void avl_tree_iter_free(struct avl_tree_iter * iter)
 {
 	free(iter);
+	return;
 }
 
 static inline struct avl_node * get_next_iter(struct clib_stack * stack)
 {
-	printf("=== %s()...\n", __FUNCTION__);
+	// printf("=== %s()...\n", __FUNCTION__);
 	assert(stack);
 	
 	if(NULL == stack->top) return NULL;
@@ -389,12 +375,12 @@ static inline struct avl_node * get_next_iter(struct clib_stack * stack)
 			avl_tree_iter_free(current);
 			continue;
 		}
-		printf("\tcurrent: %p, which=%d, r=%p(%d), a[0]=(%d), a[1]=(%d), r->h=%d\n", 
-			current, current->which, 
-			r, *(int *)r->key,
-			r->a[0]?*(int *)r->a[0]->key:-1,
-			r->a[1]?*(int *)r->a[1]->key:-1,
-			r->h);
+		//~ printf("\tcurrent: %p, which=%d, r=%p(%d), a[0]=(%d), a[1]=(%d), r->h=%d\n", 
+			//~ current, current->which, 
+			//~ r, *(int *)r->key,
+			//~ r->a[0]?*(int *)r->a[0]->key:-1,
+			//~ r->a[1]?*(int *)r->a[1]->key:-1,
+			//~ r->h);
 		
 		if(r->h == 1) {
 			current->which = leaf;
@@ -445,11 +431,8 @@ static inline struct avl_node * get_next_iter(struct clib_stack * stack)
 		default:
 			assert(current->which >= preorder);
 			assert(current->which <= leaf);
-
 		}
 	}
-	
-	
 	return NULL;
 }
 
@@ -538,23 +521,20 @@ int main(int argc, char **argv)
 	memset(tree, 0, sizeof(tree));
 	
 	avl_tree_init(tree, &ctx);
-	tree->on_compare = on_compare;
-	
-	for(int i = 0; i < N; ++i) tree->add(tree, &a[i]);
+	for(int i = 0; i < N; ++i) avl_tree_add(tree, &a[i], on_compare);
 	
 	printf("tree.count: %d\n", (int)tree->count);
-	
-	tree->on_traverse = get_sorted_result;
-	tree->traverse(tree);
+
+	avl_tree_traverse(tree, get_sorted_result, &ctx);
 	
 	for(int i = 0; i < N; ++i) printf("%d\n", sorted[i]);
 	
-	struct avl_node * node = tree->iter_begin(tree);
+	struct avl_node * node = avl_tree_iter_begin(tree);
 	int i = 0;
 	while(node)
 	{
 		printf("node %d(%p): value=%d\n", i++, node, *(int *)node->key);
-		node = tree->iter_next(tree); 
+		node = avl_tree_iter_next(tree); 
 		
 		struct clib_stack * stack = tree->stack;
 		assert(stack);
