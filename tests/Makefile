@@ -57,10 +57,11 @@ blockchain: test_blockchain
 
 test_blockchain: $(BASE_OBJECTS) $(UTILS_OBJECTS) \
 	$(OBJ_DIR)/satoshi-types.o $(OBJ_DIR)/compact_int.o $(OBJ_DIR)/merkle_tree.o \
-	$(OBJ_DIR)/utxoes_db.o $(OBJ_DIR)/blocks_db.o $(OBJ_DIR)/db_engine.o $(OBJ_DIR)/chains.o \
+	$(OBJ_DIR)/utxoes_db.o $(OBJ_DIR)/blocks_db.o $(OBJ_DIR)/db_engine.o \
+	$(OBJ_DIR)/chains.o $(OBJ_DIR)/crypto.o\
 	test_blockchain.c $(SRC_DIR)/algorithm/avl_tree.c
 	echo "build $@ ..."
-	$(CC) -o $@ $(CFLAGS) $(LIBS) $^ -D_TEST_BITCOIN_BLOCKCHAIN -D_STAND_ALONE
+	$(CC) -o $@ $(CFLAGS) $(LIBS) $^ -D_TEST_BITCOIN_BLOCKCHAIN -D_STAND_ALONE -lsecp256k1 -D_VERBOSE=7
 
 satoshi-script: test_satoshi-script
 test_satoshi-script: $(BASE_OBJECTS) $(UTILS_OBJECTS) $(SRC_DIR)/satoshi-types.c \
@@ -100,12 +101,12 @@ test_compact_int: $(SRC_DIR)/compact_int.c
 
 chains: test_chains
 test_chains: $(BASE_OBJECTS) $(UTILS_OBJECTS) \
-	$(OBJ_DIR)/satoshi-types.o $(SRC_DIR)/compact_int.c $(OBJ_DIR)/merkle_tree.o \
+	$(OBJ_DIR)/satoshi-types.o $(SRC_DIR)/compact_int.c $(OBJ_DIR)/merkle_tree.o $(OBJ_DIR)/crypto.o \
 	$(SRC_DIR)/chains.c
 	echo "build $@ ..."
 	$(LINKER) -o $@ $(CFLAGS) $(LIBS) $^ \
 	-lgmp \
-	-D_TEST_CHAINS -D_STAND_ALONE -D_VERBOSE=7
+	-D_TEST_CHAINS -D_STAND_ALONE -D_VERBOSE=7  -lsecp256k1 -D_VERBOSE=7
 
 
 db_engine: test_db_engine

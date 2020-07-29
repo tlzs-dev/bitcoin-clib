@@ -416,9 +416,6 @@ static int blockchain_add(blockchain_t * block_chain,
 	const struct satoshi_block_header * hdr)
 {
 	assert(block_hash && hdr);
-	
-	printf("\n========== hdr.nonce: %d ==========\n", (int)hdr->nonce);
-	
 	unsigned char hash[32];
 	hash256(hdr, sizeof(*hdr), hash);
 	assert(0 == memcmp(hash, block_hash, sizeof(uint256_t)));
@@ -545,7 +542,7 @@ static int blockchain_add(blockchain_t * block_chain,
 		blockchain_add_inheritances(block_chain, (blockchain_heir_t *)heir, successor);
 		
 		/**
-		 * forget the successor and all his first-child, 
+		 * forgets the successor and all his first-child, 
 		 * they no longer belong to our group (temporarily).
 		 * 
 		 * offsprings of the suceesor who does not have the 'first-child' position will be abandoned as orphans,

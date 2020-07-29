@@ -43,21 +43,61 @@
 #include "utils.h"
 #include "avl_tree.h"
 
-typedef struct blocks_record
+typedef struct memcache_block_info
 {
 	uint256_t hash;
-	db_record_block_t block;
-}blocks_record_t;
+	db_record_block_t data;
+	satoshi_block_t * block;
+}memcache_block_info_t;
+ 
+memcache_block_info_t * memcache_block_info_new(const uint256_t * hash, 
+	const struct satoshi_block_header * hdr, 
+	int64_t file_index, int64_t file_offset, 
+	satoshi_block_t * block)
+{
+	memcache_block_info_t * binfo = calloc(1, sizeof(*binfo));
+	assert(binfo);
+	binfo->hash = *hash;
+	binfo->data.hdr = * hdr;
+	binfo->data.file_index = file_index;
+	binfo->data.start_pos = file_offset;
+	binfo->block = block;
+	return binfo;
+}
+void memcache_block_info_set(memcache_block_info_t * dst, const memcache_block_info_t * src) 
+{
+	if(dst->block) { satoshi_block_cleanup(dst->block); dst->block = NULL; };
+	*dst = *src;
+	return;
+}
+
+void memcache_block_info_free(memcache_block_info_t * binfo)
+{
+	if(NULL == binfo) return;
+	if(binfo->block) {
+		satoshi_block_cleanup(binfo->block);
+		free(binfo->block);
+		binfo->block = NULL;
+	}
+	free(binfo);
+}
+
+static int memcache_block_info_compare(const void * a, const void * b) 
+{
+	return uint256_compare(a, b);
+}
 
 typedef struct memcache
 {
 	avl_tree_t search_tree[1]; // base object
 	ssize_t max_size;
+	
+	int (* on_compare)(const void *, const void *);
 }memcache_t;
 
-#define memcache_add(cache, data) ((avl_tree_t *)cache)->add((avl_tree_t *)cache, data)
-#define memcache_del(cache, data) ((avl_tree_t *)cache)->del((avl_tree_t *)cache, data)
-#define memcache_find(cache, data) ((avl_tree_t *)cache)->find((avl_tree_t *)cache, data)
+#define memcache_add(cache, data)  avl_tree_add((avl_tree_t *)cache, data, cache->on_compare)
+#define memcache_del(cache, data)  avl_tree_del((avl_tree_t *)cache, data, cache->on_compare)
+#define memcache_find(cache, data) avl_tree_find((avl_tree_t *)cache, data, cache->on_compare)
 
 memcache_t * memcache_init(memcache_t * cache, ssize_t max_size, 
 	int (* on_compare)(const void *, const void *),
@@ -77,11 +117,7 @@ typedef struct test_context
 	utxoes_db_t utxo_db[1];
 	blocks_db_t block_db[1];
 	
-	ssize_t memcache_max_size;
-	ssize_t count;
-	blocks_record_t * blocks;
-	
-	
+	memcache_t cache[1];
 }test_context_t;
 
 test_context_t * test_context_init(test_context_t * ctx, int argc, char ** argv, void * user_data);
@@ -102,7 +138,8 @@ int main(int argc, char **argv)
  ******************************************************/
 
 static test_context_t g_context[1] = {{
-	.magic = BITCOIN_MESSAGE_MAGIC_TESTNET3,
+	//~ .magic = BITCOIN_MESSAGE_MAGIC_TESTNET3,
+	.magic = BITCOIN_MESSAGE_MAGIC_MAINNET,
 	.blocks_data_path = "blocks",
 	.db_home = "data",
 }};
@@ -140,7 +177,7 @@ static void global_init(void)
 }
 
 static int check_path(const char * path);
-static ssize_t load_blocks(test_context_t * ctx);
+static ssize_t load_block(test_context_t * ctx, const char * filename);
 static int on_remove_block(struct blockchain * chain, const uint256_t * block_hash, const int height, void * user_data);
 static int on_add_block(struct blockchain * chain, const uint256_t * block_hash, const int height, void * user_data);
 
@@ -156,6 +193,12 @@ test_context_t * test_context_init(test_context_t * ctx, int argc, char ** argv,
 	check_path(ctx->blocks_data_path);
 	
 	global_lock();
+	
+	memcache_init(ctx->cache, 0, 
+		memcache_block_info_compare, 
+		(void (*)(void *))memcache_block_info_free, 
+		ctx);
+	
 	db_engine_t * db_mgr = db_engine_init(ctx->db_home, ctx);
 	assert(db_mgr);
 	ctx->db_mgr = db_mgr;
@@ -166,14 +209,13 @@ test_context_t * test_context_init(test_context_t * ctx, int argc, char ** argv,
 	utxoes_db_t * utxo_db = utxoes_db_init(ctx->utxo_db, db_mgr, NULL, ctx);
 	assert(utxo_db);
 	
-	blockchain_t * chain = blockchain_init(ctx->chain, NULL, s_testnet_hdr, ctx);
+	blockchain_t * chain = blockchain_init(ctx->chain, NULL, 
+		NULL, ctx);
+		//s_testnet_hdr, ctx);
 	assert(chain);
 	
 	chain->on_add_block = on_add_block;
 	chain->on_remove_block = on_remove_block;
-	
-	
-	load_blocks(ctx);
 	global_unlock();
 	
 	return ctx;
@@ -188,16 +230,148 @@ void test_context_cleanup(test_context_t * ctx)
 		db_engine_cleanup(ctx->db_mgr);
 		ctx->db_mgr = NULL;
 	}
+	
+	memcache_cleanup(ctx->cache);
 	global_unlock();
 	return;
 }
 
+#include <fcntl.h>
+#include <dirent.h>
+static int blocks_file_filter(const struct dirent * entry) 
+{
+	if((entry->d_type & DT_REG) != DT_REG) return 0;
+	
+	// check prefix
+	if(strstr(entry->d_name, "blk") != entry->d_name) return 0; 
+	
+	// check ext_name
+	const char * p_ext = strrchr(entry->d_name, '.');
+	if(NULL == p_ext || strcasecmp(p_ext, ".dat")) return 0;
+
+	return 1;
+}
 
 int test_run(test_context_t * ctx)
 {
+	const char * blocks_dir = ctx->blocks_data_path;
+	assert(blocks_dir);
+	
+	char path_name[PATH_MAX] = "";
+	struct dirent ** blocks_filelist = NULL;
+	ssize_t count = scandir(blocks_dir, &blocks_filelist, blocks_file_filter, versionsort);
+	printf("block files count: %Zd\n", count);
+	
+	for(int i = 0; i < count; ++i)
+	{
+		struct dirent * entry = blocks_filelist[i];
+		int cb = snprintf(path_name, sizeof(path_name), "%s/%s", blocks_dir, entry->d_name);
+		assert(cb > 0 && cb < sizeof(path_name));
+		free(entry);
+		
+		printf("==== load %s ====\n", path_name);
+		load_block(ctx, path_name);
+	}
+	free(blocks_filelist);
+	
 	return 0;
 }
 
+struct block_file_header
+{
+	uint32_t magic;
+	uint32_t length;
+};
+
+static inline int64_t get_block_file_index(const char * block_file)
+{
+	assert(block_file);
+	char path_name[PATH_MAX] = "";
+	strncpy(path_name, block_file, sizeof(path_name));
+	char * filename = basename(path_name);
+	assert(filename && filename[0]);
+	
+	char * p_ext = strrchr(filename, '.');
+	assert(p_ext);
+	*p_ext = '\0';
+	
+	char * prefix = strstr(filename, "blk");
+	assert(prefix && prefix == filename);
+	
+	int64_t index = atol(filename + 3);
+	return index;
+}
+
+static ssize_t load_block(test_context_t * ctx, const char * filename)
+{
+#define BUFFER_SIZE (4 * 1024 * 1024)
+	unsigned char * buffer = malloc(BUFFER_SIZE);
+	assert(buffer);
+	
+	struct block_file_header file_hdr[1];
+	FILE * fp = fopen(filename, "rb");
+	assert(fp);
+	ssize_t cb = 0;
+	int file_index = get_block_file_index(filename);
+	assert(file_index >= 0);
+	
+	memcache_t * cache = ctx->cache;
+	
+	blockchain_t * chain = ctx->chain;
+	blocks_db_t * block_db = ctx->block_db;
+	utxoes_db_t * utxo_db = ctx->utxo_db;
+	
+	assert(chain && block_db && utxo_db);
+	
+	ssize_t blocks_count = 0;
+	int64_t file_offset = 0;
+	while((cb = fread(file_hdr, sizeof(file_hdr), 1, fp)) == 1) {
+		assert(file_hdr->magic == ctx->magic);
+		if(file_hdr->magic != ctx->magic) return -1;
+		file_offset += sizeof(file_hdr);
+		
+		cb = fread(buffer, 1, file_hdr->length, fp);
+		assert(cb == file_hdr->length);
+		if(cb != file_hdr->length) return -1;
+		
+		satoshi_block_t * block = calloc(1, sizeof(*block));
+		assert(block);
+		
+		ssize_t length = satoshi_block_parse(block, cb, buffer);
+		assert(length == cb);
+		
+		
+		
+		file_offset += cb;
+		memcache_block_info_t * binfo = memcache_block_info_new(&block->hash, &block->hdr, file_index, file_offset, block);
+		assert(binfo);
+		memcache_block_info_t ** p_node = memcache_add(cache, binfo);
+		assert(p_node);
+		
+		if(*p_node != binfo) {	// dupliate blocks
+			memcache_block_info_set(*p_node, binfo);
+			binfo->block = NULL;
+			memcache_block_info_free(binfo);
+			binfo = *p_node;
+		}
+		assert(*p_node == binfo);
+
+		int rc = chain->add(chain, &block->hash, &block->hdr);
+		if(rc == 0) { // new block found
+			++blocks_count;
+		}
+		
+		
+		printf("current height: %ld\n", chain->height);
+	}
+	
+	
+	
+	fclose(fp);
+	free(buffer);
+#undef BUFFER_SIZE
+	return 0;
+}
 
 
 /*******************************************************
@@ -206,21 +380,91 @@ int test_run(test_context_t * ctx)
  
 static int on_remove_block(struct blockchain * chain, const uint256_t * block_hash, const int height, void * user_data)
 {
+	test_context_t * ctx = user_data;
+	assert(ctx);
+	memcache_t * cache = ctx->cache;
+	assert(cache);
+	
+	block_info_t ** p_node = memcache_find(cache, block_hash);
+	if(p_node) {
+		
+	}
+	
 	return 0;
 }
 
 static int on_add_block(struct blockchain * chain, const uint256_t * block_hash, const int height, void * user_data)
 {
+	test_context_t * ctx = user_data;
+	assert(ctx);
+	memcache_t * cache = ctx->cache;
+	assert(cache);
+	
+	db_engine_t * db_mgr = ctx->db_mgr;
+	assert(db_mgr);
+	
+	memcache_block_info_t ** p_node = memcache_find(cache, block_hash);
+	assert(p_node);
+	
+	memcache_block_info_t * binfo = *p_node;
+	assert(binfo);
+	
+	db_engine_txn_t * txn = db_mgr->txn_new(db_mgr, NULL);
+	assert(txn);
+	
+	blocks_db_t * block_db = ctx->block_db;
+	utxoes_db_t * utxo_db = ctx->utxo_db;
+	assert(block_db && utxo_db);
+	
+	int rc = 0;
+	rc = block_db->add(block_db, txn, &binfo->hash, &binfo->data);
+	assert(0 == rc);
+	
+	satoshi_block_t * block = binfo->block;
+	assert(block);
+	
+	assert(block->txn_count > 0);
+	for(ssize_t i = 0; i < block->txn_count; ++i) {
+		satoshi_tx_t * tx = &block->txns[i];
+		assert(tx->txin_count > 0 && tx->txout_count > 0 && tx->txins && tx->txouts);
+		
+		satoshi_txin_t * txins = tx->txins;
+		satoshi_txout_t * txouts = tx->txouts;
+		
+		satoshi_outpoint_t outpoint[1];
+		memset(outpoint, 0, sizeof(outpoint));
+		memcpy(outpoint->prev_hash, tx->txid, 32);
+		
+		if(i != 0) { // not coinbase tx
+			// Todo: verify txin scripts
+			// ...
+			
+			// destroy spent tx outputs
+			for(ssize_t ii = 0; ii < tx->txin_count; ++ii)
+			{
+				satoshi_txin_t * txin = &txins[ii];
+				utxo_db->remove(utxo_db, txn, &txin->outpoint);
+			}
+		}
+		
+		for(ssize_t ii = 0; ii < tx->txout_count; ++ii)
+		{
+			
+			satoshi_txout_t * txout = &txouts[ii];
+			outpoint->index = (int32_t)ii;
+			utxo_db->add(utxo_db, txn, outpoint, txout, &block->hash);
+		}
+		
+	}
+	
+	txn->commit(txn, 0);
+	db_mgr->txn_free(db_mgr, txn);
+
+	memcache_del(cache, block_hash);
+	memcache_block_info_free(binfo);
+	
 	return 0;
 }
-
-
-static ssize_t load_blocks(test_context_t * ctx)
-{
-	return 0;
-}
-
-
 
 
 /*******************************************************
@@ -250,12 +494,9 @@ static int check_path(const char * path)
 	assert(cb > 0 && cb < (int)sizeof(command));
 	
 	rc = system(command);
-	
-	return 0;
+	assert(0 == rc);
+	return rc;
 }
-
-
-
 
 /*******************************************************
  * mem cache
@@ -267,10 +508,11 @@ memcache_t * memcache_init(memcache_t * cache, ssize_t max_size,
 {
 	if(NULL == cache) cache = calloc(1, sizeof(*cache));
 	assert(cache);
+	
+	cache->on_compare = on_compare;
 
 	avl_tree_t * tree = avl_tree_init(cache->search_tree, cache);
 	assert(tree == cache->search_tree);
-	tree->on_compare = on_compare;
 	tree->on_free_data = on_free;
 	
 	return cache;
@@ -287,8 +529,6 @@ void memcache_cleanup(memcache_t * cache)
 	if(cache) {
 		avl_tree_cleanup(cache->search_tree);
 	}
-	
-	
 	return;
 }
 

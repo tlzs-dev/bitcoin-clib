@@ -86,29 +86,22 @@ static const unsigned char s_hex_table[256] = {
 
 ssize_t bin2hex(const void * data, size_t length, char ** p_hex)
 {
+	static const uint16_t * digits = (uint16_t *)s_hex_digits;
 	if(length == 0 || NULL == data) return 0;
 	ssize_t size = length * 2;
 	if(NULL == p_hex) return size + 1;
 	const unsigned char * p = data;
-	const unsigned char * p_end = p + length;
-	
 	char * hex = *p_hex;
 	if(NULL == hex)
 	{
 		hex = malloc(size + 1);
 		if(NULL == hex) return -1;
+		hex[size] = '\0';
 		*p_hex = hex;
 	}
 	
-	char * dst = hex;
-	for(; p < p_end; ++p)
-	{
-		int c = *p;
-		dst[0] = s_hex_digits[c * 2];
-		dst[1] = s_hex_digits[c * 2 + 1];
-		dst += 2;
-	}
-	*dst = '\0';
+	uint16_t * dst = (uint16_t *)hex;
+	for(size_t i = 0; i < length; ++i) dst[i] = digits[p[i]];
 	return size;
 }
 
@@ -117,19 +110,19 @@ ssize_t hex2bin(const char * hex, size_t length, void ** p_data)
 	if(NULL == hex) return 0;
 	if(((ssize_t)length) <= 0) length = strlen(hex);
 	if(length == 0) return 0;
-	
-	
 	if(length % 2) return -1;
-	ssize_t size = length / 2;
 	
-	if(NULL == p_data) return size;
+	ssize_t size = length / 2;
+	if(NULL == p_data) return size;	// return buffer_size
+	
 	unsigned char * data = * p_data;
 	if(NULL == data)
 	{
 		data = malloc(size);
+		assert(data);
 		if(NULL == data) return -1;
 	}
-	
+
 	for(size_t i = 0; i < size; ++i)
 	{
 		unsigned char hi = s_hex_table[(int)hex[i * 2]];
@@ -171,45 +164,19 @@ void dump2(FILE * fp, const void * data, ssize_t length)
 	return;
 }
 
-//~ void hash256(const void * data, size_t length, uint8_t hash[32])
-//~ {
-	//~ sha256_ctx_t sha[1];
-	//~ uint8_t hash32[32];
-	//~ sha256_init(sha);
-	//~ sha256_update(sha, data, length);
-	//~ sha256_final(sha, hash32);
-	
-	//~ sha256_init(sha);
-	//~ sha256_update(sha, hash32, 32);
-	//~ sha256_final(sha, hash);
-//~ }
-
-//~ void hash160(const void * data, size_t length, uint8_t hash[20])
-//~ {
-	//~ sha256_ctx_t sha[1];
-	//~ ripemd160_ctx_t ripemd[1];
-	//~ uint8_t hash32[32];
-	
-	//~ sha256_init(sha);
-	//~ sha256_update(sha, data, length);
-	//~ sha256_final(sha, hash32);
-	
-	//~ ripemd160_init(ripemd);
-	//~ ripemd160_update(ripemd, hash32, 32);
-	//~ ripemd160_final(ripemd, hash);
-//~ }
-
 int make_nonblock(int fd)
 {
 	int flags = fcntl(fd, F_GETFL);
-	if(flags < 0) return -1;
+	if(flags == -1) {
+		perror("make_nonblock()::fcntl(F_GETFL)");
+		return -1;
+	}
 	
 	flags |= O_NONBLOCK;
 	int rc = fcntl(fd, F_SETFL, flags);
-	if(rc) {
-		perror("make_nonblock()::fcntl()");
-	}
-	return 0;
+	if(rc) perror("make_nonblock()::fcntl(F_SETFL)");
+	
+	return rc;
 }
 
 static pthread_mutex_t s_mutex = PTHREAD_MUTEX_INITIALIZER;
