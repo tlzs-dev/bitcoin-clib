@@ -199,7 +199,7 @@ test_context_t * test_context_init(test_context_t * ctx, int argc, char ** argv,
 		(void (*)(void *))memcache_block_info_free, 
 		ctx);
 	
-	db_engine_t * db_mgr = db_engine_init(ctx->db_home, ctx);
+	db_engine_t * db_mgr = db_engine_init(NULL, ctx->db_home, ctx);
 	assert(db_mgr);
 	ctx->db_mgr = db_mgr;
 	
@@ -356,11 +356,10 @@ static ssize_t load_block(test_context_t * ctx, const char * filename)
 		}
 		assert(*p_node == binfo);
 
-		int rc = chain->add(chain, &block->hash, &block->hdr);
-		if(rc == 0) { // new block found
+		enum blockchain_error err_code = chain->add(chain, &block->hash, &block->hdr);
+		if(err_code == blockchain_error_no_error) { // new block found
 			++blocks_count;
 		}
-		
 		
 		printf("current height: %ld\n", chain->height);
 	}
@@ -417,6 +416,7 @@ static int on_add_block(struct blockchain * chain, const uint256_t * block_hash,
 	assert(block_db && utxo_db);
 	
 	int rc = 0;
+	binfo->data.height = height;
 	rc = block_db->add(block_db, txn, &binfo->hash, &binfo->data);
 	assert(0 == rc);
 	
@@ -438,7 +438,6 @@ static int on_add_block(struct blockchain * chain, const uint256_t * block_hash,
 		if(i != 0) { // not coinbase tx
 			// Todo: verify txin scripts
 			// ...
-			
 			// destroy spent tx outputs
 			for(ssize_t ii = 0; ii < tx->txin_count; ++ii)
 			{

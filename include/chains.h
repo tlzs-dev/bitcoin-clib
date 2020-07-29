@@ -150,6 +150,15 @@ typedef struct blockchain_heir
 }blockchain_heir_t;
 
 
+
+enum blockchain_error
+{
+	blockchain_error_failed = -1,
+	blockchain_error_no_error = 0,
+	blockchain_error_duplicated_block = 1,
+	blockchain_error_duplicated_tx = 2,
+};
+
 /**
  * struct blockchain
  * @details:
@@ -174,7 +183,7 @@ typedef struct blockchain
 	/**
 	 * add(): only increments are allowed, any reorganization must be done by internal.
 	 */
-	int (* add)(struct blockchain * chain, const uint256_t * hash, const struct satoshi_block_header * hdr);
+	enum blockchain_error (* add)(struct blockchain * chain, const uint256_t * hash, const struct satoshi_block_header * hdr);
 	
 	/**
 	 * virtual functions: 

@@ -154,7 +154,7 @@ typedef struct db_engine
 	db_engine_txn_t * (* txn_new)(struct db_engine * engine, struct db_engine_txn * parent_txn);
 	void (* txn_free)(struct db_engine * engine, db_engine_txn_t * txn);
 }db_engine_t;
-db_engine_t * db_engine_init(const char * home_dir, void * user_data);
+db_engine_t * db_engine_init(db_engine_t * engine, const char * home_dir, void * user_data);
 void db_engine_cleanup(db_engine_t * engine);
 db_engine_t * db_engine_get();
 

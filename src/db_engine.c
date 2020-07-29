@@ -1097,9 +1097,21 @@ static inline db_engine_t * db_engine_add_ref(db_engine_t * engine)  {
 } 
 #define db_engine_unref(engine)		db_engine_cleanup(engine)
 
-db_engine_t * db_engine_init(const char * home_dir, void * user_data)
+db_engine_t * db_engine_init(db_engine_t * engine, const char * home_dir, void * user_data)
 {
-	db_engine_t * engine = g_db_engine;
+	if(NULL == engine) engine = g_db_engine;
+	else {
+		engine->set_home = engine_set_home;
+		engine->open_db = engine_open_db;
+		engine->close_db = engine_close_db;
+		
+		engine->list_add = engine_list_add;
+		engine->list_remove = engine_list_remove;
+		engine->txn_new = engine_txn_new;
+		engine->txn_free = engine_txn_free;
+	}
+	
+	
 	engine->user_data = user_data;
 	db_engine_private_t * priv = db_engine_private_new(engine);
 	assert(priv && engine->priv == priv);

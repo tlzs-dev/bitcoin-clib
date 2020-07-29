@@ -275,24 +275,33 @@ block_info_t * blockchain_abandon_inheritances(blockchain_t * chain, blockchain_
 	return orphans;
 }
 
-static struct block_info * blockchain_add_inheritances(blockchain_t * chain, 
+static int blockchain_add_inheritances(blockchain_t * chain, 
 	blockchain_heir_t * parent,
-	block_info_t * child)
+	block_info_t * child,
+	block_info_t ** p_orphans
+	)
 {
-	assert(chain && parent && child);
+	assert(chain && parent && child && p_orphans);
 	ssize_t height = parent - chain->heirs;
 	
 	block_info_t * orphans = blockchain_abandon_inheritances(chain, parent);
+	*p_orphans = orphans;
+	
+	int rc = 0;
 	while(child)
 	{
 		parent = add_heir(chain, parent, child);
 		assert(parent);
 		
 		if(chain->on_add_block) {
-			chain->on_add_block(chain, 
+			rc = chain->on_add_block(chain, 
 				&child->hash, 
 				parent - chain->heirs,
 				chain->user_data);
+			if(rc) {
+				block_info_free(orphans);
+				return rc;
+			}
 		}
 		
 		++height;
@@ -300,7 +309,7 @@ static struct block_info * blockchain_add_inheritances(blockchain_t * chain,
 	}
 	
 	chain->height = height;
-	return orphans;
+	return 0;
 }
 
 blockchain_t * blockchain_init(blockchain_t * chain, 
@@ -411,7 +420,7 @@ static void update_first_child_cumulative_difficulty(block_info_t * child, compa
 	return;
 }
 
-static int blockchain_add(blockchain_t * block_chain, 
+static enum blockchain_error blockchain_add(blockchain_t * block_chain, 
 	const uint256_t * block_hash, 
 	const struct satoshi_block_header * hdr)
 {
@@ -428,12 +437,12 @@ static int blockchain_add(blockchain_t * block_chain,
 	
 	// Rule 0. check if it is already on the chain
 	heir = block_chain->find(block_chain, block_hash);
-	if(heir) return -1;	// already on the BLOCKCHAIN
+	if(heir) return blockchain_error_duplicated_block;	// already on the BLOCKCHAIN
 	
 	orphan = active_chain_list_find(list, block_hash);
 	if(orphan){
 		// check chain's sub-rule
-		if(orphan->parent != NULL) return -1;
+		if(orphan->parent != NULL) return blockchain_error_duplicated_block;
 		
 		printf("\e[32m" "--> [%s]: " "\e[39m" "\n", "CHAIN::sub-rules");
 	
@@ -520,7 +529,7 @@ static int blockchain_add(blockchain_t * block_chain,
 	
 	// Rule IV. find parent in the BLOCKCHAIN
 	heir = block_chain->find(block_chain, &chain->head->hash);
-	if(NULL == heir) return 0;
+	if(NULL == heir) return blockchain_error_no_error;
 
 	printf("\e[32m" "--> [%s]: " "\e[39m" "\n", "Rule IV");
 	// update longest_end's cumulative_difficulty 
@@ -536,10 +545,17 @@ static int blockchain_add(blockchain_t * block_chain,
 		&current->cumulative_difficulty) > 0 ) // win the round. 
 	{
 		// replace the current one
-		block_info_t * orphans = blockchain_abandon_inheritances(block_chain, (blockchain_heir_t *)heir);
+	//	block_info_t * orphans = blockchain_abandon_inheritances(block_chain, (blockchain_heir_t *)heir);
 		block_info_t * successor = chain->head->first_child;
+		block_info_t * orphans = NULL;
 		
-		blockchain_add_inheritances(block_chain, (blockchain_heir_t *)heir, successor);
+		int rc = blockchain_add_inheritances(block_chain, (blockchain_heir_t *)heir, successor, &orphans);
+		if(rc) {
+			if(orphans) block_info_free(orphans);
+			if(successor) block_info_free(successor);
+			
+			return blockchain_error_failed;
+		}
 		
 		/**
 		 * forgets the successor and all his first-child, 
