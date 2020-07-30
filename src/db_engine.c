@@ -915,7 +915,7 @@ static db_engine_private_t * db_engine_private_new(db_engine_t * engine)
 static void db_engine_private_free(db_engine_private_t * priv)
 {
 	if(NULL == priv) return;
-	fprintf(stderr, "%s(%p)...\n", __FUNCTION__, priv);
+	//~ fprintf(stderr, "%s(%p)...\n", __FUNCTION__, priv);
 	
 	if(priv->env)
 	{
