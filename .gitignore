@@ -16,6 +16,7 @@
 !tests
 !test2
 !test3
+!tools
 
 tests/*
 test2/*
