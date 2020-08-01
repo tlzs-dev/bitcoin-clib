@@ -376,6 +376,44 @@ static ssize_t load_block(test_context_t * ctx, const char * filename)
 /*******************************************************
  * test load_blocks
  ******************************************************/
+#include "bitcoin-consensus.h"
+
+static int load_block_from_file(const char * blocks_data_path, int file_index, int64_t start_pos, satoshi_block_t ** p_block)
+{
+	assert(blocks_data_path & p_block && file_index >= 0 && start_pos >= 8);
+	char path_name[PATH_MAX] = "";
+	ssize_t cb = snprintf(path_name, sizeof(path_name), "%s/blk%.5d.dat", ctx->blocks_data_path, (int)record->file_index);
+	assert(cb > 0 && cb < PATH_MAX);
+		
+	struct block_file_header file_hdr[1];
+	FILE * fp = fopen(path_name, "rb");
+	assert(fp);
+	
+	fseek(fp, record->start_offset - 8, SEEK_SET);
+	cb = fread(file_hdr, sizeof(file_hdr), 1, fp);
+	assert(cb == 1);
+	assert(file_hdr->length > 0 && file_hdr->length <= MAX_BLOCK_SERIALIZED_SIZE); // bitcoin consensus
+	
+	unsigned char * block_data = malloc(file_hdr->length);
+	assert(block_data);
+	cb = fread(block_data, 1, file_hdr->length, fp);
+	assert(cb == file_hdr->length);
+	
+	fclose(fp);
+	
+	satoshi_block_t * block = *p_block;
+	if(NULL == block) {
+		block = calloc(1, sizeof(*block));
+		assert(block);
+	}
+	
+	cb = satoshi_block_parse(block, file_hdr->length, block_data);
+	assert(cb == file_hdr->length);
+	
+	*p_block = block;
+	return 0;
+} 
+ 
  
 static int on_remove_block(struct blockchain * chain, const uint256_t * block_hash, const int height, void * user_data)
 {
@@ -384,10 +422,47 @@ static int on_remove_block(struct blockchain * chain, const uint256_t * block_ha
 	memcache_t * cache = ctx->cache;
 	assert(cache);
 	
-	block_info_t ** p_node = memcache_find(cache, block_hash);
-	if(p_node) {
+	db_engine_txn_t * txn = db_mgr->txn_new(db_mgr, NULL);
+	assert(txn);
+	
+	
+	
+	
+	
+	memcache_block_info_t binfo_buf[1];
+	memset(binfo_buf, 0, sizeof(binfo_buf));
+	
+	memcache_block_info_t * binfo = NULL;
+	
+	// find from memcache first
+	memcache_block_info_t ** p_node = memcache_find(cache, block_hash);
+	if(p_node) { *binfo = p_node; }
+	else {	// not found in the memcache, and search from the blocks_db
+		binfo = binfo_buf;
+		db_record_block_t * record = &binfo->data;
+		blocks_db_t * block_db = ctx->block_db;
+		assert(block_db);
 		
+		record->height = -1;
+		ssize_t count = block_db->find(block_db, txn, block_hash, &record);
+		
+		assert(count == 1);
+		if(count != 1) return -1;
 	}
+	
+	if(NULL == binfo->block) {	// need to load block data from file
+		db_record_block_t * record = &binfo->data;
+		assert(record->height ==  height);
+		int rc = load_block_from_file(ctx->blocks_data_path, record->file_index, record->start_pos, &binfo->block);
+		assert(0 == rc);
+	}
+	satoshi_block_t * block = binfo->block;
+	assert(block);
+	assert(block->txn_count > 0);
+	
+	// rollback utxo_db
+	utxoes_db_t * utxo_db = ctx->utxo_db;
+	utxo_db->remove_block(utxo_db, txn, block_hash);
 	
 	return 0;
 }

@@ -39,14 +39,16 @@ typedef struct utxoes_db_private
 	utxoes_db_t * db;
 	db_engine_t * engine;
 	
-	db_handle_t * utxoes;
+	db_handle_t * utxoes;	// unspent tx outputs
 	db_handle_t * block_hashes_db;
 	db_handle_t * witness_flag_db;
+	
+	db_handle_t * stxoes;	// spent tx outputs
 	
 	char db_name[PATH_MAX];
 	char block_hashes_db_name[PATH_MAX];
 	char witness_flag_db_name[PATH_MAX];
-	
+
 }utxoes_db_private_t;
 
 static ssize_t associate_block_hashes(db_handle_t * db, 
@@ -149,6 +151,8 @@ utxoes_db_private_t * utxoes_db_private_new(utxoes_db_t * db, db_engine_t * engi
 	rc = priv->utxoes->associate(priv->utxoes, NULL, priv->witness_flag_db, associate_witness_flag);
 	assert(0 == rc);
 
+	priv->stxoes = engine->open_db(engine, "stxoes.db", db_format_type_hash, 0);
+	
 	return priv;
 #undef BLOCK_HASHES_DB_SUFFIX
 #undef WITNESS_FLAG_DB_SUFFIX
@@ -184,10 +188,12 @@ static int utxoes_db_add(struct utxoes_db * db, db_engine_txn_t * txn,
 	const uint256_t * block_hash
 )
 {
+	int rc = -1;
 	assert(db && db->priv && outpoint && txout && block_hash);
 	utxoes_db_private_t * priv = db->priv;
 	db_handle_t * utxoes = priv->utxoes;
-	assert(utxoes);
+	db_handle_t * stxoes = priv->stxoes;
+	assert(utxoes && stxoes);
 	
 	db_record_utxo_t utxo[1];
 	memset(utxo, 0, sizeof(utxo));
@@ -203,25 +209,106 @@ static int utxoes_db_add(struct utxoes_db * db, db_engine_txn_t * txn,
 	utxo->block_hash = *block_hash;
 	utxo->is_witness = (script_data[0] <= 16);	// bip141
 	
-	return utxoes->insert(utxoes, txn, 
+
+	rc = stxoes->del(stxoes, txn, &(db_record_data_t){.data = (void *)outpoint, .size = sizeof(*outpoint)});
+	rc = utxoes->insert(utxoes, txn, 
 		&(db_record_data_t){.data = (void *)outpoint, .size = sizeof(*outpoint)},
 		&(db_record_data_t){.data = (void *)utxo, .size = sizeof(utxo)}); 
+	return rc;
 }
 
 static int utxoes_db_remove(struct utxoes_db * db, db_engine_txn_t * txn, const satoshi_outpoint_t * outpoint)
 {
-	return 0;
+	int rc = -1;
+	assert(db && db->priv && outpoint);
+	utxoes_db_private_t * priv = db->priv;
+	db_handle_t * utxoes = priv->utxoes;
+	db_handle_t * stxoes = priv->stxoes;
+	assert(utxoes && stxoes);
+	
+	db_record_utxo_t * utxo = NULL;
+	db_record_data_t * values = NULL;
+	
+	
+	ssize_t count = utxoes->find(utxoes, txn, 
+		&(db_record_data_t){.data = (void *)outpoint, .size = sizeof(*outpoint)},
+		&values); 
+	if(count != 1) return -1;
+	
+	assert(values->size == sizeof(*utxo));
+	utxo = values->data;
+	
+	rc = utxoes->del(utxoes, txn, &(db_record_data_t){.data = (void *)outpoint, .size = sizeof(*outpoint)});
+	rc = stxoes->insert(stxoes, txn, 
+		&(db_record_data_t){.data = (void *)outpoint, .size = sizeof(*outpoint)},
+		&(db_record_data_t){.data = (void *)utxo, .size = sizeof(utxo)}); 
+
+	db_record_data_cleanup(values);
+	free(values);
+	
+	return rc;
 }
+
 static int utxoes_db_remove_block(struct utxoes_db * db, db_engine_txn_t * txn, const uint256_t * block_hash)
 {
-	return 0;
+	int rc = -1;
+	assert(db && db->priv && block_hash);
+	utxoes_db_private_t * priv = db->priv;
+	db_handle_t * utxoes = priv->utxoes;
+	db_handle_t * stxoes = priv->stxoes;
+	assert(utxoes && stxoes);
+	
+	satoshi_outpoint_t * outpoints = NULL;
+	db_record_utxo_t * records = NULL;
+	
+	
+	ssize_t count = db->find_in_block(db, txn, block_hash, &outpoints, &records);
+	if(count <= 0) return -1;
+	
+	
+	for(ssize_t i = 0; i < count; ++i) {
+		db_record_utxo_t * utxo = &records[i];
+		satoshi_outpoint_t * outpoint = &outpoints[i];
+		rc = utxoes->del(utxoes, txn, &(db_record_data_t){.data = (void *)outpoint, .size = sizeof(*outpoint)});
+		rc = stxoes->insert(stxoes, txn, 
+			&(db_record_data_t){.data = (void *)outpoint, .size = sizeof(*outpoint)},
+			&(db_record_data_t){.data = (void *)utxo, .size = sizeof(utxo)}); 
+		if(rc) break;
+	}
+	
+	free(outpoints);
+	free(records);
+	return rc;
 }
 
 static ssize_t utxoes_db_find(struct utxoes_db * db, db_engine_txn_t * txn, 
 	const satoshi_outpoint_t * outpoint,
 	db_record_utxo_t ** p_utxo)
 {
-	return 0;
+	utxoes_db_private_t * priv = db->priv;
+	db_handle_t * utxoes = priv->utxoes;
+	assert(utxoes);
+	
+	db_record_data_t * value = NULL;
+	ssize_t count = utxoes->find(utxoes, txn, 
+		&(db_record_data_t){.data = (void *)outpoint, .size = sizeof(*outpoint)},
+		&value); 
+	if(count <= 0) return count;
+	assert(count == 1);
+	assert(value->size == sizeof(db_record_utxo_t));
+	
+	db_record_utxo_t * utxo = *p_utxo;
+	if(NULL == utxo) {
+		utxo = calloc(1, sizeof(*utxo));
+		assert(utxo);
+		*p_utxo = utxo;
+	}
+
+	memcpy(utxo, value->data, value->size);
+	
+	db_record_data_cleanup(value);
+	free(value);
+	return count;
 }
 	
 static ssize_t utxoes_db_find_in_block(struct utxoes_db * db, db_engine_txn_t * txn, 
@@ -229,7 +316,45 @@ static ssize_t utxoes_db_find_in_block(struct utxoes_db * db, db_engine_txn_t * 
 	satoshi_outpoint_t ** p_outpoints,
 	db_record_utxo_t ** p_utxoes)
 {
-	return 0;
+	ssize_t count = 0;
+	utxoes_db_private_t * priv = db->priv;
+	db_handle_t * group_by_block_hashes = priv->block_hashes_db;
+	assert(group_by_block_hashes);
+	
+	db_record_data_t * keys = NULL;
+	db_record_data_t * values = NULL;
+	count = group_by_block_hashes->find_secondary(group_by_block_hashes, txn, 
+		&(db_record_data_t){.data = (void *)block_hash, .size = sizeof(*block_hash)},
+		&keys, &values);
+	
+	if(count <= 0) goto label_final;
+
+
+	satoshi_outpoint_t * outpoints = *p_outpoints;
+	db_record_utxo_t * records = *p_utxoes;
+	assert(NULL == outpoints && records);
+
+	outpoints = calloc(count, sizeof(*outpoints));
+	records = calloc(count, sizeof(*records));
+	assert(outpoints && records);
+	*p_outpoints = outpoints;
+	*p_utxoes = records;
+	
+	for(ssize_t i = 0; i < count; ++i) {
+		assert(keys[i].size == sizeof(satoshi_outpoint_t));
+		assert(values[i].size == sizeof(db_record_utxo_t));
+		memcpy(&outpoints[i], keys[i].data, keys[i].size); 
+		memcpy(&records[i], values[i].data, values[i].size); 
+	}
+	
+label_final:
+	for(ssize_t i = 0; i < count; ++i) {
+		if(keys) db_record_data_cleanup(&keys[i]);
+		if(values)  db_record_data_cleanup(&values[i]);
+	}
+	free(keys);
+	free(values);
+	return count;
 }
 	
 static ssize_t utxoes_db_find_in_tx(struct utxoes_db * db, db_engine_txn_t * txn, 

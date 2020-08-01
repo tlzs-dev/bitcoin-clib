@@ -1010,7 +1010,8 @@ int load_blocks(GtkTreeView * tree, db_manager_t * db_mgr, shell_private_t * pri
 		}
 	}
 	
-	gtk_tree_view_set_model(tree, GTK_TREE_MODEL(store));
+	if(count > 0) gtk_tree_view_set_model(tree, GTK_TREE_MODEL(store));
+	else g_object_unref(store);
 	return 0;
 }
 
@@ -1336,7 +1337,8 @@ int load_utxoes(GtkTreeView * tree, db_manager_t * db_mgr, shell_private_t * pri
 		}
 	}
 	
-	gtk_tree_view_set_model(tree, GTK_TREE_MODEL(store));
+	if(count > 0) gtk_tree_view_set_model(tree, GTK_TREE_MODEL(store));
+	else g_object_unref(store);
 	
 	return 0;
 }
@@ -1358,6 +1360,7 @@ static void move_first(GtkWidget * button, shell_private_t * priv)
 		load_blocks(GTK_TREE_VIEW(priv->blocks_tree), db_mgr, priv, db_cursor_move_direction_first);
 	}
 	else if(strcasecmp(name, priv->tree_names[1]) == 0) {
+		load_utxoes(GTK_TREE_VIEW(priv->utxoes_tree), db_mgr, priv, db_cursor_move_direction_first);
 	}
 	
 }
@@ -1372,7 +1375,7 @@ static void move_prev(GtkWidget * button, shell_private_t * priv)
 	if(strcasecmp(name, priv->tree_names[0]) == 0) {
 		load_blocks(GTK_TREE_VIEW(priv->blocks_tree), db_mgr, priv, db_cursor_move_direction_prev);
 	}else if(strcasecmp(name, priv->tree_names[1]) == 0) {
-		
+		load_utxoes(GTK_TREE_VIEW(priv->utxoes_tree), db_mgr, priv, db_cursor_move_direction_prev);
 	}
 }
 static void move_next(GtkWidget * button, shell_private_t * priv)
@@ -1385,7 +1388,7 @@ static void move_next(GtkWidget * button, shell_private_t * priv)
 	if(strcasecmp(name, priv->tree_names[0]) == 0) {
 		load_blocks(GTK_TREE_VIEW(priv->blocks_tree), db_mgr, priv, db_cursor_move_direction_next);
 	}else if(strcasecmp(name, priv->tree_names[1]) == 0) {
-		
+		load_utxoes(GTK_TREE_VIEW(priv->utxoes_tree), db_mgr, priv, db_cursor_move_direction_next);
 	}
 }
 static void move_last(GtkWidget * button, shell_private_t * priv)
@@ -1398,7 +1401,7 @@ static void move_last(GtkWidget * button, shell_private_t * priv)
 	if(strcasecmp(name, priv->tree_names[0]) == 0) {
 		load_blocks(GTK_TREE_VIEW(priv->blocks_tree), db_mgr, priv, db_cursor_move_direction_last);
 	}else if(strcasecmp(name, priv->tree_names[1]) == 0) {
-		
+		load_utxoes(GTK_TREE_VIEW(priv->utxoes_tree), db_mgr, priv, db_cursor_move_direction_last);
 	}
 }
 static void move_to(GtkWidget * button, shell_private_t * priv)
@@ -1411,6 +1414,6 @@ static void move_to(GtkWidget * button, shell_private_t * priv)
 	if(strcasecmp(name, priv->tree_names[0]) == 0) {
 		load_blocks(GTK_TREE_VIEW(priv->blocks_tree), db_mgr, priv, db_cursor_move_direction_goto);
 	}else if(strcasecmp(name, priv->tree_names[1]) == 0) {
-		
+		load_utxoes(GTK_TREE_VIEW(priv->utxoes_tree), db_mgr, priv, db_cursor_move_direction_goto);
 	}
 }
