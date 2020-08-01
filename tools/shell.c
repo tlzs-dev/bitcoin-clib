@@ -84,6 +84,20 @@ enum {
 	
 	BLOCKS_COLUMNS_COUNT,
 };
+static const char * s_blocks_colnames[BLOCKS_COLUMNS_COUNT] = {
+	"height",
+	"hash",
+	"hdr",
+};
+
+static inline int blocks_colname_to_col_id(const char * col_name) {
+	if(NULL == col_name) return -1;
+	for(int i = 0; i < BLOCKS_COLUMNS_COUNT; ++i) {
+		if(NULL == s_blocks_colnames[i]) return -1;
+		if(strcmp(col_name, s_blocks_colnames[i]) == 0) return i;
+	}
+	return -1;
+}
 
 enum {
 	UTXOES_COLUMN_OUTPOINT,
@@ -95,6 +109,21 @@ enum {
 	UTXOES_COLUMNS_COUNT,
 	
 };
+static const char * s_utxoes_colnames[UTXOES_COLUMNS_COUNT] = {
+	"outpoint",
+	"value",
+	"scripts",
+	"block_hash",
+};
+
+static inline int utxoes_colname_to_col_id(const char * col_name) {
+	if(NULL == col_name) return -1;
+	for(int i = 0; i < UTXOES_COLUMNS_COUNT; ++i) {
+		if(NULL == s_utxoes_colnames[i]) return -1;
+		if(strcmp(col_name, s_utxoes_colnames[i]) == 0) return i;
+	}
+	return -1;
+}
 
 typedef struct shell_private
 {
@@ -134,6 +163,15 @@ typedef struct shell_private
 	
 	int quit;
 	int is_running;
+	
+	/**
+	 * Context Menu
+	 */
+	GtkWidget * context_menu;
+	GtkTreePath * tree_path;
+	GtkWidget * target_treeview;
+	int col_id;
+	
 }shell_private_t;
 
 shell_private_t * shell_private_new(shell_context_t * shell) 
@@ -286,15 +324,15 @@ struct context_menu_data
 	const char * col_name;
 };
 
-static void on_copy_column(GtkMenuItem * menu_item, struct context_menu_data * ctx)
+static void on_copy_column(GtkMenuItem * menu_item, shell_private_t * priv)
 {
-	if(NULL == ctx) return;
-	shell_private_t * priv = ctx->priv;
 	assert(priv);
+	GtkWidget * treeview = priv->target_treeview;
+	GtkTreePath * path = priv->tree_path;
+	assert(path && treeview);
 	
-	const char * col_name = ctx->col_name;
-	GtkTreePath * path = ctx->path;
-	assert(col_name && path);
+	int col_index = priv->col_id;
+	assert(col_index >= 0 && col_index < BLOCKS_COLUMNS_COUNT);
 	
 	char sz_text[4096] = "";
 	json_object * jobj = json_object_new_object();
@@ -303,27 +341,18 @@ static void on_copy_column(GtkMenuItem * menu_item, struct context_menu_data * c
 	ssize_t cb = -1;
 	
 	GtkTreeIter iter;
-	GtkTreeModel * model = ctx->model;
+	GtkTreeModel * model = gtk_tree_view_get_model(GTK_TREE_VIEW(treeview));
 		
 	gboolean ok = FALSE;
 	ok = gtk_tree_model_get_iter(model, &iter, path);
 	assert(ok);
 
-	
-	if(ctx->treeview == priv->blocks_tree) 
+	if(treeview == priv->blocks_tree) 
 	{
 		gint height = -1;
 		struct db_record_block * block = NULL;
 		unsigned char * hash = NULL;
 		json_object_object_add(jobj, "type", json_object_new_string("blocks::column"));
-		
-		int col_index = -1;
-		if(strcasecmp(ctx->col_name, "height") == 0) col_index = BLOCKS_COLUMN_HEIGHT;
-		else if(strcasecmp(ctx->col_name, "hash") == 0) col_index = BLOCKS_COLUMN_HASH;
-		else if(strcasecmp(ctx->col_name, "hdr") == 0) col_index = BLOCKS_COLUMN_HDR;
-		
-		assert(col_index >= 0 && col_index < BLOCKS_COLUMNS_COUNT);
-		
 		
 		gtk_tree_model_get(model, &iter, 
 			BLOCKS_COLUMN_HEIGHT, &height,
@@ -351,24 +380,18 @@ static void on_copy_column(GtkMenuItem * menu_item, struct context_menu_data * c
 		default:
 			break;
 		}
-	}else if(ctx->treeview == priv->utxoes_tree)
+	}else if(treeview == priv->utxoes_tree)
 	{
 		struct satoshi_outpoint * outpoint = NULL;
 		struct db_record_utxo * utxo = NULL;
 		
-		gtk_tree_model_get(ctx->model, &iter, 
+		gtk_tree_model_get(model, &iter, 
 			UTXOES_COLUMN_OUTPOINT, &outpoint,
 			UTXOES_COLUMN_DATA_PTR, &utxo,
 			-1
 			);
 		assert(outpoint && utxo);
 		json_object_object_add(jobj, "type", json_object_new_string("utxoes::column"));
-		
-		int col_index = -1;
-		if(strcasecmp(ctx->col_name, "outpoint") == 0) col_index = UTXOES_COLUMN_OUTPOINT;
-		else if(strcasecmp(ctx->col_name, "value") == 0) col_index = UTXOES_COLUMN_VALUE;
-		else if(strcasecmp(ctx->col_name, "scripts") == 0) col_index = UTXOES_COLUMN_SCRIPTS;
-		else if(strcasecmp(ctx->col_name, "block_hash") == 0) col_index = UTXOES_COLUMN_BLOCK_HASH;
 		
 		switch(col_index)
 		{
@@ -398,28 +421,23 @@ static void on_copy_column(GtkMenuItem * menu_item, struct context_menu_data * c
 	}
 	
 	GtkClipboard * clipboard = gtk_clipboard_get_for_display(
-		gtk_widget_get_display(ctx->treeview), 
+		gtk_widget_get_display(treeview), 
 		GDK_SELECTION_CLIPBOARD);
 	
 	const char * output = json_object_to_json_string_ext(jobj, JSON_C_TO_STRING_PLAIN);
 	gtk_clipboard_set_text(clipboard, output, strlen(output));
 	json_object_put(jobj);
 	
-	gtk_tree_path_free(path);
-	free(ctx);
 	return;
 	
 }
 
-static void on_copy_row(GtkMenuItem * menu_item, struct context_menu_data * ctx)
+static void on_copy_row(GtkMenuItem * menu_item, shell_private_t * priv)
 {
-	if(NULL == ctx) return;
-	shell_private_t * priv = ctx->priv;
 	assert(priv);
-	
-	const char * col_name = ctx->col_name;
-	GtkTreePath * path = ctx->path;
-	assert(col_name && path);
+	GtkWidget * treeview = priv->target_treeview;
+	GtkTreePath * path = priv->tree_path;
+	assert(path && treeview);
 	
 	char sz_text[4096] = "";
 	json_object * jobj = json_object_new_object();
@@ -428,13 +446,13 @@ static void on_copy_row(GtkMenuItem * menu_item, struct context_menu_data * ctx)
 	ssize_t cb = -1;
 	
 	GtkTreeIter iter;
-	GtkTreeModel * model = ctx->model;
+	GtkTreeModel * model = gtk_tree_view_get_model(GTK_TREE_VIEW(treeview));
 		
 	gboolean ok = FALSE;
 	ok = gtk_tree_model_get_iter(model, &iter, path);
 	assert(ok);
 	
-	if(ctx->treeview == priv->blocks_tree) 
+	if(treeview == priv->blocks_tree) 
 	{
 		gint height = -1;
 		struct db_record_block * block = NULL;
@@ -451,7 +469,7 @@ static void on_copy_row(GtkMenuItem * menu_item, struct context_menu_data * ctx)
 		assert(cb > 0);
 		json_object_object_add(jobj, "block", json_object_new_string(sz_text));
 		
-	}else if(ctx->treeview == priv->utxoes_tree)
+	}else if(treeview == priv->utxoes_tree)
 	{
 		struct satoshi_outpoint * outpoint = NULL;
 		struct db_record_utxo * utxo = NULL;
@@ -478,23 +496,24 @@ static void on_copy_row(GtkMenuItem * menu_item, struct context_menu_data * ctx)
 	
 	
 	GtkClipboard * clipboard = gtk_clipboard_get_for_display(
-		gtk_widget_get_display(ctx->treeview), 
+		gtk_widget_get_display(treeview), 
 		GDK_SELECTION_CLIPBOARD);
 	
 	const char * output = json_object_to_json_string_ext(jobj, JSON_C_TO_STRING_PLAIN);
 	gtk_clipboard_set_text(clipboard, output, strlen(output));
 	json_object_put(jobj);
-	gtk_tree_path_free(path);
-	free(ctx);
+	
 	return;
 	
 }
 
 static void popup_menu(GtkWidget * treeview, GdkEventButton * event, shell_private_t * priv)
 {
+	/**
+	 * prepares data for context_menu action
+	 */
 	GtkTreePath * path = NULL;
 	GtkTreeViewColumn * col = NULL;
-	GtkTreeModel * model = gtk_tree_view_get_model(GTK_TREE_VIEW(treeview));
 	gboolean ok = gtk_tree_view_get_path_at_pos(GTK_TREE_VIEW(treeview), 
 		event->x, event->y,
 		&path, &col, NULL, NULL);
@@ -504,27 +523,18 @@ static void popup_menu(GtkWidget * treeview, GdkEventButton * event, shell_priva
         gtk_tree_selection_select_path(selection, path);
 		
 	}
+	priv->target_treeview = treeview;
+	if(priv->tree_path) gtk_tree_path_free(priv->tree_path);
+	priv->tree_path = path;
+	if(col) {
+		const char * col_name = gtk_tree_view_column_get_title(col);
+		if(treeview == priv->blocks_tree) priv->col_id = blocks_colname_to_col_id(col_name);
+		else priv->col_id = utxoes_colname_to_col_id(col_name);
+	}
 	
-	struct context_menu_data * ctx = calloc(1, sizeof(*ctx));
-	ctx->priv = priv;
-	ctx->treeview = treeview;
-	ctx->event = event;
-	ctx->model = model;
-	ctx->path = path;
-	if(col) ctx->col_name = gtk_tree_view_column_get_title(col);
-	
-	GtkWidget * menu = NULL, *menu_item = NULL;
-	menu = gtk_menu_new();
-	menu_item = gtk_menu_item_new_with_mnemonic("Copy _Column");	
-	g_signal_connect(menu_item, "activate", G_CALLBACK(on_copy_column), ctx);
-	gtk_menu_shell_append(GTK_MENU_SHELL(menu), menu_item);
-	
-	menu_item = gtk_menu_item_new_with_mnemonic("Copy _Row");	
-	g_signal_connect(menu_item, "activate", G_CALLBACK(on_copy_row), ctx);
-	gtk_menu_shell_append(GTK_MENU_SHELL(menu), menu_item);
-	gtk_widget_show_all(menu);
-	
-	gtk_menu_popup_at_pointer(GTK_MENU(menu), (GdkEvent *)event);
+	// show context_menu
+	gtk_menu_popup_at_pointer(GTK_MENU(priv->context_menu), (GdkEvent *)event);
+	return;
 
 }
 static gboolean on_tree_view_button_pressed(GtkWidget * treeview, GdkEventButton * event, shell_private_t * priv)
@@ -533,10 +543,6 @@ static gboolean on_tree_view_button_pressed(GtkWidget * treeview, GdkEventButton
 	if(event->button != 3) return FALSE;
 	
 	popup_menu(treeview, event, priv);
-	
-	
-	
-	
 	return FALSE;
 }
 
@@ -677,6 +683,19 @@ static void init_windows(shell_context_t * shell)
 	
 	g_signal_connect(search_entry, "activate", G_CALLBACK(move_to), priv);
 	
+	
+	GtkWidget * menu = NULL, *menu_item = NULL;
+	menu = gtk_menu_new();
+	menu_item = gtk_menu_item_new_with_mnemonic("Copy _Column");	
+	g_signal_connect(menu_item, "activate", G_CALLBACK(on_copy_column), priv);
+	gtk_menu_shell_append(GTK_MENU_SHELL(menu), menu_item);
+	
+	menu_item = gtk_menu_item_new_with_mnemonic("Copy _Row");	
+	g_signal_connect(menu_item, "activate", G_CALLBACK(on_copy_row), priv);
+	gtk_menu_shell_append(GTK_MENU_SHELL(menu), menu_item);
+	gtk_widget_show_all(menu);
+	priv->context_menu = menu;
+	
 	g_signal_connect_swapped(window, "destroy", G_CALLBACK(shell->stop), shell); 
 	gtk_widget_show_all(window);
 	return;
@@ -743,7 +762,7 @@ static void init_blocks_treeview(GtkTreeView * tree)
 	
 	GtkCellRenderer * cr = gtk_cell_renderer_text_new();
 	GtkTreeViewColumn * col = gtk_tree_view_column_new_with_attributes(
-		"height",  cr, 
+		s_blocks_colnames[BLOCKS_COLUMN_HEIGHT],  cr, 
 		"text", BLOCKS_COLUMN_HEIGHT,
 		NULL);
 	gtk_tree_view_append_column(tree, col);
@@ -752,7 +771,7 @@ static void init_blocks_treeview(GtkTreeView * tree)
 	
 	cr = gtk_cell_renderer_text_new();
 	col = gtk_tree_view_column_new_with_attributes(
-		"hash",  cr, 
+		s_blocks_colnames[BLOCKS_COLUMN_HASH],  cr, 
 		NULL);
 	gtk_tree_view_append_column(tree, col);
 	gtk_tree_view_column_set_cell_data_func(col, cr, on_set_block_hash, selection, NULL);
@@ -760,7 +779,7 @@ static void init_blocks_treeview(GtkTreeView * tree)
 	
 	cr = gtk_cell_renderer_text_new();
 	col = gtk_tree_view_column_new_with_attributes(
-		"hdr",  cr, 
+		s_blocks_colnames[BLOCKS_COLUMN_HDR],  cr, 
 		NULL);
 	gtk_tree_view_append_column(tree, col);
 	gtk_tree_view_column_set_cell_data_func(col, cr, on_set_block_hdr, selection, NULL);
@@ -1147,7 +1166,7 @@ static void init_utxoes_treeview(GtkTreeView * tree)
 	
 	cr = gtk_cell_renderer_text_new();
 	col = gtk_tree_view_column_new_with_attributes(
-		"outpoint",  cr, 
+		s_utxoes_colnames[UTXOES_COLUMN_OUTPOINT],  cr, 
 		NULL);
 	gtk_tree_view_append_column(tree, col);
 	gtk_tree_view_column_set_resizable(col, TRUE);
@@ -1155,7 +1174,7 @@ static void init_utxoes_treeview(GtkTreeView * tree)
 	
 	cr = gtk_cell_renderer_text_new();
 	col = gtk_tree_view_column_new_with_attributes(
-		"value",  cr, 
+		s_utxoes_colnames[UTXOES_COLUMN_VALUE],  cr, 
 		NULL);
 	gtk_tree_view_append_column(tree, col);
 	gtk_tree_view_column_set_cell_data_func(col, cr, on_set_utxo_value, selection, NULL);
@@ -1163,7 +1182,7 @@ static void init_utxoes_treeview(GtkTreeView * tree)
 	
 	cr = gtk_cell_renderer_text_new();
 	col = gtk_tree_view_column_new_with_attributes(
-		"scripts",  cr, 
+		s_utxoes_colnames[UTXOES_COLUMN_SCRIPTS],  cr, 
 		NULL);
 	gtk_tree_view_append_column(tree, col);
 	gtk_tree_view_column_set_cell_data_func(col, cr, on_set_utxo_scripts, selection, NULL);
@@ -1171,7 +1190,7 @@ static void init_utxoes_treeview(GtkTreeView * tree)
 	
 	cr = gtk_cell_renderer_text_new();
 	col = gtk_tree_view_column_new_with_attributes(
-		"block_hash",  cr, 
+		s_utxoes_colnames[UTXOES_COLUMN_BLOCK_HASH],  cr,  
 		NULL);
 	gtk_tree_view_append_column(tree, col);
 	gtk_tree_view_column_set_resizable(col, TRUE);
