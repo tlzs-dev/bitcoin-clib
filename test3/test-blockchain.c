@@ -551,6 +551,7 @@ static int test_random_adding(shell_context_t * shell, void * user_data)
 		randomize_indices(indices, MAX_HEIGHT);
 		memset(shell->indices_selected, 0, sizeof(shell->indices_selected));
 		
+		block_info_t * blockchain_abandon_inheritances(blockchain_t * chain, blockchain_heir_t * parent);
 		blockchain_abandon_inheritances(chain, &chain->heirs[0]);
 		assert(0 == chain->height);
 		

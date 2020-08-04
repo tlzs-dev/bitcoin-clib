@@ -43,7 +43,7 @@ UTILS_OBJECTS := $(UTILS_SOURCES:$(UTILS_SRC_DIR)/%.c=$(UTILS_OBJ_DIR)/%.o)
 all: do_init $(TARGET)
 
 $(TARGET): $(OBJECTS) $(BASE_OBJECTS) $(UTILS_OBJECTS) test-blockchain.c da_panel.c
-	$(LINKER) $(OPTIMIZE) -o $@ $^ $(LIBS) $(CFLAGS)
+	$(LINKER) $(OPTIMIZE) $(CFLAGS) -o $@ $^ $(LIBS) 
 	
 
 $(OBJECTS): $(OBJ_DIR)/%.o : $(SRC_DIR)/%.c
@@ -55,9 +55,16 @@ $(BASE_OBJECTS): $(BASE_OBJ_DIR)/%.o : $(BASE_SRC_DIR)/%.c
 $(UTILS_OBJECTS): $(UTILS_OBJ_DIR)/%.o : $(UTILS_SRC_DIR)/%.c
 	$(CC) -o $@ -c $< $(CFLAGS)
 	
+	
+utxoes_db: test-utxoes_db
+test-utxoes_db: $(OBJECTS) $(BASE_OBJECTS) $(UTILS_OBJECTS) test-utxoes_db.c $(SRC_DIR)/algorithm/avl_tree.c
+	$(LINKER) $(OPTIMIZE) -o $@ $^ $(LIBS) $(CFLAGS)
+	
 .PHONY: do_init clean
 do_init:
 	mkdir -p $(OBJ_DIR)/base $(OBJ_DIR)/utils
+	mkdir -p data blocks
+	
 clean:
 	rm -f $(OBJ_DIR)/*.o $(OBJ_DIR)/base/*.o $(OBJ_DIR)/utils/*.o $(TARGET)
 
