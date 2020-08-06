@@ -144,6 +144,14 @@ test_avl_tree: $(SRC_DIR)/algorithm/avl_tree.c
 	$(LINKER) -o $@ $(CFLAGS) $^ \
 		$(LIBS) \
 		-D_TEST_AVL_TREE -D_STAND_ALONE -D_VERBOSE=7
+		
+		
+bitcoin-network: test_bitcoin-network
+test_bitcoin-network: $(SRC_DIR)/bitcoin-network.c $(SRC_DIR)/auto_buffer.c $(SRC_DIR)/utils/utils.c
+	echo "build $@ ..."
+	$(LINKER) -o $@ $(CFLAGS) $^ \
+		$(LIBS) \
+		-D_TEST_BITCOIN_NETWORK -D_STAND_ALONE -D_VERBOSE=7
 
 .PHONY: do_init clean
 do_init:
