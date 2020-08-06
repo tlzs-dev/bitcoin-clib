@@ -225,8 +225,13 @@ void bitcoin_node_free(bitcoin_node_t * bnode)
 		}
 	}
 	
-	if(bnode->listening_efd) {
+	if(bnode->listening_efd > 0) {
 		close(bnode->listening_efd);
+		bnode->listening_efd = -1;
+	}
+	
+	if(bnode->peers_efd > 0) {
+		close(bnode->peers_efd);
 		bnode->listening_efd = -1;
 	}
 	
@@ -352,8 +357,10 @@ static int bitcoin_node_on_accept(struct bitcoin_node * bnode, struct epoll_even
 	make_nonblock(fd);
 	peer_info_t * peer = peer_info_new(fd, bnode, &addr);
 	assert(peer);
-	
+
 	bitcoin_node_add_peer(bnode, peer);
+	
+
 	free(addr.ai_addr);
 	return 0;
 }
@@ -388,7 +395,7 @@ static void * bitcoin_node_listen_all(void * user_data)
 
 	int timeout = 1000;
 	int efd = bnode->listening_efd;
-	assert(efd);
+	assert(efd > 0);
 	
 	while(!bnode->quit) {
 		if(s_quit) {
@@ -445,7 +452,16 @@ static int bitcoin_node_add_peer(bitcoin_node_t * bnode, peer_info_t * peer)
 	}
 	
 	bnode->peers[bnode->peers_count++] = peer;
-	return 0;
+	
+	struct epoll_event ev[1];
+	memset(ev, 0, sizeof(ev));
+	ev->events = EPOLLIN | EPOLLET;
+	ev->data.ptr = peer;
+	
+	int rc = epoll_ctl(bnode->peers_efd, EPOLL_CTL_ADD, peer->fd, ev);
+	assert(0 == rc);
+	
+	return rc;
 }
 
 static int bitcoin_node_remove_peer(bitcoin_node_t * bnode, peer_info_t * peer)
@@ -453,6 +469,13 @@ static int bitcoin_node_remove_peer(bitcoin_node_t * bnode, peer_info_t * peer)
 	debug_printf("peer = %p, fd = %d\n", peer, peer->fd);
 	for(int i = 0; i < bnode->peers_count; ++i) {
 		if(bnode->peers[i] == peer) {
+			if(peer->fd > 0) {
+				struct epoll_event ev[1];
+				memset(ev, 0, sizeof(ev));
+				int rc = epoll_ctl(bnode->peers_efd, EPOLL_CTL_DEL, peer->fd, ev);
+				assert(0 == rc);
+			}
+			
 			peer_info_free(peer);
 			bnode->peers[i] = bnode->peers[--bnode->peers_count];
 			bnode->peers[bnode->peers_count] = NULL;
@@ -481,7 +504,7 @@ static void * peers_thread(void * user_data)
 
 	int timeout = 1000;
 	int efd = bnode->peers_efd;
-	assert(efd);
+	assert(efd > 0);
 	
 	while(!bnode->quit) {
 		if(s_quit) {
