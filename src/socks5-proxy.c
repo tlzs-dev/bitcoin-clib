@@ -48,6 +48,9 @@
 #include "utils.h"
 #include "socks5_proxy.h"
 
+#define SOCKS5_MSG_BUFFER_SIZE 	(512 + 1)
+#define SOCKS5_ADDR_BUFFER_SIZE (256 + 1)
+
 /**************************************************
  * socks5_handshake: 
  *     struct socks5_query_auth    : CLIENT::query auth method
