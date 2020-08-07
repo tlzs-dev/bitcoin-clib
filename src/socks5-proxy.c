@@ -222,19 +222,19 @@ int socks5_address_parse(const char * sz_addr, struct socks5_address ** p_addr)
 		*p_addr = addr;
 	}
 	
-	struct sockaddr_storage ss;
-	int ok = inet_pton(PF_INET, sz_addr, &ss);
+	unsigned char ip[16] = {0};
+	int ok = inet_pton(PF_INET, sz_addr, ip);
 	
 	if(ok) {
 		addr->type = socks5_address_type_ipv4;
-		*(struct in_addr *)addr->data = ((struct sockaddr_in *)&ss)->sin_addr;
+		*(uint32_t *)addr->data = *(uint32_t *)ip;
 		return 0;
 	}
 	
-	ok =  inet_pton(PF_INET6, sz_addr, &ss);
+	ok =  inet_pton(PF_INET6, sz_addr, ip);
 	if(ok) {
 		addr->type = socks5_address_type_ipv6;
-		*(struct in6_addr *)addr->data = ((struct sockaddr_in6 *)&ss)->sin6_addr;
+		memcpy(addr->data, ip, 16);
 		return 0;
 	}
 	
@@ -368,10 +368,16 @@ int socks5_proxy_init(const char * proxy_server, const char * proxy_port, const 
 		break;
 	}
 	
+	freeaddrinfo(serv_info);
+	if(NULL == p || fd == -1) return -1;
+	
 	unsigned char buf[SOCKS5_MSG_BUFFER_SIZE] = { 0 };
-	struct socks5_query_auth * query_auth = socks5_query_auth_init(buf, 2, 
-		socks5_auth_method_no_auth,
-		socks5_auth_method_user_pass);
+	struct socks5_query_auth * query_auth = socks5_query_auth_init(buf, 
+		//2, 
+		1
+		, socks5_auth_method_no_auth
+		//~ , socks5_auth_method_user_pass
+	);
 	assert(query_auth);
 	
 	ssize_t length = socks5_query_auth_size(query_auth);
@@ -383,6 +389,7 @@ int socks5_proxy_init(const char * proxy_server, const char * proxy_port, const 
 	assert(cb == sizeof(struct socks5_auth));
 	
 	struct socks5_auth * auth = (struct socks5_auth *)buf;
+	debug_printf("auth_method: %d", (int)auth->method);
 	if(auth->method == socks5_auth_method_user_pass) {
 		memset(buf, 0, sizeof(buf));
 		
@@ -425,7 +432,7 @@ int socks5_proxy_connect2(int proxy_fd, const char * dst_addr, uint16_t dst_port
 		addr, dst_port);
 	
 	ssize_t length = socks5_request_data_size(req);
-	ssize_t cb = write(proxy_fd, addr, length);
+	ssize_t cb = write(proxy_fd, req, length);
 	assert(cb == length);
 	
 	
@@ -479,7 +486,14 @@ int main(int argc, char **argv)
 	printf("proxy fd: %d\n", fd);
 	assert(fd > 0);
 	
-	int rc = socks5_proxy_connect2(fd, "192.168.11.45", 8333);
+	const char * serv_name = "118.8.95.149";
+	uint32_t port = 8080;
+	if(argc > 1) serv_name = argv[1];
+	if(argc > 2) port = atoi(argv[2]);
+	assert(port < 65536);
+	
+	
+	int rc = socks5_proxy_connect2(fd, serv_name, port);
 	printf("create tunnel: status=%d\n", rc);
 	assert(0 == rc);
 	
