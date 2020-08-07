@@ -153,6 +153,13 @@ test_bitcoin-network: $(SRC_DIR)/bitcoin-network.c $(SRC_DIR)/auto_buffer.c $(SR
 		$(LIBS) \
 		-D_TEST_BITCOIN_NETWORK -D_STAND_ALONE -D_VERBOSE=7
 
+socks5-proxy: test_socks5-proxy
+test_socks5-proxy: $(SRC_DIR)/socks5-proxy.c
+	echo "build $@ ..."
+	$(LINKER) -o $@ $(CFLAGS) $^ \
+		$(LIBS) \
+		-D_TEST_SOCKS5_PROXY -D_STAND_ALONE -D_VERBOSE=7
+
 .PHONY: do_init clean
 do_init:
 	mkdir -p ../obj/base ../obj/utils
