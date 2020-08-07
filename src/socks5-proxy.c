@@ -497,6 +497,26 @@ int main(int argc, char **argv)
 	printf("create tunnel: status=%d\n", rc);
 	assert(0 == rc);
 	
+	static const char * http_req_fmt = "GET / HTTP/1.1\r\n"
+		"Host: %s:%u\r\n"
+		"User-Agent: bitcoin-clib/client-0.1alpha\r\n"
+		"Accept: */*\r\n"
+		"\r\n";
+	char buf[4096] = "";
+	int cb_request = snprintf(buf, sizeof(buf), 
+		http_req_fmt, 
+		serv_name, (unsigned int)port);
+	
+	ssize_t cb = write(fd, buf, cb_request);
+	assert(cb == cb_request);
+	
+	memset(buf, 0, sizeof(buf));
+	cb = read(fd, buf, sizeof(buf));
+	
+	printf("== http://%s:%u/\n", serv_name, (unsigned int)port);
+	printf("response(cb=%d): %s"
+		"--------------------\n", (int)cb, buf);
+
 	close(fd);
 	return 0;
 }
