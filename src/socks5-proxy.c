@@ -462,7 +462,6 @@ int socks5_proxy_connect2(int proxy_fd, const char * dst_addr, uint16_t dst_port
 		for(int i = 0; i < 4; ++i) printf("%.2x ", addr->data[i]);
 		printf("\n");
 		sz_addr = (char *)inet_ntop(PF_INET, addr->data, (char *)addr_buf, 4);
-		
 		break;
 	case socks5_address_type_ipv6:
 		for(int i = 0; i < 16; ++i) printf("%.2x ", addr->data[i]);
@@ -478,9 +477,8 @@ int socks5_proxy_connect2(int proxy_fd, const char * dst_addr, uint16_t dst_port
 		ntohs(*(uint16_t *)(resp->bound_addr + cb_addr))
 		);
 #endif
-	return 0;
+	return resp->status;
 }
-
 
 #if defined(_TEST_SOCKS5_PROXY) && defined(_STAND_ALONE)
 int main(int argc, char **argv)
@@ -494,7 +492,6 @@ int main(int argc, char **argv)
 	if(argc > 1) serv_name = argv[1];
 	if(argc > 2) port = atoi(argv[2]);
 	assert(port < 65536);
-	
 	
 	int rc = socks5_proxy_connect2(fd, serv_name, port);
 	printf("create tunnel: status=%d\n", rc);
@@ -514,7 +511,7 @@ int main(int argc, char **argv)
 	assert(cb == cb_request);
 	
 	memset(buf, 0, sizeof(buf));
-	cb = read(fd, buf, sizeof(buf));
+	cb = read(fd, buf, sizeof(buf) - 1);
 	
 	printf("== http://%s:%u/\n", serv_name, (unsigned int)port);
 	printf("response(cb=%d): %s"

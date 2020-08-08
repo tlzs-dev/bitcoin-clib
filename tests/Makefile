@@ -160,6 +160,13 @@ test_socks5-proxy: $(SRC_DIR)/socks5-proxy.c
 		$(LIBS) \
 		-D_TEST_SOCKS5_PROXY -D_STAND_ALONE -D_VERBOSE=7
 
+base58: test_base58
+test_base58: $(SRC_DIR)/base58.c $(SRC_DIR)/utils/utils.c
+	echo "build $@ ..."
+	$(LINKER) -o $@ $(CFLAGS) $^ \
+		-lm -lpthread \
+		-D_TEST_BASE58 -D_STAND_ALONE -D_VERBOSE=7
+
 .PHONY: do_init clean
 do_init:
 	mkdir -p ../obj/base ../obj/utils

@@ -10,8 +10,8 @@ extern "C" {
  * socks5_proxy_init():		
  * 	Handshake with socks5 proxy server 
  * 
- * 	@param proxy_server	    proxy server ip or domain name
- * 	@param proxy_port		proxy server listening port
+ *  @param proxy_server	    proxy server ip or domain name
+ *  @param proxy_port		proxy server listening port
  *  @param user_name		(nullable)
  *  @param password			(nullable)
  * 
@@ -21,12 +21,12 @@ int socks5_proxy_init(const char * proxy_server, const char * proxy_port, const 
 
 /**
  * socks5_proxy_connect2():	
- * 	Connect to (dst_addr:dst_port) via socks5 proxy.
+ *  Connect to (dst_addr:dst_port) via socks5 proxy.
  *  if successful, the proxy_fd can be regarded as directly connected to the dst:port
  * 
- * 	@param proxy_fd	    	return from socks5_proxy_init() function
- * 	@param dst_addr			destination ip or domain name
- *  @param dst_port			destination port
+ *  @param proxy_fd	    	return from socks5_proxy_init() function
+ *  @param dst_addr			destination ip or domain name
+ *  @param dst_port			destination port (host byte order)
  * 
  * @return 0 on success, non-zero on error.
  */
