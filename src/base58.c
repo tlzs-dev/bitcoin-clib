@@ -56,7 +56,6 @@ static const unsigned char s_b58_table[256] = {
 	0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
 };
 
-#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
 ssize_t base58_encode(const void * data, ssize_t length, char ** p_b58)
 {
 	if(length <= 0) return 0;
@@ -168,9 +167,6 @@ ssize_t base58_decode(const char * b58, ssize_t cb_b58, unsigned char ** p_dst)
 	return cb_dst;
 }
 
-#else // byte-order == big-endian
-#error "Not Impl."
-#endif
 
 #if defined(_TEST_BASE58) && defined(_STAND_ALONE)
 size_t base58_encode_legacy(const unsigned char * src, size_t cb_src, char * to, size_t buffer_size)
