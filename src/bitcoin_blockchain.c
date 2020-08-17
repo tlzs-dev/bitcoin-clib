@@ -33,7 +33,7 @@
 
 #include <stdint.h>
 #include <pthread.h>
-
+#include <unistd.h>
 
 #include <limits.h>
 #include <json-c/json.h>
@@ -48,6 +48,7 @@
 #include "bitcoin_blockchain.h"
 #include "utils.h"
 
+#include <libgen.h>
 
 typedef struct bitcoin_blockchain_private
 {
@@ -59,6 +60,8 @@ typedef struct bitcoin_blockchain_private
 	
 	const char * blocks_data_path;
 	const char * db_home;
+	
+	char root_path[PATH_MAX];
 	
 	uint256_t * genesis_block_hash;
 	struct satoshi_block_header * genesis_block_hdr;
@@ -134,6 +137,11 @@ static bitcoin_blockchain_private_t * bitcoin_blockchain_private_new(bitcoin_blo
 	rc = pthread_cond_init(&priv->cond, NULL);
 	assert(0 == rc);
 	
+	
+	ssize_t cb = readlink("/proc/self/exe", priv->root_path, sizeof(priv->root_path));
+	assert(cb > 0);
+	
+	dirname(priv->root_path);
 	return priv;
 }
 
@@ -219,6 +227,17 @@ static void * process(void * user_data)
 	return (void *)(long)rc;
 }
 
+static inline ssize_t get_fullname(const char * root_path, const char * path, char fullname[], size_t size)
+{
+	assert(root_path && path);
+	ssize_t cb = 0;
+	if(path[0] == '/') cb = snprintf(fullname, size, "%s", path);
+	else cb = snprintf(fullname, size, "%s/%s", root_path, path);
+	assert(cb > 0 && cb < (ssize_t)size);
+	
+	return cb;
+}
+
 static int bitcoin_run(struct bitcoin_blockchain * bitcoin, int async_mode)
 {
 	int rc = 0;
@@ -230,8 +249,12 @@ static int bitcoin_run(struct bitcoin_blockchain * bitcoin, int async_mode)
 	bitcoin->bnode = bitcoin_node_new(0, bitcoin);
 	assert(bitcoin->bnode);
 	
+	char path_name[PATH_MAX] = "";
+	ssize_t cb = get_fullname(priv->root_path, priv->db_home, path_name, sizeof(path_name));
+	assert(cb > 0 && cb < sizeof(path_name));
+	
 	// init dbs
-	db_engine_t * engine =  db_engine_init(NULL, priv->db_home, bitcoin);
+	db_engine_t * engine =  db_engine_init(NULL, path_name, bitcoin);
 	assert(engine);
 	bitcoin->engine = engine;
 	
@@ -374,19 +397,55 @@ static int bitcoin_on_remove_block(blockchain_t * bchain, const uint256_t * bloc
 
 #if defined(_TEST_BITCOIN_BLOCKCHAIN) && defined(_STAND_ALONE)
 
+#include <getopt.h>
 #include <signal.h>
+
 void on_signal(int sig) 
 {
-	if(sig == SIGINT) {
+	switch(sig) {
+	case SIGINT: case SIGUSR1:
 		bitcoin_node_terminate();
 		return;
+	default:
+		break;
 	}
+	abort();
+	return;
 }
 
 int main(int argc, char **argv)
 {
-	signal(SIGINT, on_signal);
+	struct option options[] = {
+		{ "daemon", no_argument, 0, 'd' },
+		{ "help", no_argument, 0, 'h' },
+		{NULL},
+	};
 	
+	int daemon_mode = 0;
+	while(1) {
+		int opt_index = 0;
+		int c = getopt_long(argc, argv, "dh", options, &opt_index);
+		if(c == -1) break;
+		
+		switch(c) {
+		case 'd': daemon_mode = 1; break;
+		case 'h': exit(0); break;
+		default:
+			break;
+		}
+	}
+	
+	char root_path[PATH_MAX] = "";
+	readlink("/proc/self/exe", root_path, sizeof(root_path) - 1);
+	dirname(root_path);
+
+	printf("daemon mode: %d\n", daemon_mode);
+	if(daemon_mode) daemon(0, 1);
+	
+	chdir(root_path);
+	printf("process id: %ld\n", (long)getpid());
+	
+	signal(SIGINT, on_signal);
 	bitcoin_blockchain_t bitcoin[1];
 	memset(bitcoin, 0, sizeof(bitcoin));
 	
@@ -397,6 +456,9 @@ int main(int argc, char **argv)
 	
 	int rc = bitcoin->load_config(bitcoin, jconfig);
 	assert(0 == rc);
+	
+	close(0); close(1); close(2); // close stdio
+
 	bitcoin->run(bitcoin, 0);
 	
 	bitcoin_blockchain_cleanup(bitcoin);

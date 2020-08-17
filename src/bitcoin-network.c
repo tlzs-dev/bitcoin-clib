@@ -245,7 +245,7 @@ int bitcoin_node_run(bitcoin_node_t * bnode, const char * serv_name, const char 
 	int rc = 0;
 	int server_fd = -1;
 	int efd = bnode->listening_efd;
-	assert(efd > 0);
+	assert(efd >= 0);
 	
 	// start peers_thread
 	rc = pthread_create(&bnode->peers_th, NULL, peers_thread, bnode);
@@ -395,7 +395,7 @@ static void * bitcoin_node_listen_all(void * user_data)
 
 	int timeout = 1000;
 	int efd = bnode->listening_efd;
-	assert(efd > 0);
+	assert(efd >= 0);
 	
 	while(!bnode->quit) {
 		if(s_quit) {
