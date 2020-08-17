@@ -158,6 +158,18 @@ db_engine_t * db_engine_init(db_engine_t * engine, const char * home_dir, void *
 void db_engine_cleanup(db_engine_t * engine);
 db_engine_t * db_engine_get();
 
+
+#define db_private_close_db(_db) do {				\
+		db_handle_t * db = priv->_db;				\
+		if(db) {									\
+			engine->list_remove(engine, db);		\
+			db->close(db);							\
+			db_handle_cleanup(db);					\
+			free(db);								\
+			priv->_db = NULL;						\
+		}											\
+	}while(0)
+
 #ifdef __cplusplus
 }
 #endif

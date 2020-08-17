@@ -59,8 +59,6 @@ typedef struct blocks_db_private
 	char orphans_db_name[PATH_MAX];
 }blocks_db_private_t;
 
-
-
 static ssize_t associate_blocks_height(db_handle_t * db, 
 	const db_record_data_t * key, 
 	const db_record_data_t * value, 

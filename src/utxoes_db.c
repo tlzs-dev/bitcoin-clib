@@ -158,6 +158,7 @@ utxoes_db_private_t * utxoes_db_private_new(utxoes_db_t * db, db_engine_t * engi
 #undef WITNESS_FLAG_DB_SUFFIX
 }
 
+#ifndef db_private_close_db
 #define db_private_close_db(_db) do {				\
 		db_handle_t * db = priv->_db;				\
 		if(db) {									\
@@ -168,6 +169,7 @@ utxoes_db_private_t * utxoes_db_private_new(utxoes_db_t * db, db_engine_t * engi
 			priv->_db = NULL;						\
 		}											\
 	}while(0)
+#endif
 
 void utxoes_db_private_free(utxoes_db_private_t * priv)
 {

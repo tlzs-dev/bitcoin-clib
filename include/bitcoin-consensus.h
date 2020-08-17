@@ -43,7 +43,7 @@ extern "C" {
 /** Use GetMedianTimePast() instead of nTime for end point timestamp. */
 #define LOCKTIME_MEDIAN_TIME_PAST	(1 << 1)
 
-//~ /* Params.h */
+/* Params.h */
 //~ #ifndef HAS_UINT256
 //~ typedef uint8_t uint256[256];
 //~ typedef uint256 uint256_t;

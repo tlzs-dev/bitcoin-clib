@@ -167,6 +167,15 @@ test_base58: $(SRC_DIR)/base58.c $(SRC_DIR)/utils/utils.c
 		-lm -lpthread \
 		-D_TEST_BASE58 -D_STAND_ALONE -D_VERBOSE=7
 
+transactions_db: test_transactions_db
+test_transactions_db: $(SRC_DIR)/transactions_db.c $(SRC_DIR)/utils/utils.c $(SRC_DIR)/db_engine.c 
+	echo "build $@ ..."
+	$(LINKER) -o $@ $(CFLAGS) $^ \
+		-lm -lpthread -ldb \
+		-D_TEST_TRANSACTIONS_DB -D_STAND_ALONE -D_VERBOSE=7
+
+
+
 .PHONY: do_init clean
 do_init:
 	mkdir -p ../obj/base ../obj/utils
