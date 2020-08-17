@@ -174,6 +174,18 @@ test_transactions_db: $(SRC_DIR)/transactions_db.c $(SRC_DIR)/utils/utils.c $(SR
 		-lm -lpthread -ldb \
 		-D_TEST_TRANSACTIONS_DB -D_STAND_ALONE -D_VERBOSE=7
 
+bitcoin_blockchain: test_bitcoin_blockchain
+test_bitcoin_blockchain: $(SRC_DIR)/bitcoin_blockchain.c $(SRC_DIR)/bitcoin-network.c \
+	$(BASE_OBJECTS) $(UTILS_OBJECTS) \
+	$(OBJ_DIR)/satoshi-types.o $(OBJ_DIR)/compact_int.o $(OBJ_DIR)/merkle_tree.o \
+	$(OBJ_DIR)/utxoes_db.o $(OBJ_DIR)/blocks_db.o $(OBJ_DIR)/db_engine.o \
+	$(OBJ_DIR)/chains.o $(OBJ_DIR)/crypto.o \
+	$(SRC_DIR)/algorithm/avl_tree.c $(SRC_DIR)/auto_buffer.c \
+	$(SRC_DIR)/transactions_db.c 
+	echo "build $@ ..."
+	$(LINKER) -o $@ $(CFLAGS) $^ \
+		$(LIBS) -lsecp256k1 \
+		-D_TEST_BITCOIN_BLOCKCHAIN -D_STAND_ALONE -D_VERBOSE=7
 
 
 .PHONY: do_init clean

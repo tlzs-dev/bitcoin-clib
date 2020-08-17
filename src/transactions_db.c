@@ -58,7 +58,6 @@ typedef struct transactions_db_private
 	char block_hashes_db_name[PATH_MAX];
 }transactions_db_private_t;
 
-
 static ssize_t associate_wtxid(db_handle_t * db, 
 	const db_record_data_t * key, 
 	const db_record_data_t * value, 
@@ -82,7 +81,6 @@ static ssize_t associate_wtxid(db_handle_t * db,
 	return num_results;
 }
 
-
 static ssize_t associate_block_hash(db_handle_t * db, 
 	const db_record_data_t * key, 
 	const db_record_data_t * value, 
@@ -104,7 +102,6 @@ static ssize_t associate_block_hash(db_handle_t * db,
 	results[0].size = sizeof(tx->block_hash);
 	return num_results;
 }
-
 
 transactions_db_private_t * transactions_db_private_new(transactions_db_t * db, db_engine_t * engine, const char * db_name)
 {
@@ -324,7 +321,6 @@ label_cleanup:
 	return count;
 }
 
-
 ssize_t transactions_db_find_in_block(
 	struct transactions_db * db, db_engine_txn_t * txn, 
 	const uint256_t * block_hash, 
@@ -472,7 +468,6 @@ static int check_path(const char * path)
 	return rc;
 }
 
-
 int main(int argc, char ** argv)
 {
 	const char * db_home = "data/test_txdb";
@@ -506,7 +501,6 @@ int main(int argc, char ** argv)
 	memset(cursor, 0, sizeof(cursor));
 	
 	transactions_db_private_t * priv = txes_db->priv;
-	
 	db_cursor_t * p_cursor = db_cursor_init(cursor, priv->txes_db, NULL, 0);
 	assert(p_cursor && p_cursor == cursor);
 	

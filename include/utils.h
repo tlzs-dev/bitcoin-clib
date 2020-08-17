@@ -33,8 +33,17 @@ typedef char * string;
 #define json_get_value(jobj, type, key) ({								\
 		type value = (type)0;											\
 		json_object * jvalue = NULL;									\
-		json_bool ok = json_object_object_get_ex(jobj, #key, &jvalue);		\
-		if(ok) { value = (type)json_object_get_##type(jvalue); }	\
+		json_bool ok = json_object_object_get_ex(jobj, #key, &jvalue);	\
+		if(ok) { value = (type)json_object_get_##type(jvalue); }		\
+		value;															\
+	})
+
+#define json_get_value_default(jobj, type, key, defval)	({				\
+		type value = (type)defval;										\
+		json_object * jvalue = NULL;									\
+		json_bool ok = FALSE;											\
+		ok = json_object_object_get_ex(jobj, #key, &jvalue);			\
+		if(ok && jvalue) value = (type)json_object_get_##type(jvalue);	\
 		value;															\
 	})
 
