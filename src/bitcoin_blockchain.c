@@ -60,6 +60,9 @@ typedef struct bitcoin_blockchain_private
 	const char * blocks_data_path;
 	const char * db_home;
 	
+	uint256_t * genesis_block_hash;
+	struct satoshi_block_header * genesis_block_hdr;
+	
 	uint32_t magic;		// network magic
 	
 	pthread_mutex_t mutex;
@@ -88,7 +91,6 @@ static void tls_key_on_destroy(void * context)
 static void init_mutexattrs(void) 
 {
 	int rc = -1;
-	
 	rc = pthread_key_create(&s_tls_key, tls_key_on_destroy);
 	
 	rc = pthread_mutexattr_init(&s_mutexattr_recursive);
@@ -211,7 +213,6 @@ static void * process(void * user_data)
 		
 		bitcoin_node_free(bnode);
 		bitcoin->bnode = NULL;
-	
 	}
 	
 	if(priv->async_mode) pthread_exit((void *)(long)rc);
@@ -244,6 +245,12 @@ static int bitcoin_run(struct bitcoin_blockchain * bitcoin, int async_mode)
 	// init mem db
 	avl_tree_t * mem_db = avl_tree_init(bitcoin->mem_db, bitcoin);
 	assert(mem_db && mem_db == bitcoin->mem_db);
+	
+	// init chain
+	blockchain_t * main_chain = blockchain_init(bitcoin->main_chain, priv->genesis_block_hash, priv->genesis_block_hdr, bitcoin);
+	assert(main_chain && main_chain == bitcoin->main_chain);
+	main_chain->on_add_block = bitcoin->on_add_block;
+	main_chain->on_remove_block = bitcoin->on_remove_block;
 	
 	// run
 	priv->async_mode = async_mode;
@@ -287,6 +294,8 @@ static int bitcoin_stop(struct bitcoin_blockchain * bitcoin)
 	return 0;
 }
 
+static int bitcoin_on_add_block(blockchain_t * bchain, const uint256_t * block_hash, int height, void * user_data);
+static int bitcoin_on_remove_block(blockchain_t * bchain, const uint256_t * block_hash, int height, void * user_data);
 bitcoin_blockchain_t * bitcoin_blockchain_init(bitcoin_blockchain_t * bitcoin, void * user_data)
 {
 	int rc = -1;
@@ -302,6 +311,9 @@ bitcoin_blockchain_t * bitcoin_blockchain_init(bitcoin_blockchain_t * bitcoin, v
 	bitcoin->run = bitcoin_run;
 	bitcoin->stop = bitcoin_stop;
 	
+	bitcoin->on_add_block = bitcoin_on_add_block;
+	bitcoin->on_remove_block = bitcoin_on_remove_block;
+	
 	bitcoin_blockchain_private_t * priv = bitcoin_blockchain_private_new(bitcoin);
 	assert(priv && bitcoin->priv == priv);
 	
@@ -315,8 +327,50 @@ void bitcoin_blockchain_cleanup(bitcoin_blockchain_t * bitcoin)
 	bitcoin_blockchain_private_free(bitcoin->priv);
 	bitcoin->priv = NULL;
 	
+	blocks_db_cleanup(bitcoin->block_db);
+	utxoes_db_cleanup(bitcoin->utxo_db);
+	transactions_db_cleanup(bitcoin->tx_db);
+	
+	avl_tree_cleanup(bitcoin->mem_db);
 	return;
 }
+
+
+/**********************************************************
+ * on add/remove block
+**********************************************************/
+static int bitcoin_on_add_block(blockchain_t * bchain, const uint256_t * block_hash, int height, void * user_data)
+{
+	debug_printf("%s(height=%d)...\n", __FUNCTION__, height);
+	bitcoin_blockchain_t * bitcoin = user_data;
+	assert(bitcoin && bitcoin->priv);
+	
+	bitcoin_blockchain_private_t * priv = bitcoin->priv;
+	pthread_mutex_lock(&priv->mutex);
+	
+	// todo
+	// ...
+	
+	pthread_mutex_unlock(&priv->mutex);
+	return 0;
+}
+static int bitcoin_on_remove_block(blockchain_t * bchain, const uint256_t * block_hash, int height, void * user_data)
+{
+	debug_printf("%s(height=%d)...\n", __FUNCTION__, height);
+	bitcoin_blockchain_t * bitcoin = user_data;
+	assert(bitcoin && bitcoin->priv);
+	
+	bitcoin_blockchain_private_t * priv = bitcoin->priv;
+	pthread_mutex_lock(&priv->mutex);
+	
+	// todo
+	// ...
+	
+	pthread_mutex_unlock(&priv->mutex);
+	return 0;
+}
+
+
 
 #if defined(_TEST_BITCOIN_BLOCKCHAIN) && defined(_STAND_ALONE)
 
@@ -343,9 +397,7 @@ int main(int argc, char **argv)
 	
 	int rc = bitcoin->load_config(bitcoin, jconfig);
 	assert(0 == rc);
-	
 	bitcoin->run(bitcoin, 0);
-	
 	
 	bitcoin_blockchain_cleanup(bitcoin);
 	return 0;
