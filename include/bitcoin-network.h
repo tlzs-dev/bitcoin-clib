@@ -6,6 +6,7 @@
 extern "C" {
 #endif
 
+#include <stdint.h>
 #include <pthread.h>
 
 #include <sys/types.h>
@@ -16,34 +17,36 @@ extern "C" {
 #include "satoshi-types.h"
 #include "auto_buffer.h"
 
+#ifndef FALSE
+#define FALSE 0
+#define TRUE (!FALSE)
+#endif
+
+struct bitcoin_node;
 typedef struct peer_info
 {
 	int fd;
 	struct sockaddr_storage addr;
 	socklen_t addr_len;
 	
-	void * server_ctx;
+	struct bitcoin_node * bnode;
 	void * priv;
-	
 	int quit;
 	
-	struct bitcoin_message_header in_hdr;
-	auto_buffer_t in_buf[1];
+	int status;	// 0: handshaking; 1: msg::version exchanged; 2: msg::addr exchanged
 	
-	struct bitcoin_message_header out_hdr;
-	auto_buffer_t out_buf[1];
-	
-	int (* read)(struct peer_info * peer);
-	int (* write)(struct peer_info * peer);
-	
-	// callback
-	int (* on_read)(struct peer_info * peer, struct epoll_event * ev);
+	// public methods
+	int (* send_msg)(struct peer_info * peer, const struct bitcoin_message_header * msg_hdr, const void * payload);	// relay messages
+
+	// virtual callbacks
+	int (* on_read )(struct peer_info * peer, struct epoll_event * ev);
 	int (* on_write)(struct peer_info * peer, struct epoll_event * ev);
 	int (* on_error)(struct peer_info * peer, struct epoll_event * ev);
+	
+	int (* on_parse_msg)(struct peer_info * peer, const struct bitcoin_message_header * msg_hdr, const void * payload);
 }peer_info_t;
 peer_info_t * peer_info_new(int fd, void * server_ctx, const struct addrinfo * addr);
 void peer_info_free(peer_info_t * peer);
-
 
 #define BITCOIN_NODE_MAX_LISTENING_FDS (8)
 typedef struct bitcoin_node
@@ -72,8 +75,22 @@ typedef struct bitcoin_node
 	ssize_t max_size;
 	ssize_t peers_count;
 	
+	peer_info_t ** relay_peers;
+	ssize_t max_relay_size;
+	ssize_t relay_peers_count;
+	
+	struct bitcoin_message_version * version;
+	ssize_t cb_version;
+	
+	// callbacks
 	int (* on_accept)(struct bitcoin_node * bnode, struct epoll_event * ev);
 	int (* on_error)(struct bitcoin_node * bnode, struct epoll_event * ev);
+	
+	// utils
+	int (* add_peer)(struct bitcoin_node * bnode, struct peer_info * peer);
+	int (* remove_peer)(struct bitcoin_node * bnode, struct peer_info * peer);
+	
+	int (* set_writable)(struct bitcoin_node * bnode, struct peer_info * peer, int f_enabled);
 	
 }bitcoin_node_t;
 bitcoin_node_t * bitcoin_node_new(size_t max_size, void * user_data);

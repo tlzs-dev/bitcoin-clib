@@ -99,8 +99,8 @@ static ssize_t auto_buffer_write(struct auto_buffer * buf, int fd, size_t length
 			return -1;	
 		}
 	}
-	buf->length -= length;
-	buf->start_pos += length;
+	buf->length -= cb_total;
+	buf->start_pos += cb_total;
 	
 	if(buf->length == 0) auto_buffer_trim(buf);
 	return cb_total;

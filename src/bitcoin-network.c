@@ -63,32 +63,98 @@ void bitcoin_node_terminate(void)
 /******************************************************************
  * peer_info
 ******************************************************************/
+struct peer_statistics_data
+{
+	int64_t total_bytes_read;
+	int64_t total_bytes_written;
+	
+	int64_t total_reading_times;
+	int64_t total_writing_times;
+	
+	double average_reading_speed;	// bytes per second
+	double average_writing_speed;	// bytes per second
+};
 
-static int peer_read(struct peer_info * peer);
-static int peer_write(struct peer_info * peer);
+typedef struct peer_info_private
+{
+	peer_info_t * peer;
+	pthread_mutex_t mutex;
+	
+	int stage;	// 0: read msg_hdr; 1: read payload; 2: parse msg
+	
+	// client's lifetime control
+	int64_t access_time_ms;		// last assess time (in milli-seconds)
+	int64_t expires_time_ms;
+	
+	struct bitcoin_message_header in_hdr;
+	auto_buffer_t in_buf[1];
+	
+	struct bitcoin_message_header out_hdr;
+	auto_buffer_t out_buf[1];
+	
+	// statistics
+	struct peer_statistics_data stats;
+}peer_info_private_t;
+
+static inline int peer_info_lock(peer_info_private_t * priv) 
+{
+	return pthread_mutex_lock(&priv->mutex);
+}
+
+static inline int peer_info_unlock(peer_info_private_t * priv) 
+{
+	return pthread_mutex_unlock(&priv->mutex);
+}
+
+peer_info_private_t * peer_info_private_new(peer_info_t * peer) 
+{
+	int rc = 0;
+	peer_info_private_t * priv = calloc(1, sizeof(*priv));
+	assert(priv);
+	
+	priv->peer = peer;
+	peer->priv = priv;
+	
+	rc = pthread_mutex_init(&priv->mutex, NULL);
+	assert(0 == rc);
+	
+	auto_buffer_init(priv->in_buf, 0);
+	auto_buffer_init(priv->out_buf, 0);
+	
+	return priv;
+}
+
+void peer_info_private_free(peer_info_private_t * priv) 
+{
+	auto_buffer_cleanup(priv->in_buf);
+	auto_buffer_cleanup(priv->out_buf);
+
+	pthread_mutex_destroy(&priv->mutex);
+	free(priv);
+	return;
+}
+
+static int peer_send_msg(struct peer_info * peer, const struct bitcoin_message_header * msg_hdr, const void * payload);
 static int peer_on_read(struct peer_info * peer, struct epoll_event * ev);
 static int peer_on_write(struct peer_info * peer, struct epoll_event * ev);
 static int peer_on_error(struct peer_info * peer, struct epoll_event * ev);
-peer_info_t * peer_info_new(int fd, void * server_ctx, const struct addrinfo * addr)
+static int peer_on_parse_msg(struct peer_info * peer, const struct bitcoin_message_header * msg_hdr, const void * payload);
+peer_info_t * peer_info_new(int fd, void * bnode, const struct addrinfo * addr)
 {
 	peer_info_t * peer = calloc(1, sizeof(*peer));
 	assert(peer);
 	
 	peer->fd = fd;
-	peer->server_ctx = server_ctx;
+	peer->bnode = bnode;
 	
 	if(addr) memcpy(&peer->addr, addr->ai_addr, addr->ai_addrlen);
 	peer->addr_len = addr->ai_addrlen;
 	
-	auto_buffer_init(peer->in_buf, 0);
-	auto_buffer_init(peer->out_buf, 0);
-	
+	peer->send_msg = peer_send_msg;
 	peer->on_read = peer_on_read;
 	peer->on_write = peer_on_write;
 	peer->on_error = peer_on_error;
-	
-	peer->read = peer_read;
-	peer->write = peer_write;
+	peer->on_parse_msg = peer_on_parse_msg;
 	
 	return peer;
 }
@@ -102,20 +168,32 @@ void peer_info_free(peer_info_t * peer)
 		close(peer->fd);
 		peer->fd = -1;
 	}
-	auto_buffer_cleanup(peer->in_buf);
-	auto_buffer_cleanup(peer->out_buf);
+	peer_info_private_free(peer->priv);
 	free(peer);
 	return;
 }
 
-static int peer_read(struct peer_info * peer)
+static int peer_send_msg(struct peer_info * peer, const struct bitcoin_message_header * msg_hdr, const void * payload)
 {
+	assert(peer && peer->bnode && peer->priv);
+	assert(msg_hdr);
+	peer_info_private_t * priv = peer->priv;
+	peer_info_lock(priv);
+	
+	auto_buffer_t * out_buf = priv->out_buf;
+	out_buf->push_data(out_buf, (unsigned char *)msg_hdr, sizeof(*msg_hdr));
+	if(msg_hdr->length > 0) {
+		assert(payload);
+		out_buf->push_data(out_buf, payload, msg_hdr->length);
+	}
+	
+	bitcoin_node_t * bnode = peer->bnode;
+	bnode->set_writable(bnode, peer, TRUE);
+	
+	peer_info_unlock(priv);
 	return 0;
 }
-static int peer_write(struct peer_info * peer)
-{
-	return 0;
-}
+
 
 static int peer_on_read(struct peer_info * peer, struct epoll_event * ev)
 {
@@ -130,6 +208,27 @@ static int peer_on_write(struct peer_info * peer, struct epoll_event * ev)
 	debug_printf("peer_fd = %d", peer->fd);
 	assert(ev->data.ptr == (void *)peer);
 	
+	assert(peer && peer->bnode && peer->priv);
+	peer_info_private_t * priv = peer->priv;
+	bitcoin_node_t * bnode = peer->bnode;
+	
+	peer_info_lock(priv);
+	auto_buffer_t * out_buf = priv->out_buf;
+	
+	ssize_t cb = -1;
+	int fd = peer->fd;
+	assert(fd > 0);
+	
+	cb = out_buf->write(out_buf, fd, 0);
+	if(cb < 0) {
+		bnode->set_writable(bnode, peer, FALSE);
+		peer_info_unlock(priv);
+		return -1;
+	}
+	
+	if(out_buf->length == 0) bnode->set_writable(bnode, peer, FALSE);
+	peer_info_unlock(priv);
+	
 	return 0;
 }
 
@@ -139,6 +238,12 @@ static int peer_on_error(struct peer_info * peer, struct epoll_event * ev)
 	
 	assert(ev->data.ptr == (void *)peer);
 	
+	return 0;
+}
+
+static int peer_on_parse_msg(struct peer_info * peer, const struct bitcoin_message_header * msg_hdr, const void * payload)
+{
+	// default handler
 	return 0;
 }
 
@@ -155,6 +260,7 @@ static int bitcoin_node_add_peer(bitcoin_node_t * bnode, peer_info_t * peer);
 static int bitcoin_node_remove_peer(bitcoin_node_t * bnode, peer_info_t * peer);
 static int bitcoin_node_on_accept(struct bitcoin_node * bnode, struct epoll_event * ev);
 static int bitcoin_node_on_error(struct bitcoin_node * bnode, struct epoll_event * ev);
+static int bitcoin_node_set_writable(struct bitcoin_node * bnode, struct peer_info * peer, int f_enabled);
 bitcoin_node_t * bitcoin_node_new(size_t max_size, void * user_data)
 {
 	int listening_efd = epoll_create1(0);
@@ -181,6 +287,10 @@ bitcoin_node_t * bitcoin_node_new(size_t max_size, void * user_data)
 	
 	bnode->on_accept = bitcoin_node_on_accept;
 	bnode->on_error = bitcoin_node_on_error;
+	
+	bnode->add_peer = bitcoin_node_add_peer;
+	bnode->remove_peer = bitcoin_node_remove_peer;
+	bnode->set_writable = bitcoin_node_set_writable;
 	
 	int rc = pthread_mutex_init(&bnode->mutex, NULL);
 	assert(0 == rc);
@@ -359,7 +469,6 @@ static int bitcoin_node_on_accept(struct bitcoin_node * bnode, struct epoll_even
 	assert(peer);
 
 	bitcoin_node_add_peer(bnode, peer);
-	
 
 	free(addr.ai_addr);
 	return 0;
@@ -368,6 +477,21 @@ static int bitcoin_node_on_accept(struct bitcoin_node * bnode, struct epoll_even
 static int bitcoin_node_on_error(struct bitcoin_node * bnode, struct epoll_event * ev)
 {
 	debug_printf("fd=%d", ev->data.fd);
+	return 0;
+}
+
+static int bitcoin_node_set_writable(struct bitcoin_node * bnode, struct peer_info * peer, int f_enabled)
+{
+	struct epoll_event ev[1];
+	memset(ev, 0, sizeof(ev));
+	ev->events = EPOLLIN | EPOLLET;
+	ev->data.ptr = peer;
+	
+	if(f_enabled) ev->events |= EPOLLOUT;
+	
+	int rc = epoll_ctl(bnode->peers_efd, EPOLL_CTL_MOD, peer->fd, ev);
+	assert(0 == rc);
+	
 	return 0;
 }
 
